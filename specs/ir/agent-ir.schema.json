@@ -1,0 +1,374 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mathissdupont/ingot/specs/ir/agent-ir.schema.json",
+  "title": "Ingot Agent IR",
+  "description": "Canonical, target-neutral representation of a compiled Ingot agent. See specs/ir/v0.1.md for the normative prose.",
+  "type": "object",
+  "required": [
+    "irVersion",
+    "language",
+    "agent",
+    "inputs",
+    "outputs",
+    "requirements",
+    "budget",
+    "policy",
+    "effects",
+    "entry",
+    "nodes"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "irVersion": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+$",
+      "description": "Schema version. A reader must reject a major version it does not implement."
+    },
+    "language": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+$",
+      "description": "Language version of the source this was compiled from."
+    },
+    "agent": {
+      "type": "string",
+      "description": "Fully qualified agent name."
+    },
+    "doc": {
+      "type": "string",
+      "description": "Doc comment from the source declaration."
+    },
+    "inputs": {
+      "type": "object",
+      "description": "Input name to Ingot type.",
+      "additionalProperties": { "type": "string" }
+    },
+    "outputs": {
+      "type": "object",
+      "description": "Output name to artifact type, written as artifact<T>.",
+      "additionalProperties": { "type": "string", "pattern": "^artifact<.+>$" }
+    },
+    "types": {
+      "type": "object",
+      "description": "Record types referenced by this program.",
+      "additionalProperties": { "$ref": "#/$defs/recordType" }
+    },
+    "requirements": {
+      "type": "object",
+      "required": ["model"],
+      "additionalProperties": false,
+      "properties": { "model": { "$ref": "#/$defs/modelRequirement" } }
+    },
+    "tools": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/toolBinding" }
+    },
+    "state": {
+      "type": "object",
+      "description": "Working-memory field name to Ingot type.",
+      "additionalProperties": { "type": "string" }
+    },
+    "budget": { "$ref": "#/$defs/budget" },
+    "policy": {
+      "type": "object",
+      "description": "Decision per policy subject. Subjects absent here are denied.",
+      "propertyNames": {
+        "enum": [
+          "network",
+          "filesystem_read",
+          "filesystem_write",
+          "external_write",
+          "secrets"
+        ]
+      },
+      "additionalProperties": { "$ref": "#/$defs/policyRule" }
+    },
+    "effects": {
+      "type": "array",
+      "description": "Union of every effect the flow can trigger, sorted.",
+      "items": { "$ref": "#/$defs/effect" }
+    },
+    "entry": {
+      "type": ["string", "null"],
+      "description": "Id of the first node, or null for an empty flow."
+    },
+    "nodes": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/node" }
+    }
+  },
+  "$defs": {
+    "effect": {
+      "type": "string",
+      "enum": [
+        "external_write",
+        "filesystem_read",
+        "filesystem_write",
+        "model_access",
+        "network",
+        "secret_access"
+      ]
+    },
+    "fieldType": {
+      "type": "object",
+      "required": ["name", "type"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "type": { "type": "string" }
+      }
+    },
+    "recordType": {
+      "type": "object",
+      "required": ["fields"],
+      "additionalProperties": false,
+      "properties": {
+        "fields": { "type": "array", "items": { "$ref": "#/$defs/fieldType" } }
+      }
+    },
+    "modelRequirement": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["mode", "capabilities"],
+          "additionalProperties": false,
+          "properties": {
+            "mode": { "const": "capabilities" },
+            "capabilities": { "type": "array", "items": { "type": "string" } },
+            "contextTokens": {
+              "type": "object",
+              "required": ["min"],
+              "additionalProperties": false,
+              "properties": { "min": { "type": "integer", "minimum": 1 } }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["mode", "reference"],
+          "additionalProperties": false,
+          "properties": {
+            "mode": { "const": "exact" },
+            "reference": { "type": "string", "minLength": 1 }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["mode"],
+          "additionalProperties": false,
+          "properties": { "mode": { "const": "unspecified" } }
+        }
+      ]
+    },
+    "toolBinding": {
+      "type": "object",
+      "required": ["ref", "name", "transport", "effects", "signature"],
+      "additionalProperties": false,
+      "properties": {
+        "ref": {
+          "type": "string",
+          "description": "Transport-qualified reference, e.g. mcp:web.search."
+        },
+        "name": { "type": "string" },
+        "transport": { "type": "string", "enum": ["mcp"] },
+        "effects": { "type": "array", "items": { "$ref": "#/$defs/effect" } },
+        "signature": {
+          "type": "object",
+          "required": ["params", "result"],
+          "additionalProperties": false,
+          "properties": {
+            "params": { "type": "array", "items": { "$ref": "#/$defs/fieldType" } },
+            "result": { "type": "string" }
+          }
+        }
+      }
+    },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "steps": { "type": "integer", "minimum": 1 },
+        "tokens": { "type": "integer", "minimum": 1 },
+        "cost": {
+          "type": "object",
+          "required": ["amount", "currency"],
+          "additionalProperties": false,
+          "properties": {
+            "amount": {
+              "type": "string",
+              "pattern": "^\\d+(\\.\\d+)?$",
+              "description": "Decimal string, so the value is platform-stable."
+            },
+            "currency": { "type": "string", "enum": ["usd", "eur", "try"] }
+          }
+        }
+      }
+    },
+    "policyRule": {
+      "type": "object",
+      "required": ["decision"],
+      "additionalProperties": false,
+      "properties": {
+        "decision": { "type": "string", "enum": ["allow", "deny", "requireApproval"] },
+        "values": { "type": "array", "items": { "type": "string" } },
+        "qualifier": { "type": "string", "enum": ["export"] }
+      }
+    },
+    "node": {
+      "type": "object",
+      "required": ["id", "kind", "next"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "pattern": "^n\\d+$" },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "llm.call",
+            "tool.call",
+            "agent.call",
+            "branch",
+            "parallel",
+            "loop",
+            "approval",
+            "verify",
+            "state.read",
+            "state.write",
+            "artifact.emit",
+            "checkpoint"
+          ]
+        },
+        "binding": { "type": "string" },
+        "tool": { "type": "string" },
+        "agent": { "type": "string" },
+        "verifier": { "type": "string" },
+        "prompt": { "$ref": "#/$defs/value" },
+        "responseType": { "type": "string" },
+        "args": { "type": "array", "items": { "$ref": "#/$defs/argument" } },
+        "condition": { "$ref": "#/$defs/value" },
+        "then": { "type": "string" },
+        "else": { "type": "string" },
+        "body": { "type": "string" },
+        "binder": { "type": "string" },
+        "source": { "$ref": "#/$defs/value" },
+        "mode": { "type": "string", "enum": ["map"] },
+        "maxIterations": { "type": "integer", "minimum": 1 },
+        "guard": { "$ref": "#/$defs/value" },
+        "field": { "type": "string" },
+        "value": { "$ref": "#/$defs/value" },
+        "output": { "type": "string" },
+        "label": { "type": "string" },
+        "effects": { "type": "array", "items": { "$ref": "#/$defs/effect" } },
+        "next": { "type": ["string", "null"] }
+      }
+    },
+    "argument": {
+      "type": "object",
+      "required": ["name", "value"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "value": { "$ref": "#/$defs/value" }
+      }
+    },
+    "refScope": { "type": "string", "enum": ["input", "binding", "state"] },
+    "value": {
+      "type": "object",
+      "required": ["kind"],
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "literal" },
+            "type": { "type": "string" },
+            "value": {}
+          },
+          "required": ["kind", "type", "value"]
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "ref" },
+            "scope": { "$ref": "#/$defs/refScope" },
+            "path": { "type": "array", "items": { "type": "string" }, "minItems": 1 }
+          },
+          "required": ["kind", "scope", "path"]
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "list" },
+            "items": { "type": "array", "items": { "$ref": "#/$defs/value" } }
+          },
+          "required": ["kind", "items"]
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "template" },
+            "parts": { "type": "array", "items": { "$ref": "#/$defs/templatePart" } }
+          },
+          "required": ["kind", "parts"]
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "unary" },
+            "op": { "type": "string", "enum": ["!", "-"] },
+            "operand": { "$ref": "#/$defs/value" }
+          },
+          "required": ["kind", "op", "operand"]
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "binary" },
+            "op": {
+              "type": "string",
+              "enum": ["==", "!=", "<", "<=", ">", ">=", "&&", "||", "+", "-"]
+            },
+            "lhs": { "$ref": "#/$defs/value" },
+            "rhs": { "$ref": "#/$defs/value" }
+          },
+          "required": ["kind", "op", "lhs", "rhs"]
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "builtin" },
+            "name": { "type": "string", "enum": ["len"] },
+            "args": { "type": "array", "items": { "$ref": "#/$defs/value" } }
+          },
+          "required": ["kind", "name", "args"]
+        },
+        {
+          "additionalProperties": false,
+          "properties": { "kind": { "const": "unknown" } },
+          "required": ["kind"],
+          "description": "Only present in a partial IR; a successful build never emits one."
+        }
+      ]
+    },
+    "templatePart": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "value"],
+          "properties": {
+            "kind": { "const": "text" },
+            "value": { "type": "string" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "value", "type"],
+          "properties": {
+            "kind": { "const": "value" },
+            "value": { "$ref": "#/$defs/value" },
+            "type": { "type": "string" }
+          }
+        }
+      ]
+    }
+  }
+}

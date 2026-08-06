@@ -1,0 +1,111 @@
+{
+  "irVersion": "0.1",
+  "language": "0.1",
+  "agent": "heptapus.examples.summarizer.DocumentSummarizer",
+  "doc": "The smallest end-to-end agent: typed input, one model call, one artifact.\n\nExercises: inputs, prompt interpolation, budgets, a default-deny policy and\nartifact emission. No tools, so it needs no capability grants at all.",
+  "inputs": {
+    "audience": "string",
+    "document": "text"
+  },
+  "outputs": {
+    "summary": "artifact<markdown>"
+  },
+  "requirements": {
+    "model": {
+      "mode": "capabilities",
+      "capabilities": [
+        "structured_output"
+      ]
+    }
+  },
+  "budget": {
+    "steps": 2,
+    "tokens": 32000,
+    "cost": {
+      "amount": "0.25",
+      "currency": "usd"
+    }
+  },
+  "policy": {
+    "external_write": {
+      "decision": "deny"
+    },
+    "filesystem_read": {
+      "decision": "deny"
+    },
+    "filesystem_write": {
+      "decision": "deny"
+    },
+    "network": {
+      "decision": "deny"
+    },
+    "secrets": {
+      "decision": "deny",
+      "qualifier": "export"
+    }
+  },
+  "effects": [
+    "model_access"
+  ],
+  "entry": "n0",
+  "nodes": [
+    {
+      "id": "n0",
+      "kind": "llm.call",
+      "binding": "$tmp0",
+      "prompt": {
+        "kind": "template",
+        "parts": [
+          {
+            "kind": "text",
+            "value": "Summarise the following document for "
+          },
+          {
+            "kind": "value",
+            "value": {
+              "kind": "ref",
+              "scope": "input",
+              "path": [
+                "audience"
+              ]
+            },
+            "type": "string"
+          },
+          {
+            "kind": "text",
+            "value": ". Keep every claim traceable to the source.\n\n"
+          },
+          {
+            "kind": "value",
+            "value": {
+              "kind": "ref",
+              "scope": "input",
+              "path": [
+                "document"
+              ]
+            },
+            "type": "text"
+          }
+        ]
+      },
+      "responseType": "markdown",
+      "effects": [
+        "model_access"
+      ],
+      "next": "n1"
+    },
+    {
+      "id": "n1",
+      "kind": "artifact.emit",
+      "value": {
+        "kind": "ref",
+        "scope": "binding",
+        "path": [
+          "$tmp0"
+        ]
+      },
+      "output": "summary",
+      "next": null
+    }
+  ]
+}

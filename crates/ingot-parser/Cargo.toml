@@ -1,0 +1,15 @@
+[package]
+name = "ingot-parser"
+description = "Recursive-descent parser with error recovery for the Ingot agent language."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+ingot-source.workspace = true
+ingot-diagnostics.workspace = true
+ingot-lexer.workspace = true
+ingot-syntax.workspace = true

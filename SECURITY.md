@@ -1,0 +1,76 @@
+# Security Policy
+
+## Reporting a vulnerability
+
+Do not open a public issue.
+
+Email **security@heptapusgroup.com** with a description, reproduction steps and
+the affected version. Expect an acknowledgement within three working days and an
+assessment within ten. We will agree a disclosure timeline with you and credit
+you in the release notes unless you prefer otherwise.
+
+## What counts as a vulnerability here
+
+Ingot is a compiler, so its security surface is mostly about **what a compiled
+artifact is allowed to reach**. Treat the following as security issues:
+
+* **Capability escape** — a program reaches an effect its `policy` block does
+  not grant, or the checker fails to reject a call that needs a denied effect.
+* **Default-deny bypass** — an effect with no policy rule is treated as
+  permitted anywhere in the pipeline.
+* **Approval bypass** — a call whose effects are marked `require approval`
+  reaches the IR without a preceding `approval` node.
+* **Secret exposure** — any path by which a secret value could be written into
+  source, the IR, an artifact, a lockfile or a log.
+* **Path traversal** — a filesystem allowlist that can be escaped, for example
+  through `..` or a symlink.
+* **Lowering divergence** — the IR grants more than the source states, or a
+  backend can silently ignore a restriction.
+* **Compiler denial of service** — input that makes the compiler hang, exhaust
+  memory, or crash. The parser is designed never to loop; a counterexample is a
+  bug.
+* **Supply chain** — a dependency compromise affecting released binaries.
+
+## What does not count
+
+* An agent producing wrong or harmful *content*. That is a model behaviour
+  concern, not a compiler one.
+* A tool doing something harmful when it was explicitly granted the capability.
+  Ingot's job is to make the grant visible and required, not to second-guess it.
+* Warnings that do not fail the build, when documented as warnings.
+
+## Design commitments
+
+These are properties we treat as invariants; a report that breaks one is
+actionable regardless of severity.
+
+**Default-deny.** An effect is available only when the policy grants it. An
+absent rule is a denial with its own diagnostic (`ING4007`), never a permission.
+
+**Secrets never enter an artifact.** Secret values do not appear in source, IR,
+lockfiles or OCI layers. Only references and schemas do. The build-time scanner
+that enforces this arrives with M6 packaging.
+
+**Effects are explicit.** Every tool declares what it can do. A call's effects
+are checked at the call site. A sub-agent cannot exceed the union of the effects
+of the tools it grants.
+
+**Bounds are static.** Loops carry a maximum, recursion is rejected, and a flow
+that cannot fit its step budget is rejected. Unbounded cost is a safety problem,
+not just an economic one.
+
+**Backends reject rather than skip.** An unknown node kind, an unsupported
+policy decision or an unimplemented IR major version must stop a backend.
+Skipping a node is how a restriction gets lost.
+
+## Supported versions
+
+Pre-1.0. Only the latest release receives fixes. Once 1.0 ships, this section
+will state a support window per minor version.
+
+## Dependencies
+
+Dependencies are kept few and permissive. `cargo deny check` runs in CI over
+advisories, licences, sources and duplicate versions. Adding a dependency to a
+core crate needs justification in the pull request, including its licence and
+its transitive footprint.

@@ -1,0 +1,13 @@
+[package]
+name = "ingot-diagnostics"
+description = "Diagnostic model and terminal renderer for the Ingot compiler."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+ingot-source.workspace = true
+serde = { workspace = true }

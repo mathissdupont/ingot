@@ -1,0 +1,110 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Format and lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo fmt
+        run: cargo fmt --all -- --check
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets --all-features
+
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo test
+        run: cargo test --workspace --all-features
+      # The IR must be byte-identical on every platform, not just on Linux.
+      # Golden files are checked in; a platform-dependent encoding fails here.
+      - name: Golden IR is platform independent
+        run: cargo test -p ingot-compiler --test golden_ir
+
+  msrv:
+    name: Minimum supported Rust version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.85
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --workspace --all-targets
+
+  examples:
+    name: Reference examples
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --workspace
+      - name: Examples check cleanly
+        run: |
+          for example in examples/*/; do
+            echo "::group::ingot check $example"
+            ./target/debug/ingot check --color never "$example"
+            echo "::endgroup::"
+          done
+      - name: Examples are canonically formatted
+        run: |
+          for example in examples/*/; do
+            ./target/debug/ingot fmt --check --color never "$example"
+          done
+      - name: Build output is reproducible across runs
+        run: |
+          ./target/debug/ingot build examples/research-agent --out-dir /tmp/first
+          ./target/debug/ingot build examples/research-agent --out-dir /tmp/second
+          diff -r /tmp/first /tmp/second
+      - name: A generated project checks and builds
+        run: |
+          ./target/debug/ingot init /tmp/scaffold
+          ./target/debug/ingot check --color never /tmp/scaffold
+          ./target/debug/ingot build --color never /tmp/scaffold
+          test -f /tmp/scaffold/target/ingot/Brief.ir.json
+
+  supply-chain:
+    name: Advisories and licences
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories bans licenses sources
+
+  docs:
+    name: Documentation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo doc
+        run: cargo doc --workspace --no-deps --all-features
+        env:
+          RUSTDOCFLAGS: -D warnings

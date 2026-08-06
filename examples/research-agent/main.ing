@@ -1,0 +1,66 @@
+language 0.1
+package heptapus.examples.research
+
+/// One search hit, as returned by the MCP search tool.
+type search_result {
+  title: string
+  url: string
+  snippet: string
+}
+
+/// Full-text web search over an MCP server.
+tool web.search(query: string) -> search_result[] !network
+
+/// Rejects a draft that does not cite enough distinct sources.
+verifier CitationCheck(draft: markdown, min_sources: int)
+
+/// A realistic research workflow.
+///
+/// Exercises: MCP tools, a network allowlist, working memory, `parallel map`
+/// fan-out, record field access, verification and budgets.
+agent ResearchAgent(topic: string) -> report<markdown> {
+  model requires {
+    tool_calling
+    structured_output
+    context >= 128k
+  }
+
+  tools {
+    mcp web.search
+  }
+
+  memory {
+    working ephemeral {
+      queries: string[]
+    }
+  }
+
+  budget {
+    steps <= 60
+    tokens <= 120000
+    cost <= 5 usd
+  }
+
+  policy {
+    network allow ["arxiv.org", "github.com"]
+    filesystem_write deny
+    external_write deny
+    secrets deny export
+  }
+
+  flow {
+    queries = ask<string[]>("Create diverse, non-overlapping research queries for: ${topic}")
+    state.queries = queries
+    sources = parallel map queries as query {
+      call web.search(query)
+    }
+    checkpoint "sources-collected"
+    draft = ask<markdown>(
+      "Produce a source-grounded report. Cite every claim.",
+      context: sources,
+      temperature: 0.2
+    )
+    verify CitationCheck(draft, min_sources: 8)
+    emit report = draft
+  }
+}

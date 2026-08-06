@@ -1,0 +1,11 @@
+[package]
+name = "ingot-source"
+description = "Source file management, byte spans and line/column resolution for the Ingot compiler."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]

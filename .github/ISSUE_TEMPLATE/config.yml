@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/mathissdupont/ingot/blob/main/SECURITY.md
+    about: Do not open a public issue. Report privately, per SECURITY.md.
+  - name: Language or IR proposal
+    url: https://github.com/mathissdupont/ingot/blob/main/rfcs/0000-template.md
+    about: Changes to observable behaviour go through the RFC process.

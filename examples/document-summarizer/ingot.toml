@@ -1,0 +1,9 @@
+[project]
+name = "document-summarizer"
+version = "0.1.0"
+language = "0.1"
+description = "Smallest end-to-end Ingot agent: one input, one model call, one artifact."
+
+[build]
+entry = "main.ing"
+out-dir = "target/ingot"

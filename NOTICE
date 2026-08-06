@@ -1,0 +1,10 @@
+Ingot
+Copyright 2026 Heptapus Group
+
+This product includes software developed at Heptapus Group.
+
+Licensed under the Apache License, Version 2.0. See LICENSE for the full text.
+
+Third-party dependencies are listed in Cargo.lock. Their licences are checked in
+CI by `cargo deny check licenses`, configured in deny.toml, which allows only
+permissive licences compatible with Apache-2.0 redistribution.

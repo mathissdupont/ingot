@@ -1,0 +1,9 @@
+[project]
+name = "code-review-team"
+version = "0.1.0"
+language = "0.1"
+description = "Sub-agents, filesystem capabilities, branching and an approval-gated external write."
+
+[build]
+entry = "main.ing"
+out-dir = "target/ingot"

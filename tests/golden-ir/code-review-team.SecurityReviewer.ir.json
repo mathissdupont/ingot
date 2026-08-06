@@ -1,0 +1,165 @@
+{
+  "irVersion": "0.1",
+  "language": "0.1",
+  "agent": "heptapus.examples.review.SecurityReviewer",
+  "doc": "Reviews one file for security problems.\n\nA sub-agent: it has its own capability grants and its own budget, so the\ncaller cannot widen what it is allowed to reach.",
+  "inputs": {
+    "path": "string"
+  },
+  "outputs": {
+    "notes": "artifact<markdown>"
+  },
+  "types": {
+    "finding": {
+      "fields": [
+        {
+          "name": "file",
+          "type": "string"
+        },
+        {
+          "name": "severity",
+          "type": "string"
+        },
+        {
+          "name": "summary",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "requirements": {
+    "model": {
+      "mode": "capabilities",
+      "capabilities": [
+        "structured_output"
+      ]
+    }
+  },
+  "tools": [
+    {
+      "ref": "mcp:repo.read_file",
+      "name": "repo.read_file",
+      "transport": "mcp",
+      "effects": [
+        "filesystem_read"
+      ],
+      "signature": {
+        "params": [
+          {
+            "name": "path",
+            "type": "string"
+          }
+        ],
+        "result": "text"
+      }
+    }
+  ],
+  "budget": {
+    "steps": 6,
+    "tokens": 40000
+  },
+  "policy": {
+    "external_write": {
+      "decision": "deny"
+    },
+    "filesystem_read": {
+      "decision": "allow",
+      "values": [
+        "crates",
+        "src"
+      ]
+    },
+    "filesystem_write": {
+      "decision": "deny"
+    },
+    "network": {
+      "decision": "deny"
+    },
+    "secrets": {
+      "decision": "deny",
+      "qualifier": "export"
+    }
+  },
+  "effects": [
+    "filesystem_read",
+    "model_access"
+  ],
+  "entry": "n0",
+  "nodes": [
+    {
+      "id": "n0",
+      "kind": "tool.call",
+      "binding": "contents",
+      "tool": "mcp:repo.read_file",
+      "args": [
+        {
+          "name": "path",
+          "value": {
+            "kind": "ref",
+            "scope": "input",
+            "path": [
+              "path"
+            ]
+          }
+        }
+      ],
+      "effects": [
+        "filesystem_read"
+      ],
+      "next": "n1"
+    },
+    {
+      "id": "n1",
+      "kind": "llm.call",
+      "binding": "$tmp0",
+      "prompt": {
+        "kind": "template",
+        "parts": [
+          {
+            "kind": "text",
+            "value": "Review this file for security problems only. Report nothing if it is clean.\n\n"
+          },
+          {
+            "kind": "value",
+            "value": {
+              "kind": "ref",
+              "scope": "binding",
+              "path": [
+                "contents"
+              ]
+            },
+            "type": "text"
+          }
+        ]
+      },
+      "responseType": "markdown",
+      "args": [
+        {
+          "name": "temperature",
+          "value": {
+            "kind": "literal",
+            "type": "float",
+            "value": 0.0
+          }
+        }
+      ],
+      "effects": [
+        "model_access"
+      ],
+      "next": "n2"
+    },
+    {
+      "id": "n2",
+      "kind": "artifact.emit",
+      "value": {
+        "kind": "ref",
+        "scope": "binding",
+        "path": [
+          "$tmp0"
+        ]
+      },
+      "output": "notes",
+      "next": null
+    }
+  ]
+}

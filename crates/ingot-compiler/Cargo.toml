@@ -1,0 +1,23 @@
+[package]
+name = "ingot-compiler"
+description = "Compilation driver: source to Agent IR, including lowering."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+ingot-source.workspace = true
+ingot-diagnostics.workspace = true
+ingot-syntax.workspace = true
+ingot-parser.workspace = true
+ingot-semantic.workspace = true
+ingot-types.workspace = true
+ingot-ir.workspace = true
+serde_json = { workspace = true }
+
+[dev-dependencies]
+ingot-ir.workspace = true
+ingot-types.workspace = true

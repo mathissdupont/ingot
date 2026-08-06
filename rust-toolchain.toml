@@ -1,0 +1,7 @@
+# Contributors build with the current stable toolchain.
+# The minimum supported Rust version (MSRV) is declared as `rust-version`
+# in Cargo.toml and is enforced by a dedicated CI job.
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy"]
+profile = "default"

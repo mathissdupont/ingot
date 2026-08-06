@@ -1,0 +1,27 @@
+# Normalise every text file to LF in the repository and in the working tree.
+#
+# This is not a style preference. The golden IR tests compare checked-in files
+# byte-for-byte against output the compiler generates with `\n`. A Windows
+# checkout that converted them to CRLF would fail those tests, and the whole
+# point of the golden files is that they are identical everywhere.
+* text=auto eol=lf
+
+*.rs      text eol=lf
+*.toml    text eol=lf
+*.json    text eol=lf
+*.md      text eol=lf
+*.yml     text eol=lf
+*.yaml    text eol=lf
+*.ing     text eol=lf
+
+# Binary: never touch, never diff as text.
+*.docx    binary
+*.png     binary
+*.jpg     binary
+*.ico     binary
+
+# Generated; collapse in pull request diffs but keep it tracked.
+Cargo.lock linguist-generated=true
+
+# GitHub needs telling: `.ing` is our source language, not something else.
+*.ing linguist-language=Rust linguist-detectable=false

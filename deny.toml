@@ -1,0 +1,48 @@
+# cargo-deny configuration.
+#
+# Ingot is distributed under Apache-2.0, so every dependency must be licensed
+# permissively enough to redistribute under those terms. Copyleft licences are
+# not on the allowlist: a linked GPL or AGPL dependency would change the terms
+# under which users may redistribute the compiler.
+#
+# This file encodes the policy; it is not legal advice. Adding a licence to the
+# allowlist should involve legal review.
+
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+yanked = "deny"
+ignore = []
+
+[licenses]
+version = 2
+# Permissive licences compatible with Apache-2.0 redistribution.
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "MIT-0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+]
+confidence-threshold = 0.9
+exceptions = []
+
+[bans]
+# Duplicate major versions bloat the binary and make audits harder to reason
+# about. A warning rather than an error: transitive duplicates are not always
+# ours to fix.
+multiple-versions = "warn"
+wildcards = "deny"
+highlight = "all"
+deny = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

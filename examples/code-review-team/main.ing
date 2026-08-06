@@ -1,0 +1,113 @@
+language 0.1
+package heptapus.examples.review
+
+/// One finding produced by a reviewer.
+type finding {
+  file: string
+  severity: string
+  summary: string
+}
+
+/// Reads a file from the workspace.
+tool repo.read_file(path: string) -> text !filesystem_read
+
+/// Writes a file inside the workspace.
+tool repo.write_file(path: string, content: text) -> file !filesystem_write
+
+/// Posts a review comment on the hosting provider. Leaves the workspace.
+tool forge.comment(pull_request: string, body: markdown) -> bool !external_write
+
+/// Rejects a review that reports nothing actionable.
+verifier HasActionableFindings(review: markdown, min_findings: int)
+
+/// Reviews one file for security problems.
+///
+/// A sub-agent: it has its own capability grants and its own budget, so the
+/// caller cannot widen what it is allowed to reach.
+agent SecurityReviewer(path: string) -> notes<markdown> {
+  model requires {
+    structured_output
+  }
+
+  tools {
+    mcp repo.read_file
+  }
+
+  budget {
+    steps <= 6
+    tokens <= 40000
+  }
+
+  policy {
+    filesystem_read allow ["src", "crates"]
+    filesystem_write deny
+    external_write deny
+    network deny
+    secrets deny export
+  }
+
+  flow {
+    contents = call repo.read_file(path)
+    emit notes = ask<markdown>(
+      "Review this file for security problems only. Report nothing if it is clean.\n\n${contents}",
+      temperature: 0.0
+    )
+  }
+}
+
+/// Coordinates a review across several files and publishes the result.
+///
+/// Exercises: sub-agent calls, `parallel map` over inputs, a branch,
+/// filesystem and external-write capabilities, and an approval checkpoint the
+/// compiler inserts from `external_write require approval`.
+agent CodeReviewTeam(pull_request: string, paths: string[]) -> review<markdown> {
+  model requires {
+    tool_calling
+    structured_output
+    context >= 128k
+  }
+
+  tools {
+    mcp repo.write_file
+    mcp forge.comment
+  }
+
+  memory {
+    working ephemeral {
+      reviewed: string[]
+    }
+  }
+
+  budget {
+    steps <= 40
+    tokens <= 200000
+    cost <= 3 usd
+  }
+
+  policy {
+    filesystem_read allow ["src", "crates"]
+    filesystem_write allow ["target/review"]
+    external_write require approval
+    network deny
+    secrets deny export
+  }
+
+  flow {
+    state.reviewed = paths
+    notes = parallel map paths as path {
+      call SecurityReviewer(path)
+    }
+    summary = ask<markdown>(
+      "Merge these per-file reviews into one report for pull request ${pull_request}.",
+      context: notes
+    )
+    verify HasActionableFindings(summary, min_findings: 1)
+    _saved = call repo.write_file("target/review/summary.md", summary)
+    if len(paths) > 0 {
+      _posted = call forge.comment(pull_request, summary)
+      emit review = summary
+    } else {
+      emit review = ask<markdown>("No files were supplied, so nothing was reviewed.")
+    }
+  }
+}

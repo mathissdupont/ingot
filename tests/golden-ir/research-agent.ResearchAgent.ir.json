@@ -1,0 +1,258 @@
+{
+  "irVersion": "0.1",
+  "language": "0.1",
+  "agent": "heptapus.examples.research.ResearchAgent",
+  "doc": "A realistic research workflow.\n\nExercises: MCP tools, a network allowlist, working memory, `parallel map`\nfan-out, record field access, verification and budgets.",
+  "inputs": {
+    "topic": "string"
+  },
+  "outputs": {
+    "report": "artifact<markdown>"
+  },
+  "types": {
+    "search_result": {
+      "fields": [
+        {
+          "name": "title",
+          "type": "string"
+        },
+        {
+          "name": "url",
+          "type": "string"
+        },
+        {
+          "name": "snippet",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "requirements": {
+    "model": {
+      "mode": "capabilities",
+      "capabilities": [
+        "structured_output",
+        "tool_calling"
+      ],
+      "contextTokens": {
+        "min": 131072
+      }
+    }
+  },
+  "tools": [
+    {
+      "ref": "mcp:web.search",
+      "name": "web.search",
+      "transport": "mcp",
+      "effects": [
+        "network"
+      ],
+      "signature": {
+        "params": [
+          {
+            "name": "query",
+            "type": "string"
+          }
+        ],
+        "result": "search_result[]"
+      }
+    }
+  ],
+  "state": {
+    "queries": "string[]"
+  },
+  "budget": {
+    "steps": 60,
+    "tokens": 120000,
+    "cost": {
+      "amount": "5",
+      "currency": "usd"
+    }
+  },
+  "policy": {
+    "external_write": {
+      "decision": "deny"
+    },
+    "filesystem_write": {
+      "decision": "deny"
+    },
+    "network": {
+      "decision": "allow",
+      "values": [
+        "arxiv.org",
+        "github.com"
+      ]
+    },
+    "secrets": {
+      "decision": "deny",
+      "qualifier": "export"
+    }
+  },
+  "effects": [
+    "model_access",
+    "network"
+  ],
+  "entry": "n0",
+  "nodes": [
+    {
+      "id": "n0",
+      "kind": "llm.call",
+      "binding": "queries",
+      "prompt": {
+        "kind": "template",
+        "parts": [
+          {
+            "kind": "text",
+            "value": "Create diverse, non-overlapping research queries for: "
+          },
+          {
+            "kind": "value",
+            "value": {
+              "kind": "ref",
+              "scope": "input",
+              "path": [
+                "topic"
+              ]
+            },
+            "type": "string"
+          }
+        ]
+      },
+      "responseType": "string[]",
+      "effects": [
+        "model_access"
+      ],
+      "next": "n1"
+    },
+    {
+      "id": "n1",
+      "kind": "state.write",
+      "field": "queries",
+      "value": {
+        "kind": "ref",
+        "scope": "binding",
+        "path": [
+          "queries"
+        ]
+      },
+      "next": "n3"
+    },
+    {
+      "id": "n2",
+      "kind": "tool.call",
+      "tool": "mcp:web.search",
+      "args": [
+        {
+          "name": "query",
+          "value": {
+            "kind": "ref",
+            "scope": "binding",
+            "path": [
+              "query"
+            ]
+          }
+        }
+      ],
+      "effects": [
+        "network"
+      ],
+      "next": null
+    },
+    {
+      "id": "n3",
+      "kind": "parallel",
+      "binding": "sources",
+      "body": "n2",
+      "binder": "query",
+      "source": {
+        "kind": "ref",
+        "scope": "binding",
+        "path": [
+          "queries"
+        ]
+      },
+      "mode": "map",
+      "next": "n4"
+    },
+    {
+      "id": "n4",
+      "kind": "checkpoint",
+      "label": "sources-collected",
+      "next": "n5"
+    },
+    {
+      "id": "n5",
+      "kind": "llm.call",
+      "binding": "draft",
+      "prompt": {
+        "kind": "literal",
+        "type": "string",
+        "value": "Produce a source-grounded report. Cite every claim."
+      },
+      "responseType": "markdown",
+      "args": [
+        {
+          "name": "context",
+          "value": {
+            "kind": "ref",
+            "scope": "binding",
+            "path": [
+              "sources"
+            ]
+          }
+        },
+        {
+          "name": "temperature",
+          "value": {
+            "kind": "literal",
+            "type": "float",
+            "value": 0.2
+          }
+        }
+      ],
+      "effects": [
+        "model_access"
+      ],
+      "next": "n6"
+    },
+    {
+      "id": "n6",
+      "kind": "verify",
+      "verifier": "CitationCheck",
+      "args": [
+        {
+          "name": "draft",
+          "value": {
+            "kind": "ref",
+            "scope": "binding",
+            "path": [
+              "draft"
+            ]
+          }
+        },
+        {
+          "name": "min_sources",
+          "value": {
+            "kind": "literal",
+            "type": "int",
+            "value": 8
+          }
+        }
+      ],
+      "next": "n7"
+    },
+    {
+      "id": "n7",
+      "kind": "artifact.emit",
+      "value": {
+        "kind": "ref",
+        "scope": "binding",
+        "path": [
+          "draft"
+        ]
+      },
+      "output": "report",
+      "next": null
+    }
+  ]
+}

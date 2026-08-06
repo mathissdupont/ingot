@@ -1,0 +1,9 @@
+[project]
+name = "research-agent"
+version = "0.1.0"
+language = "0.1"
+description = "MCP search, parallel fan-out, working memory, citation verification."
+
+[build]
+entry = "main.ing"
+out-dir = "target/ingot"

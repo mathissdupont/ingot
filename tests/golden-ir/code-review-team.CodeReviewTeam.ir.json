@@ -1,0 +1,396 @@
+{
+  "irVersion": "0.1",
+  "language": "0.1",
+  "agent": "heptapus.examples.review.CodeReviewTeam",
+  "doc": "Coordinates a review across several files and publishes the result.\n\nExercises: sub-agent calls, `parallel map` over inputs, a branch,\nfilesystem and external-write capabilities, and an approval checkpoint the\ncompiler inserts from `external_write require approval`.",
+  "inputs": {
+    "paths": "string[]",
+    "pull_request": "string"
+  },
+  "outputs": {
+    "review": "artifact<markdown>"
+  },
+  "types": {
+    "finding": {
+      "fields": [
+        {
+          "name": "file",
+          "type": "string"
+        },
+        {
+          "name": "severity",
+          "type": "string"
+        },
+        {
+          "name": "summary",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "requirements": {
+    "model": {
+      "mode": "capabilities",
+      "capabilities": [
+        "structured_output",
+        "tool_calling"
+      ],
+      "contextTokens": {
+        "min": 131072
+      }
+    }
+  },
+  "tools": [
+    {
+      "ref": "mcp:repo.write_file",
+      "name": "repo.write_file",
+      "transport": "mcp",
+      "effects": [
+        "filesystem_write"
+      ],
+      "signature": {
+        "params": [
+          {
+            "name": "path",
+            "type": "string"
+          },
+          {
+            "name": "content",
+            "type": "text"
+          }
+        ],
+        "result": "file"
+      }
+    },
+    {
+      "ref": "mcp:forge.comment",
+      "name": "forge.comment",
+      "transport": "mcp",
+      "effects": [
+        "external_write"
+      ],
+      "signature": {
+        "params": [
+          {
+            "name": "pull_request",
+            "type": "string"
+          },
+          {
+            "name": "body",
+            "type": "markdown"
+          }
+        ],
+        "result": "bool"
+      }
+    }
+  ],
+  "state": {
+    "reviewed": "string[]"
+  },
+  "budget": {
+    "steps": 40,
+    "tokens": 200000,
+    "cost": {
+      "amount": "3",
+      "currency": "usd"
+    }
+  },
+  "policy": {
+    "external_write": {
+      "decision": "requireApproval"
+    },
+    "filesystem_read": {
+      "decision": "allow",
+      "values": [
+        "crates",
+        "src"
+      ]
+    },
+    "filesystem_write": {
+      "decision": "allow",
+      "values": [
+        "target/review"
+      ]
+    },
+    "network": {
+      "decision": "deny"
+    },
+    "secrets": {
+      "decision": "deny",
+      "qualifier": "export"
+    }
+  },
+  "effects": [
+    "external_write",
+    "filesystem_read",
+    "filesystem_write",
+    "model_access"
+  ],
+  "entry": "n0",
+  "nodes": [
+    {
+      "id": "n0",
+      "kind": "state.write",
+      "field": "reviewed",
+      "value": {
+        "kind": "ref",
+        "scope": "input",
+        "path": [
+          "paths"
+        ]
+      },
+      "next": "n2"
+    },
+    {
+      "id": "n1",
+      "kind": "agent.call",
+      "agent": "heptapus.examples.review.SecurityReviewer",
+      "args": [
+        {
+          "name": "path",
+          "value": {
+            "kind": "ref",
+            "scope": "binding",
+            "path": [
+              "path"
+            ]
+          }
+        }
+      ],
+      "effects": [
+        "filesystem_read",
+        "model_access"
+      ],
+      "next": null
+    },
+    {
+      "id": "n2",
+      "kind": "parallel",
+      "binding": "notes",
+      "body": "n1",
+      "binder": "path",
+      "source": {
+        "kind": "ref",
+        "scope": "input",
+        "path": [
+          "paths"
+        ]
+      },
+      "mode": "map",
+      "next": "n3"
+    },
+    {
+      "id": "n3",
+      "kind": "llm.call",
+      "binding": "summary",
+      "prompt": {
+        "kind": "template",
+        "parts": [
+          {
+            "kind": "text",
+            "value": "Merge these per-file reviews into one report for pull request "
+          },
+          {
+            "kind": "value",
+            "value": {
+              "kind": "ref",
+              "scope": "input",
+              "path": [
+                "pull_request"
+              ]
+            },
+            "type": "string"
+          },
+          {
+            "kind": "text",
+            "value": "."
+          }
+        ]
+      },
+      "responseType": "markdown",
+      "args": [
+        {
+          "name": "context",
+          "value": {
+            "kind": "ref",
+            "scope": "binding",
+            "path": [
+              "notes"
+            ]
+          }
+        }
+      ],
+      "effects": [
+        "model_access"
+      ],
+      "next": "n4"
+    },
+    {
+      "id": "n4",
+      "kind": "verify",
+      "verifier": "HasActionableFindings",
+      "args": [
+        {
+          "name": "review",
+          "value": {
+            "kind": "ref",
+            "scope": "binding",
+            "path": [
+              "summary"
+            ]
+          }
+        },
+        {
+          "name": "min_findings",
+          "value": {
+            "kind": "literal",
+            "type": "int",
+            "value": 1
+          }
+        }
+      ],
+      "next": "n5"
+    },
+    {
+      "id": "n5",
+      "kind": "tool.call",
+      "binding": "_saved",
+      "tool": "mcp:repo.write_file",
+      "args": [
+        {
+          "name": "path",
+          "value": {
+            "kind": "literal",
+            "type": "string",
+            "value": "target/review/summary.md"
+          }
+        },
+        {
+          "name": "content",
+          "value": {
+            "kind": "ref",
+            "scope": "binding",
+            "path": [
+              "summary"
+            ]
+          }
+        }
+      ],
+      "effects": [
+        "filesystem_write"
+      ],
+      "next": "n6"
+    },
+    {
+      "id": "n6",
+      "kind": "branch",
+      "condition": {
+        "kind": "binary",
+        "op": ">",
+        "lhs": {
+          "kind": "builtin",
+          "name": "len",
+          "args": [
+            {
+              "kind": "ref",
+              "scope": "input",
+              "path": [
+                "paths"
+              ]
+            }
+          ]
+        },
+        "rhs": {
+          "kind": "literal",
+          "type": "int",
+          "value": 0
+        }
+      },
+      "then": "n7",
+      "else": "n10",
+      "next": null
+    },
+    {
+      "id": "n7",
+      "kind": "approval",
+      "label": "approval required before calling mcp:forge.comment",
+      "effects": [
+        "external_write"
+      ],
+      "next": "n8"
+    },
+    {
+      "id": "n8",
+      "kind": "tool.call",
+      "binding": "_posted",
+      "tool": "mcp:forge.comment",
+      "args": [
+        {
+          "name": "pull_request",
+          "value": {
+            "kind": "ref",
+            "scope": "input",
+            "path": [
+              "pull_request"
+            ]
+          }
+        },
+        {
+          "name": "body",
+          "value": {
+            "kind": "ref",
+            "scope": "binding",
+            "path": [
+              "summary"
+            ]
+          }
+        }
+      ],
+      "effects": [
+        "external_write"
+      ],
+      "next": "n9"
+    },
+    {
+      "id": "n9",
+      "kind": "artifact.emit",
+      "value": {
+        "kind": "ref",
+        "scope": "binding",
+        "path": [
+          "summary"
+        ]
+      },
+      "output": "review",
+      "next": null
+    },
+    {
+      "id": "n10",
+      "kind": "llm.call",
+      "binding": "$tmp0",
+      "prompt": {
+        "kind": "literal",
+        "type": "string",
+        "value": "No files were supplied, so nothing was reviewed."
+      },
+      "responseType": "markdown",
+      "effects": [
+        "model_access"
+      ],
+      "next": "n11"
+    },
+    {
+      "id": "n11",
+      "kind": "artifact.emit",
+      "value": {
+        "kind": "ref",
+        "scope": "binding",
+        "path": [
+          "$tmp0"
+        ]
+      },
+      "output": "review",
+      "next": null
+    }
+  ]
+}

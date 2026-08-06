@@ -1,0 +1,60 @@
+name: Feature request
+description: Something the language or toolchain cannot do yet
+labels: ["kind/feature", "status/needs-design"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Changes to the language, the IR or the artifact format need an RFC. This
+        issue is the first step: describe the problem, and if it is accepted as
+        worth solving, an RFC follows. See CONTRIBUTING.md.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: >
+        What are you trying to build, and what stops you? Describe the situation,
+        not a proposed syntax — the design comes later.
+    validations:
+      required: true
+
+  - type: textarea
+    id: workaround
+    attributes:
+      label: What you do today
+      description: How you work around it now, and why that is unsatisfying.
+    validations:
+      required: true
+
+  - type: textarea
+    id: sketch
+    attributes:
+      label: Sketch (optional)
+      description: If you have one in mind, show the source you wish you could write.
+      render: text
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Language syntax or semantics
+        - Types
+        - Effects, capabilities or policy
+        - Agent IR
+        - Backends and runtimes
+        - Packaging and distribution
+        - CLI and developer experience
+        - Documentation
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope
+      options:
+        - label: This would change the language, the IR or the artifact format
+        - label: This would change what an agent is allowed to reach
+        - label: This can be done in a tool or a backend, without changing the language

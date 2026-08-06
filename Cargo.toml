@@ -1,0 +1,45 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/ingot-source",
+    "crates/ingot-diagnostics",
+    "crates/ingot-lexer",
+    "crates/ingot-syntax",
+    "crates/ingot-parser",
+    "crates/ingot-types",
+    "crates/ingot-semantic",
+    "crates/ingot-ir",
+    "crates/ingot-compiler",
+    "crates/ingot-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "Apache-2.0"
+repository = "https://github.com/mathissdupont/ingot"
+homepage = "https://github.com/mathissdupont/ingot"
+authors = ["Heptapus Group"]
+
+[workspace.dependencies]
+ingot-source = { path = "crates/ingot-source", version = "0.1.0" }
+ingot-diagnostics = { path = "crates/ingot-diagnostics", version = "0.1.0" }
+ingot-lexer = { path = "crates/ingot-lexer", version = "0.1.0" }
+ingot-syntax = { path = "crates/ingot-syntax", version = "0.1.0" }
+ingot-parser = { path = "crates/ingot-parser", version = "0.1.0" }
+ingot-types = { path = "crates/ingot-types", version = "0.1.0" }
+ingot-semantic = { path = "crates/ingot-semantic", version = "0.1.0" }
+ingot-ir = { path = "crates/ingot-ir", version = "0.1.0" }
+ingot-compiler = { path = "crates/ingot-compiler", version = "0.1.0" }
+
+anyhow = "1.0"
+clap = { version = "4.5", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

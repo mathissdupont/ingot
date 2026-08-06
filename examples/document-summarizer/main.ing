@@ -1,0 +1,32 @@
+language 0.1
+package heptapus.examples.summarizer
+
+/// The smallest end-to-end agent: typed input, one model call, one artifact.
+///
+/// Exercises: inputs, prompt interpolation, budgets, a default-deny policy and
+/// artifact emission. No tools, so it needs no capability grants at all.
+agent DocumentSummarizer(document: text, audience: string) -> summary<markdown> {
+  model requires {
+    structured_output
+  }
+
+  budget {
+    steps <= 2
+    tokens <= 32000
+    cost <= 0.25 usd
+  }
+
+  policy {
+    network deny
+    filesystem_read deny
+    filesystem_write deny
+    external_write deny
+    secrets deny export
+  }
+
+  flow {
+    emit summary = ask<markdown>(
+      "Summarise the following document for ${audience}. Keep every claim traceable to the source.\n\n${document}"
+    )
+  }
+}
