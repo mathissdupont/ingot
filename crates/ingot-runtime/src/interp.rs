@@ -147,7 +147,7 @@ pub fn run(
                 steps: report.steps,
                 usage: report.usage,
             });
-            for (name, _) in ir.outputs.iter() {
+            for name in ir.outputs.keys() {
                 if !report.outputs.contains_key(name) {
                     return Err(RunError::OutputNotProduced { name: name.clone() });
                 }
