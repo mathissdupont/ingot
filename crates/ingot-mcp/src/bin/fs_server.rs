@@ -517,13 +517,38 @@ mod tests {
     }
 
     #[test]
-    fn an_absolute_path_is_refused_on_either_platform() {
+    fn a_rooted_path_is_refused() {
+        // `/etc/passwd` has a root component on Windows too, so this one is
+        // refused everywhere.
         let root = temporary_root("absolute");
-        for path in ["/etc/passwd", "C:\\Windows\\win.ini", "\\\\server\\share"] {
+        let error = safe_path(&root, "/etc/passwd").unwrap_err();
+        assert!(error.contains("absolute"), "{error}");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_drive_letter_or_a_unc_share_is_refused() {
+        let root = temporary_root("absolute-windows");
+        for path in ["C:\\Windows\\win.ini", "\\\\server\\share\\file"] {
             let error = safe_path(&root, path).unwrap_err();
+            assert!(error.contains("absolute"), "{path}: {error}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_windows_style_path_is_an_odd_filename_here_not_an_escape() {
+        // On Unix a backslash is an ordinary character, so `C:\Windows\win.ini`
+        // is one strangely named file inside the root. Refusing it would be
+        // theatre; what matters is that it stays inside.
+        let root = temporary_root("absolute-unix");
+        for path in ["C:\\Windows\\win.ini", "\\\\server\\share\\file"] {
+            let resolved = safe_path(&root, path)
+                .unwrap_or_else(|error| panic!("{path} should resolve: {error}"));
             assert!(
-                error.contains("absolute") || error.contains(".."),
-                "{path}: {error}"
+                resolved.starts_with(&root),
+                "{path}: {}",
+                resolved.display()
             );
         }
     }

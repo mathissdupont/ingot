@@ -18,6 +18,7 @@ use std::fmt;
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver, RecvTimeoutError, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -26,6 +27,8 @@ use std::time::{Duration, Instant};
 const STDERR_LINES: usize = 20;
 /// How long a closing server is given to exit before it is killed.
 const SHUTDOWN_GRACE: Duration = Duration::from_millis(500);
+/// How long to wait for a dying server's standard error to arrive.
+const DIAGNOSTICS_GRACE: Duration = Duration::from_millis(500);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TransportError {
@@ -134,6 +137,8 @@ pub struct ChildTransport {
     stdin: Option<ChildStdin>,
     lines: Receiver<FromReader>,
     stderr: Arc<Mutex<Vec<String>>>,
+    /// Set when the stderr pipe closes, which is when the child has gone.
+    stderr_done: Arc<AtomicBool>,
     closed: bool,
 }
 
@@ -183,16 +188,19 @@ impl ChildTransport {
         });
 
         let stderr = Arc::new(Mutex::new(Vec::new()));
+        let stderr_done = Arc::new(AtomicBool::new(false));
         let sink = Arc::clone(&stderr);
+        let finished = Arc::clone(&stderr_done);
         std::thread::spawn(move || {
             let reader = BufReader::new(child_stderr);
             for line in reader.lines().map_while(Result::ok) {
-                let Ok(mut buffer) = sink.lock() else { return };
+                let Ok(mut buffer) = sink.lock() else { break };
                 buffer.push(line);
                 if buffer.len() > STDERR_LINES {
                     buffer.remove(0);
                 }
             }
+            finished.store(true, Ordering::SeqCst);
         });
 
         Ok(ChildTransport {
@@ -200,6 +208,7 @@ impl ChildTransport {
             stdin: Some(stdin),
             lines,
             stderr,
+            stderr_done,
             closed: false,
         })
     }
@@ -227,10 +236,19 @@ impl Transport for ChildTransport {
     }
 
     fn diagnostics(&self) -> String {
-        self.stderr
-            .lock()
-            .map(|buffer| buffer.join("\n"))
-            .unwrap_or_default()
+        // Only ever called on a failing run, and the case that matters most is
+        // a server that died during startup: the write that fails can beat the
+        // reader thread to the pipe, leaving the buffer empty at exactly the
+        // moment its contents are the whole explanation. Wait, briefly, for the
+        // pipe to close — which is when the child has gone and there is nothing
+        // more to come.
+        if self.collected().is_empty() {
+            let deadline = Instant::now() + DIAGNOSTICS_GRACE;
+            while !self.stderr_done.load(Ordering::SeqCst) && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+        self.collected()
     }
 
     fn shutdown(&mut self) {
@@ -256,6 +274,13 @@ impl Transport for ChildTransport {
 }
 
 impl ChildTransport {
+    fn collected(&self) -> String {
+        self.stderr
+            .lock()
+            .map(|buffer| buffer.join("\n"))
+            .unwrap_or_default()
+    }
+
     fn exit_note(&mut self) -> String {
         match self.child.try_wait() {
             Ok(Some(status)) => format!(" (it exited with {status})"),
