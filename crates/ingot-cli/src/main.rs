@@ -18,12 +18,14 @@ use ingot_compiler::{compile_path, format_source, Compilation};
 use ingot_diagnostics::{codes, ColorChoice as RenderColor};
 
 mod manifest;
+mod run;
 
 use manifest::{resolve_target, Manifest, Target, MANIFEST_NAME};
+use run::{EventFormat, ProviderChoice, RunConfig, TestConfig};
 
-const EXIT_OK: u8 = 0;
-const EXIT_DIAGNOSTICS: u8 = 1;
-const EXIT_FAILURE: u8 = 2;
+pub(crate) const EXIT_OK: u8 = 0;
+pub(crate) const EXIT_DIAGNOSTICS: u8 = 1;
+pub(crate) const EXIT_FAILURE: u8 = 2;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -78,6 +80,10 @@ enum Command {
     Build(BuildArgs),
     /// Print the Agent IR to standard output.
     Ir(IrArgs),
+    /// Compile and execute the agent.
+    Run(RunArgs),
+    /// Replay recorded cassettes and check every one still runs.
+    Test(TestArgs),
     /// Explain a diagnostic code in full.
     Explain(ExplainArgs),
 }
@@ -122,6 +128,75 @@ struct IrArgs {
 }
 
 #[derive(Args, Debug)]
+struct RunArgs {
+    #[command(flatten)]
+    target: PathArgs,
+
+    /// An agent input, as `name=value`. Repeat for each one.
+    ///
+    /// The value is parsed as JSON when it is valid JSON, and taken as a plain
+    /// string otherwise. Prefix with `@` to read it from a file:
+    /// `--input document=@report.txt`.
+    #[arg(long = "input", short = 'i', value_name = "NAME=VALUE")]
+    inputs: Vec<String>,
+
+    /// Where completions come from.
+    #[arg(long, value_enum, default_value_t = ProviderChoice::Anthropic)]
+    provider: ProviderChoice,
+
+    /// Cassette to replay, for `--provider replay`.
+    #[arg(long, value_name = "FILE")]
+    cassette: Option<PathBuf>,
+
+    /// Record this run to a cassette so it can be replayed offline.
+    #[arg(long, value_name = "FILE")]
+    record: Option<PathBuf>,
+
+    /// Override the model the artifact asks for.
+    #[arg(long, value_name = "MODEL")]
+    model: Option<String>,
+
+    /// Reasoning effort: low, medium, high, xhigh or max.
+    #[arg(long, value_name = "LEVEL")]
+    effort: Option<String>,
+
+    /// Which agent to run when the file declares several. Defaults to the last.
+    #[arg(long, value_name = "NAME")]
+    agent: Option<String>,
+
+    /// Write artifacts here instead of to standard output.
+    #[arg(long, value_name = "DIR")]
+    out_dir: Option<PathBuf>,
+
+    /// How progress is reported on stderr.
+    #[arg(long, value_enum, default_value_t = EventFormat::Text)]
+    events: EventFormat,
+
+    /// Approve every gate without asking. The artifact asked for a human, so
+    /// this is deliberately explicit.
+    #[arg(long)]
+    yes: bool,
+
+    /// Stop after this many steps, whatever the artifact's own budget allows.
+    #[arg(long, default_value_t = 1000, value_name = "N")]
+    max_steps: u32,
+}
+
+#[derive(Args, Debug)]
+struct TestArgs {
+    #[command(flatten)]
+    target: PathArgs,
+
+    /// Directory of cassettes to replay.
+    #[arg(long, value_name = "DIR", default_value = "tests/cassettes")]
+    cassettes: PathBuf,
+
+    /// Only run cassettes whose name contains this substring.
+    #[arg(value_name = "FILTER")]
+    filter: Option<String>,
+}
+
+#[derive(Args, Debug)]
 struct ExplainArgs {
     /// A diagnostic code such as `ING4001`.
     code: String,
@@ -137,6 +212,8 @@ fn main() -> ExitCode {
         Command::Fmt(args) => run_fmt(args, color),
         Command::Build(args) => run_build(args, color),
         Command::Ir(args) => run_ir(args, color),
+        Command::Run(args) => run_run(args, color),
+        Command::Test(args) => run_test(args, color),
         Command::Explain(args) => run_explain(args),
     };
 
@@ -193,12 +270,49 @@ fn write_new(path: &Path, contents: &str) -> Result<()> {
     std::fs::write(path, contents).with_context(|| format!("writing {}", path.display()))
 }
 
+/// A package identifier derived from a project name, if one can be.
+///
+/// Returns `None` when the name cannot become a valid identifier — it is empty,
+/// starts with a digit, or collides with a reserved word. `package` is optional
+/// in the language, so omitting it beats generating source that will not
+/// compile. `ingot init agent` used to produce `package agent`, which is a
+/// syntax error.
+fn package_name(name: &str) -> Option<String> {
+    let sanitised: String = name
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let sanitised = sanitised.trim_matches('_').to_string();
+
+    if sanitised.is_empty() {
+        return None;
+    }
+    if sanitised.starts_with(|ch: char| ch.is_ascii_digit()) {
+        return None;
+    }
+    if ingot_lexer::KEYWORDS.contains(&sanitised.as_str()) {
+        return None;
+    }
+    Some(sanitised)
+}
+
 fn starter_source(name: &str) -> String {
-    let package = name.replace(['-', ' '], "_").to_lowercase();
+    let package = match package_name(name) {
+        Some(package) => format!(
+            "package {package}
+"
+        ),
+        None => String::new(),
+    };
     format!(
         r#"language 0.1
-package {package}
-
+{package}
 /// Summarises a topic into a short markdown brief.
 agent Brief(topic: string) -> brief<markdown> {{
   model requires {{
@@ -374,6 +488,64 @@ fn run_ir(args: &IrArgs, color: RenderColor) -> Result<u8> {
     Ok(EXIT_OK)
 }
 
+// --- run / test --------------------------------------------------------------
+
+fn run_run(args: &RunArgs, color: RenderColor) -> Result<u8> {
+    let target = resolve_target(args.target.path.as_deref())?;
+    let compilation = compile(&target)?;
+    report(&compilation, color);
+    if compilation.has_errors() {
+        return Ok(EXIT_DIAGNOSTICS);
+    }
+
+    run::execute(
+        &compilation,
+        &RunConfig {
+            inputs: args.inputs.clone(),
+            provider: args.provider,
+            cassette: args.cassette.clone(),
+            record: args.record.clone(),
+            model: args.model.clone(),
+            effort: args.effort.clone(),
+            agent: args.agent.clone(),
+            out_dir: args.out_dir.clone(),
+            events: args.events,
+            yes: args.yes,
+            max_steps: args.max_steps,
+        },
+    )
+}
+
+fn run_test(args: &TestArgs, color: RenderColor) -> Result<u8> {
+    let target = resolve_target(args.target.path.as_deref())?;
+    let compilation = compile(&target)?;
+    report(&compilation, color);
+    if compilation.has_errors() {
+        return Ok(EXIT_DIAGNOSTICS);
+    }
+
+    // Cassette paths are relative to the project, not the working directory,
+    // so `ingot test examples/research-agent` works from anywhere.
+    let project_root = target
+        .entry
+        .parent()
+        .unwrap_or(Path::new("."))
+        .to_path_buf();
+    let cassette_dir = if args.cassettes.is_absolute() {
+        args.cassettes.clone()
+    } else {
+        project_root.join(&args.cassettes)
+    };
+
+    run::test(
+        &compilation,
+        &TestConfig {
+            cassette_dir,
+            filter: args.filter.clone(),
+        },
+    )
+}
+
 // --- explain ---------------------------------------------------------------
 
 fn run_explain(args: &ExplainArgs) -> Result<u8> {
@@ -423,5 +595,54 @@ fn exit_code(compilation: &Compilation) -> u8 {
         EXIT_DIAGNOSTICS
     } else {
         EXIT_OK
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_plain_name_becomes_a_package() {
+        assert_eq!(
+            package_name("research-agent").as_deref(),
+            Some("research_agent")
+        );
+        assert_eq!(package_name("My Agent").as_deref(), Some("my_agent"));
+    }
+
+    #[test]
+    fn a_reserved_word_yields_no_package() {
+        // `ingot init agent` used to generate `package agent`, which is a
+        // syntax error, so the generated project would not compile.
+        for reserved in ["agent", "tool", "flow", "type", "policy"] {
+            assert_eq!(package_name(reserved), None, "`{reserved}` is reserved");
+        }
+    }
+
+    #[test]
+    fn a_name_that_cannot_start_an_identifier_yields_no_package() {
+        assert_eq!(package_name("2fa"), None);
+        assert_eq!(package_name("---"), None);
+        assert_eq!(package_name(""), None);
+    }
+
+    #[test]
+    fn the_generated_source_omits_an_unusable_package_line() {
+        let source = starter_source("agent");
+        assert!(!source.contains("package"), "{source}");
+        assert!(
+            source.starts_with(
+                "language 0.1
+"
+            ),
+            "{source}"
+        );
+    }
+
+    #[test]
+    fn the_generated_source_keeps_a_usable_package_line() {
+        let source = starter_source("research-agent");
+        assert!(source.contains("package research_agent"), "{source}");
     }
 }

@@ -1,0 +1,479 @@
+//! `ingot run` and `ingot test`.
+//!
+//! Both compile the source, then hand the resulting IR to the reference
+//! interpreter. `run` executes against a provider the operator chose; `test`
+//! replays recorded cassettes so the suite works with no API key and no network.
+
+use std::collections::BTreeMap;
+use std::io::{IsTerminal, Write};
+use std::path::{Path, PathBuf};
+
+use anyhow::{bail, Context, Result};
+use ingot_compiler::Compilation;
+use ingot_runtime::{
+    run as run_agent, AgentRegistry, ApprovalHandler, ApprovalMode, ApprovalRequest, Artifact,
+    Cassette, DenyAllTools, ModelProvider, RecordingProvider, ReplayProvider, RunError, RunEvent,
+    RunOptions, RunReport, TeeSink, ToolHost,
+};
+use serde_json::Value;
+
+/// Which model provider to run against.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub enum ProviderChoice {
+    /// Call the Anthropic Messages API. Needs `ANTHROPIC_API_KEY`.
+    Anthropic,
+    /// Replay a recorded cassette. No network, no key, same answers every time.
+    Replay,
+}
+
+/// How agent output is printed.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub enum EventFormat {
+    /// Human-readable lines.
+    Text,
+    /// One JSON object per line, for piping.
+    Json,
+    /// Nothing but the final artifacts.
+    Quiet,
+}
+
+pub struct RunConfig {
+    pub inputs: Vec<String>,
+    pub provider: ProviderChoice,
+    pub cassette: Option<PathBuf>,
+    pub record: Option<PathBuf>,
+    pub model: Option<String>,
+    pub effort: Option<String>,
+    pub agent: Option<String>,
+    pub out_dir: Option<PathBuf>,
+    pub events: EventFormat,
+    pub yes: bool,
+    pub max_steps: u32,
+}
+
+/// Compile, execute, and write the artifacts.
+pub fn execute(compilation: &Compilation, config: &RunConfig) -> Result<u8> {
+    let (ir, registry) = select_agent(compilation, config.agent.as_deref())?;
+
+    let inputs = parse_inputs(&config.inputs)?;
+    let approval = approval_mode(config);
+    let mut tools = tool_host();
+
+    let mut provider = build_provider(config, &ir.agent, &inputs)?;
+    let format = config.events;
+    let mut sink = TeeSink::new(move |event: &RunEvent| match format {
+        EventFormat::Text => eprintln!("{}", event.to_line()),
+        EventFormat::Json => eprintln!("{}", event.to_json_line()),
+        EventFormat::Quiet => {}
+    });
+
+    let result = run_agent(
+        &ir,
+        &registry,
+        provider.as_mut(),
+        &mut tools,
+        &mut sink,
+        RunOptions {
+            inputs,
+            approval,
+            max_steps: config.max_steps,
+        },
+    );
+
+    // Record whatever happened before propagating a failure: a partial cassette
+    // is more useful than none when debugging why a run broke.
+    if let Some(path) = &config.record {
+        if let Some(cassette) = provider.finish_recording() {
+            cassette.save(path).map_err(anyhow::Error::msg)?;
+            eprintln!(
+                "recorded {} interaction(s) to {}",
+                cassette.interactions.len(),
+                path.display()
+            );
+        }
+    }
+
+    let report = match result {
+        Ok(report) => report,
+        Err(error) => {
+            report_failure(&error);
+            return Ok(super::EXIT_DIAGNOSTICS);
+        }
+    };
+
+    write_outputs(&report, config)?;
+    Ok(super::EXIT_OK)
+}
+
+fn report_failure(error: &RunError) {
+    eprintln!("error: {error}");
+    if error.is_operator_error() {
+        eprintln!(
+            "hint: this is a problem with how the run was invoked, not with the agent itself"
+        );
+    }
+    if let RunError::CapabilityDenied {
+        effect, explicit, ..
+    } = error
+    {
+        if *explicit {
+            eprintln!("hint: the artifact's policy denies `{effect}`; rebuild it with the capability granted");
+        } else {
+            eprintln!(
+                "hint: add `{} allow [...]` to the agent's policy block and rebuild",
+                policy_subject(effect)
+            );
+        }
+    }
+}
+
+fn policy_subject(effect: &str) -> &str {
+    match effect {
+        "secret_access" => "secrets",
+        other => other,
+    }
+}
+
+/// Pick the agent to run and build the registry of everything it may call.
+fn select_agent(
+    compilation: &Compilation,
+    requested: Option<&str>,
+) -> Result<(ingot_ir::AgentIr, AgentRegistry)> {
+    if compilation.agents.is_empty() {
+        bail!("the program declares no agent");
+    }
+    let registry: AgentRegistry = compilation
+        .agents
+        .iter()
+        .map(|agent| (agent.agent.clone(), agent.clone()))
+        .collect();
+
+    let ir = match requested {
+        Some(name) => compilation.agent(name).cloned().with_context(|| {
+            let available: Vec<&str> = compilation
+                .agents
+                .iter()
+                .map(|agent| agent.agent.as_str())
+                .collect();
+            format!(
+                "no agent named `{name}`; this file declares: {}",
+                available.join(", ")
+            )
+        })?,
+        None => {
+            // The last declared agent is the entry point by convention: a
+            // coordinator is written after the sub-agents it calls.
+            compilation
+                .agents
+                .last()
+                .cloned()
+                .expect("checked non-empty above")
+        }
+    };
+    Ok((ir, registry))
+}
+
+fn parse_inputs(raw: &[String]) -> Result<BTreeMap<String, Value>> {
+    let mut inputs = BTreeMap::new();
+    for entry in raw {
+        let Some((name, value)) = entry.split_once('=') else {
+            bail!("`--input {entry}` is not `name=value`");
+        };
+        let name = name.trim().to_string();
+        let value = value.trim();
+
+        // `@path` reads a file, so a document does not have to fit on a command
+        // line. Everything else is JSON if it parses as JSON, and a string
+        // otherwise — so `--input topic=compilers` does the obvious thing.
+        let parsed = if let Some(path) = value.strip_prefix('@') {
+            let text = std::fs::read_to_string(path)
+                .with_context(|| format!("reading input file {path}"))?;
+            Value::String(text)
+        } else {
+            serde_json::from_str(value).unwrap_or_else(|_| Value::String(value.to_string()))
+        };
+        inputs.insert(name, parsed);
+    }
+    Ok(inputs)
+}
+
+fn approval_mode(config: &RunConfig) -> ApprovalMode {
+    if config.yes {
+        return ApprovalMode::AssumeYes;
+    }
+    if std::io::stdin().is_terminal() {
+        ApprovalMode::Ask(Box::new(TerminalApprovals))
+    } else {
+        // Unattended runs deny by default. An artifact that asked for a human
+        // does not get one silently.
+        ApprovalMode::Deny
+    }
+}
+
+struct TerminalApprovals;
+
+impl ApprovalHandler for TerminalApprovals {
+    fn approve(&mut self, request: &ApprovalRequest) -> bool {
+        eprintln!();
+        eprintln!("  APPROVAL REQUIRED at node {}", request.node);
+        eprintln!("  {}", request.reason);
+        eprintln!("  effects: {}", request.effects.join(", "));
+        eprint!("  allow? [y/N] ");
+        let _ = std::io::stderr().flush();
+
+        let mut answer = String::new();
+        if std::io::stdin().read_line(&mut answer).is_err() {
+            return false;
+        }
+        matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes")
+    }
+}
+
+/// The tool host for this release.
+///
+/// MCP is not implemented yet, so nothing is provided and any artifact that
+/// needs a tool stops with a clear message rather than a mystery. The type is
+/// deliberately the same one MCP will plug into.
+fn tool_host() -> impl ToolHost {
+    DenyAllTools
+}
+
+/// A provider plus, optionally, the recorder wrapped around it.
+enum Provider {
+    Plain(Box<dyn ModelProvider>),
+    Recording(RecordingProvider<Box<dyn ModelProvider>>),
+}
+
+impl Provider {
+    fn as_mut(&mut self) -> &mut dyn ModelProvider {
+        match self {
+            Provider::Plain(inner) => inner.as_mut(),
+            Provider::Recording(inner) => inner,
+        }
+    }
+
+    fn finish_recording(self) -> Option<Cassette> {
+        match self {
+            Provider::Plain(_) => None,
+            Provider::Recording(inner) => Some(inner.finish()),
+        }
+    }
+}
+
+fn build_provider(
+    config: &RunConfig,
+    agent: &str,
+    inputs: &BTreeMap<String, Value>,
+) -> Result<Provider> {
+    let inner: Box<dyn ModelProvider> = match config.provider {
+        ProviderChoice::Replay => {
+            let Some(path) = &config.cassette else {
+                bail!(
+                    "`--provider replay` needs `--cassette <FILE>`\n\
+                     record one first with: ingot run --provider anthropic --record <FILE>"
+                );
+            };
+            let cassette = Cassette::load(path).map_err(anyhow::Error::msg)?;
+            Box::new(ReplayProvider::new(cassette))
+        }
+        ProviderChoice::Anthropic => {
+            #[cfg(feature = "anthropic")]
+            {
+                Box::new(
+                    ingot_runtime::anthropic::AnthropicProvider::from_env()
+                        .map_err(anyhow::Error::msg)?
+                        .with_model(config.model.clone())
+                        .with_effort(config.effort.clone()),
+                )
+            }
+            #[cfg(not(feature = "anthropic"))]
+            {
+                let _ = config;
+                bail!(
+                    "this build has no Anthropic provider\n\
+                     rebuild with `cargo build --features anthropic`, or use \
+                     `--provider replay --cassette <FILE>`"
+                );
+            }
+        }
+    };
+
+    Ok(if config.record.is_some() {
+        Provider::Recording(RecordingProvider::new(inner, agent).with_inputs(inputs.clone()))
+    } else {
+        Provider::Plain(inner)
+    })
+}
+
+fn write_outputs(report: &RunReport, config: &RunConfig) -> Result<()> {
+    let Some(dir) = &config.out_dir else {
+        // No directory given: the artifacts go to stdout, so the command
+        // composes with a pipe.
+        let mut stdout = std::io::stdout().lock();
+        for artifact in report.outputs.values() {
+            stdout
+                .write_all(&artifact.to_bytes())
+                .context("writing to standard output")?;
+            if !artifact.to_bytes().ends_with(b"\n") {
+                stdout.write_all(b"\n").ok();
+            }
+        }
+        return Ok(());
+    };
+
+    std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    for artifact in report.outputs.values() {
+        let path = artifact_path(dir, artifact);
+        std::fs::write(&path, artifact.to_bytes())
+            .with_context(|| format!("writing {}", path.display()))?;
+        println!("{} -> {}", artifact.name, path.display());
+    }
+    Ok(())
+}
+
+fn artifact_path(dir: &Path, artifact: &Artifact) -> PathBuf {
+    dir.join(format!("{}.{}", artifact.name, artifact.extension()))
+}
+
+// --- ingot test -----------------------------------------------------------
+
+pub struct TestConfig {
+    pub cassette_dir: PathBuf,
+    pub filter: Option<String>,
+}
+
+/// Replay every cassette in a directory and report pass/fail.
+pub fn test(compilation: &Compilation, config: &TestConfig) -> Result<u8> {
+    if !config.cassette_dir.is_dir() {
+        eprintln!(
+            "no cassettes in {} — nothing to test",
+            config.cassette_dir.display()
+        );
+        eprintln!(
+            "record one with: ingot run --provider anthropic --record {}/<name>.json --input ...",
+            config.cassette_dir.display()
+        );
+        return Ok(super::EXIT_OK);
+    }
+
+    let cassettes =
+        ingot_runtime::load_directory(&config.cassette_dir).map_err(anyhow::Error::msg)?;
+    if cassettes.is_empty() {
+        eprintln!("no cassettes in {}", config.cassette_dir.display());
+        return Ok(super::EXIT_OK);
+    }
+
+    let registry: AgentRegistry = compilation
+        .agents
+        .iter()
+        .map(|agent| (agent.agent.clone(), agent.clone()))
+        .collect();
+
+    let mut passed = 0usize;
+    let mut failed = 0usize;
+
+    for (name, cassette) in cassettes {
+        if let Some(filter) = &config.filter {
+            if !name.contains(filter.as_str()) {
+                continue;
+            }
+        }
+
+        let Some(ir) = registry.get(&cassette.agent) else {
+            eprintln!(
+                "FAIL {name}: the cassette targets `{}`, which this program does not declare",
+                cassette.agent
+            );
+            failed += 1;
+            continue;
+        };
+
+        let inputs = cassette.inputs.clone();
+        let mut provider = ReplayProvider::new(cassette);
+        let mut tools = DenyAllTools;
+        let mut sink = ingot_runtime::CollectingSink::default();
+
+        let result = run_agent(
+            ir,
+            &registry,
+            &mut provider,
+            &mut tools,
+            &mut sink,
+            RunOptions {
+                inputs,
+                approval: ApprovalMode::Deny,
+                max_steps: 1_000,
+            },
+        );
+
+        match result {
+            Ok(report) => {
+                let unused = provider.remaining();
+                if unused > 0 {
+                    eprintln!("FAIL {name}: {unused} recorded interaction(s) were never played");
+                    failed += 1;
+                } else {
+                    println!(
+                        "ok   {name}  ({} step(s), {} token(s))",
+                        report.steps,
+                        report.usage.total()
+                    );
+                    passed += 1;
+                }
+            }
+            Err(error) => {
+                eprintln!("FAIL {name}: {error}");
+                failed += 1;
+            }
+        }
+    }
+
+    if failed == 0 {
+        println!("{passed} passed");
+        Ok(super::EXIT_OK)
+    } else {
+        eprintln!("{passed} passed, {failed} failed");
+        Ok(super::EXIT_DIAGNOSTICS)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inputs_accept_bare_strings() {
+        let inputs = parse_inputs(&["topic=compilers".to_string()]).unwrap();
+        assert_eq!(inputs["topic"], Value::String("compilers".into()));
+    }
+
+    #[test]
+    fn inputs_accept_json() {
+        let inputs = parse_inputs(&["items=[\"a\",\"b\"]".to_string(), "n=3".to_string()]).unwrap();
+        assert_eq!(inputs["items"], serde_json::json!(["a", "b"]));
+        assert_eq!(inputs["n"], serde_json::json!(3));
+    }
+
+    #[test]
+    fn a_value_containing_equals_is_not_split_twice() {
+        let inputs = parse_inputs(&["q=a=b".to_string()]).unwrap();
+        assert_eq!(inputs["q"], Value::String("a=b".into()));
+    }
+
+    #[test]
+    fn a_malformed_input_is_reported() {
+        let error = parse_inputs(&["nonsense".to_string()]).unwrap_err();
+        assert!(error.to_string().contains("name=value"), "{error}");
+    }
+
+    #[test]
+    fn artifact_paths_use_the_content_type_extension() {
+        let artifact = Artifact {
+            name: "report".into(),
+            content_type: "markdown".into(),
+            value: Value::String("x".into()),
+        };
+        let path = artifact_path(Path::new("out"), &artifact);
+        assert!(path.ends_with("report.md"), "{}", path.display());
+    }
+}

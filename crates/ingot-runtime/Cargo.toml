@@ -1,0 +1,23 @@
+[package]
+name = "ingot-runtime"
+description = "Reference interpreter for the Ingot Agent IR: executes an agent and enforces its policy and budgets."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[features]
+default = []
+# The real model provider. Off by default so the core interpreter, and CI,
+# carry no TLS or HTTP dependency.
+anthropic = ["dep:ureq"]
+
+[dependencies]
+ingot-ir.workspace = true
+ingot-types.workspace = true
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = "0.10"
+ureq = { version = "3.3", features = ["json"], optional = true }

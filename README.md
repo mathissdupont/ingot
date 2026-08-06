@@ -12,11 +12,15 @@ lower into the configuration a real runtime consumes.
 ingot init research-agent
 ingot check                       # types, effects, policy, budgets
 ingot build                       # -> target/ingot/ResearchAgent.ir.json
+ingot run --input topic=…         # execute it
 ```
 
-Status: **milestone M2**. The front end is complete — lexer, parser, type and
-effect checker, and lowering to Agent IR. Runtime backends, OCI packaging and
-the language server are planned; see [the roadmap](#roadmap).
+Status: **milestone M3**. The front end is complete — lexer, parser, type and
+effect checker, lowering to Agent IR — and a reference interpreter executes that
+IR against a real model provider, re-enforcing every capability, budget and
+approval the artifact declares. Runs can be recorded to a cassette and replayed
+offline, so agent tests work in CI with no API key. Additional runtime backends,
+OCI packaging and the language server are planned; see [the roadmap](#roadmap).
 
 ---
 
@@ -147,11 +151,39 @@ export CARGO_TARGET_DIR=/c/build/ingot
 | `ingot fmt [--check]` | canonical formatting |
 | `ingot build [--out-dir]` | compile to Agent IR |
 | `ingot ir [--agent]` | print the IR to stdout |
+| `ingot run [--input k=v]` | execute the agent |
+| `ingot test` | replay recorded cassettes |
 | `ingot explain <CODE>` | explain a diagnostic in full |
 
 Exit codes: `0` success, `1` the program has blocking diagnostics, `2` the
-command itself failed. Diagnostics and status lines go to stderr; `ingot ir`
-writes only IR to stdout, so it is safe to pipe.
+command itself failed. Diagnostics, progress events and status lines go to
+stderr; `ingot ir` and `ingot run` write only their payload to stdout, so both
+are safe to pipe.
+
+### Running an agent
+
+```bash
+export ANTHROPIC_API_KEY=...
+ingot run examples/document-summarizer   --input document=@report.txt   --input "audience=engineering leads"
+```
+
+The declared response type is enforced at run time, not just at compile time:
+`ask<string[]>` is sent as a JSON Schema the model is constrained to, and an
+answer that does not match the declared type is an error rather than a
+best-effort parse. Capabilities, budgets, loop bounds and approval gates are all
+re-checked against the artifact's own policy — the person running an artifact is
+usually not the person who built it.
+
+Record a run, then replay it with no key and no network:
+
+```bash
+ingot run examples/document-summarizer --record tests/cassettes/brief.json --input ...
+ingot test examples/document-summarizer
+```
+
+A cassette stores the inputs alongside the exchanges, so it is self-contained,
+and replay verifies a digest of each request — an edited prompt fails loudly
+instead of quietly reusing a stale answer.
 
 ## How it fits together
 
@@ -170,9 +202,12 @@ writes only IR to stdout, so it is safe to pipe.
            ▼
       Agent IR (canonical JSON)                ingot-ir
            │
-     ┌─────┴─────┐
-     ▼           ▼
-  backends    portability report               planned: M3, M5
+     ┌─────┴──────────┐
+     ▼                ▼
+  interpreter     other backends               ingot-runtime; more planned (M5)
+     │                │
+     ▼                ▼
+  execution      portability report            planned: M5
 ```
 
 | Crate | Responsibility |
@@ -186,12 +221,14 @@ writes only IR to stdout, so it is safe to pipe.
 | `ingot-semantic` | resolution, type checking, effect and policy analysis |
 | `ingot-ir` | the Agent IR model and its canonical encoding |
 | `ingot-compiler` | the driver and lowering |
+| `ingot-runtime` | the reference interpreter, providers and cassettes |
 | `ingot-cli` | the `ingot` binary |
 
 ## Specifications
 
 * [Language 0.1](specs/language/v0.1.md) — syntax and static semantics
 * [Agent IR 0.1](specs/ir/v0.1.md) — the backend contract
+* [Runtime 0.1](specs/runtime/v0.1.md) — what executing an artifact means
 * [`agent-ir.schema.json`](specs/ir/agent-ir.schema.json) — machine-readable schema
 * [Architecture](docs/architecture/overview.md) — how the phases fit together
 * [Decision records](docs/adr/) — why the load-bearing choices were made
@@ -203,16 +240,23 @@ writes only IR to stdout, so it is safe to pipe.
 | M0 | scope, prior art, non-goals | done |
 | M1 | grammar, parser, diagnostics, formatter | done |
 | M2 | types, effects, policy, budgets, Agent IR | done |
-| M3 | first runtime backend, end-to-end execution | next |
-| M4 | mock model server, cassette replay, `ingot test` | planned |
-| M5 | second backend and the portability report | planned |
+| M3 | reference interpreter, `ingot run`, end-to-end execution | done |
+| M4 | cassette record and replay, `ingot test` | done |
+| M5 | a second backend and the portability report | next |
 | M6 | OCI artifact, lockfile, reproducible digest | planned |
 | M7 | language server and editor support | planned |
 | M8 | conformance suite and backend author guide | planned |
 
-M3 is where the thesis first pays off end to end, and M5 is where it is proven:
-the same source, two independent runtimes, with every unsupported feature named
-in a report rather than discovered in production.
+M3 and M4 landed together: the interpreter needed cassettes to be testable, and
+cassettes needed the interpreter to be worth recording. M5 is where the central
+claim is actually proven — the same source, two independent runtimes, with every
+unsupported feature named in a report rather than discovered in production.
+
+Two things are deliberately missing from the runtime today, and both fail loudly
+rather than silently: **tool calls** have no host until MCP lands (an agent that
+grants a tool stops with a message saying so), and `parallel` **executes
+sequentially** — valid because the compiler guarantees map iterations cannot
+observe each other, but not yet fast.
 
 ## Contributing
 

@@ -1,0 +1,22 @@
+{
+  "cassetteVersion": "0.1",
+  "agent": "heptapus.examples.summarizer.DocumentSummarizer",
+  "inputs": {
+    "audience": "engineering leads",
+    "document": "A compiler is a program that translates source code written in one language\ninto another, usually a lower-level one. Classical designs separate a front end\n(lexing, parsing, semantic analysis) from a back end (code generation), joined\nby an intermediate representation. The separation lets one language target many\nmachines: adding a platform means writing a back end, not rewriting the\nlanguage. It also moves whole classes of error from run time to build time,\nbecause the front end can reject a program that does not type-check. The\nintermediate representation is the pivot point of the whole design.\n"
+  },
+  "interactions": [
+    {
+      "index": 0,
+      "node": "n0",
+      "requestDigest": "33fc93e33b7911bbd7d964def7beb1905222250a95a9d8a32327694d77c339ae",
+      "responseType": "markdown",
+      "value": "# Compiler Design: Executive Brief\n\n## What it is\n\nA compiler translates source written for people into a form a machine can execute. The work splits into a *front end* that understands the language and a *back end* that targets a machine.\n\n## Why the split matters\n\n- **One front end, many targets.** Adding a platform means adding a back end, not rewriting the language.\n- **Errors move earlier.** Type and scope mistakes surface at build time rather than in production.\n- **The middle is reusable.** An intermediate representation lets analysis and optimisation be written once.\n\n## What to take away\n\nThe intermediate representation is the load-bearing decision. Get it right and targets are cheap to add; get it wrong and every back end pays for it forever.",
+      "usage": {
+        "inputTokens": 480,
+        "outputTokens": 210
+      },
+      "model": "claude-opus-5"
+    }
+  ]
+}

@@ -10,11 +10,12 @@ members = [
     "crates/ingot-semantic",
     "crates/ingot-ir",
     "crates/ingot-compiler",
+    "crates/ingot-runtime",
     "crates/ingot-cli",
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.85"
 license = "Apache-2.0"
@@ -23,15 +24,16 @@ homepage = "https://github.com/mathissdupont/ingot"
 authors = ["Heptapus Group"]
 
 [workspace.dependencies]
-ingot-source = { path = "crates/ingot-source", version = "0.1.0" }
-ingot-diagnostics = { path = "crates/ingot-diagnostics", version = "0.1.0" }
-ingot-lexer = { path = "crates/ingot-lexer", version = "0.1.0" }
-ingot-syntax = { path = "crates/ingot-syntax", version = "0.1.0" }
-ingot-parser = { path = "crates/ingot-parser", version = "0.1.0" }
-ingot-types = { path = "crates/ingot-types", version = "0.1.0" }
-ingot-semantic = { path = "crates/ingot-semantic", version = "0.1.0" }
-ingot-ir = { path = "crates/ingot-ir", version = "0.1.0" }
-ingot-compiler = { path = "crates/ingot-compiler", version = "0.1.0" }
+ingot-source = { path = "crates/ingot-source", version = "0.2.0" }
+ingot-diagnostics = { path = "crates/ingot-diagnostics", version = "0.2.0" }
+ingot-lexer = { path = "crates/ingot-lexer", version = "0.2.0" }
+ingot-syntax = { path = "crates/ingot-syntax", version = "0.2.0" }
+ingot-parser = { path = "crates/ingot-parser", version = "0.2.0" }
+ingot-types = { path = "crates/ingot-types", version = "0.2.0" }
+ingot-semantic = { path = "crates/ingot-semantic", version = "0.2.0" }
+ingot-ir = { path = "crates/ingot-ir", version = "0.2.0" }
+ingot-compiler = { path = "crates/ingot-compiler", version = "0.2.0" }
+ingot-runtime = { path = "crates/ingot-runtime", version = "0.2.0" }
 
 anyhow = "1.0"
 clap = { version = "4.5", features = ["derive"] }

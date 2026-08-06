@@ -42,6 +42,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: cargo test
         run: cargo test --workspace --all-features
+      # The interpreter and its tests must build with no HTTP or TLS stack, so
+      # the dependency stays confined to the optional `anthropic` feature.
+      - name: Runtime builds without the provider feature
+        run: cargo test -p ingot-runtime --no-default-features
       # The IR must be byte-identical on every platform, not just on Linux.
       # Golden files are checked in; a platform-dependent encoding fails here.
       - name: Golden IR is platform independent
@@ -87,6 +91,19 @@ jobs:
           ./target/debug/ingot check --color never /tmp/scaffold
           ./target/debug/ingot build --color never /tmp/scaffold
           test -f /tmp/scaffold/target/ingot/Brief.ir.json
+      # A directory named after a reserved word used to generate a project that
+      # would not compile.
+      - name: A project named after a keyword still compiles
+        run: |
+          ./target/debug/ingot init /tmp/agent
+          ./target/debug/ingot check --color never /tmp/agent
+      - name: Recorded cassettes still replay
+        run: |
+          for example in examples/*/; do
+            if [ -d "$example/tests/cassettes" ]; then
+              ./target/debug/ingot test --color never "$example"
+            fi
+          done
 
   supply-chain:
     name: Advisories and licences

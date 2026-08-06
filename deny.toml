@@ -29,6 +29,10 @@ allow = [
     "ISC",
     "Unicode-3.0",
     "Zlib",
+    # webpki-roots — the Mozilla CA certificate bundle, needed by the TLS stack
+    # behind the optional `anthropic` feature. Permissive and redistributable;
+    # it grants patent and copyright rights without reciprocal obligations.
+    "CDLA-Permissive-2.0",
 ]
 confidence-threshold = 0.9
 exceptions = []
