@@ -21,7 +21,7 @@ mod manifest;
 mod run;
 
 use manifest::{resolve_target, Manifest, Target, MANIFEST_NAME};
-use run::{EventFormat, ProviderChoice, RunConfig, TestConfig};
+use run::{EventFormat, ProviderChoice, RunConfig, TestConfig, ToolsConfig};
 
 pub(crate) const EXIT_OK: u8 = 0;
 pub(crate) const EXIT_DIAGNOSTICS: u8 = 1;
@@ -84,6 +84,8 @@ enum Command {
     Run(RunArgs),
     /// Replay recorded cassettes and check every one still runs.
     Test(TestArgs),
+    /// Show which MCP server provides each tool the program declares.
+    Tools(PathArgs),
     /// Explain a diagnostic code in full.
     Explain(ExplainArgs),
 }
@@ -177,6 +179,11 @@ struct RunArgs {
     #[arg(long)]
     yes: bool,
 
+    /// Start no MCP server, whatever the manifest configures. Useful for
+    /// checking that an agent fails the way it should when a tool is absent.
+    #[arg(long)]
+    no_tools: bool,
+
     /// Stop after this many steps, whatever the artifact's own budget allows.
     #[arg(long, default_value_t = 1000, value_name = "N")]
     max_steps: u32,
@@ -214,6 +221,7 @@ fn main() -> ExitCode {
         Command::Ir(args) => run_ir(args, color),
         Command::Run(args) => run_run(args, color),
         Command::Test(args) => run_test(args, color),
+        Command::Tools(args) => run_tools(args, color),
         Command::Explain(args) => run_explain(args),
     };
 
@@ -512,6 +520,26 @@ fn run_run(args: &RunArgs, color: RenderColor) -> Result<u8> {
             events: args.events,
             yes: args.yes,
             max_steps: args.max_steps,
+            mcp: target.mcp(),
+            root: target.root.clone(),
+            no_tools: args.no_tools,
+        },
+    )
+}
+
+fn run_tools(args: &PathArgs, color: RenderColor) -> Result<u8> {
+    let target = resolve_target(args.path.as_deref())?;
+    let compilation = compile(&target)?;
+    report(&compilation, color);
+    if compilation.has_errors() {
+        return Ok(EXIT_DIAGNOSTICS);
+    }
+
+    run::tools(
+        &compilation,
+        &ToolsConfig {
+            mcp: target.mcp(),
+            root: target.root.clone(),
         },
     )
 }

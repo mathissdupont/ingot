@@ -15,10 +15,11 @@ ingot build                       # -> target/ingot/ResearchAgent.ir.json
 ingot run --input topic=…         # execute it
 ```
 
-Status: **milestone M3**. The front end is complete — lexer, parser, type and
+Status: **milestone M4**. The front end is complete — lexer, parser, type and
 effect checker, lowering to Agent IR — and a reference interpreter executes that
 IR against a real model provider, re-enforcing every capability, budget and
-approval the artifact declares. Runs can be recorded to a cassette and replayed
+approval the artifact declares. Tools are served over MCP by whichever servers
+the operator configures. Runs can be recorded to a cassette and replayed
 offline, so agent tests work in CI with no API key. Additional runtime backends,
 OCI packaging and the language server are planned; see [the roadmap](#roadmap).
 
@@ -122,7 +123,7 @@ agent ResearchAgent(topic: string) -> report<markdown> {
 }
 ```
 
-Three complete examples live in [`examples/`](examples/).
+Four complete examples live in [`examples/`](examples/).
 
 ## Install
 
@@ -153,6 +154,7 @@ export CARGO_TARGET_DIR=/c/build/ingot
 | `ingot ir [--agent]` | print the IR to stdout |
 | `ingot run [--input k=v]` | execute the agent |
 | `ingot test` | replay recorded cassettes |
+| `ingot tools` | show which MCP server provides each declared tool |
 | `ingot explain <CODE>` | explain a diagnostic in full |
 
 Exit codes: `0` success, `1` the program has blocking diagnostics, `2` the
@@ -185,6 +187,56 @@ A cassette stores the inputs alongside the exchanges, so it is self-contained,
 and replay verifies a digest of each request — an edited prompt fails loudly
 instead of quietly reusing a stale answer.
 
+A cassette records model exchanges and nothing else, so `ingot test` hosts no
+tools: a tool-using agent fails there rather than passing by luck. To get
+determinism on the model side *and* real tools, replay a cassette from
+`ingot run`, which does host them.
+
+### Tools
+
+An `.ing` file declares what a tool is — its parameter types, its result type,
+and the effects calling it has. Where that tool comes from is not part of the
+program; it is configuration, so the same artifact runs in more than one place:
+
+```toml
+# ingot.toml
+[[mcp.server]]
+name = "workspace"
+command = "ingot-mcp-fs"
+args = ["--root", "workspace", "--allow-write"]
+
+# Only needed when the artifact and the server use different names.
+[mcp.server.tools]
+"repo.read_file" = "fs.read_file"
+```
+
+```bash
+ingot tools           # what each server publishes, and what routes where
+ingot run --input …   # servers start, the agent calls them, they stop
+```
+
+Tools are served over [MCP](https://modelcontextprotocol.io) by a child process
+on stdio. Three independent gates stand between an agent and a file: the
+compiler refuses an artifact whose policy does not grant the effect, the runtime
+re-checks that policy before every call, and the server enforces whatever bound
+it was started with — so an agent whose policy says `filesystem_read allow ["."]`
+still cannot read `../secret.txt`.
+
+A tool server starts with a **minimal environment**. Nothing you exported
+reaches it unless `pass-env` names it, and `pass-env` takes names, never values:
+a manifest is committed, and a secret in a committed file is a published secret.
+
+[`ingot-mcp-fs`](crates/ingot-mcp/) is a small sandboxed filesystem server that
+ships with the repository, so a fresh checkout can run a tool-using agent
+without installing anything else:
+
+```bash
+cargo install --path crates/ingot-mcp
+ingot tools examples/repo-digest
+```
+
+Details: [MCP binding 0.1](specs/tools/mcp-v0.1.md).
+
 ## How it fits together
 
 ```
@@ -208,6 +260,9 @@ instead of quietly reusing a stale answer.
      │                │
      ▼                ▼
   execution      portability report            planned: M5
+     │
+     ▼
+  MCP servers (stdio)                          ingot-mcp
 ```
 
 | Crate | Responsibility |
@@ -222,6 +277,7 @@ instead of quietly reusing a stale answer.
 | `ingot-ir` | the Agent IR model and its canonical encoding |
 | `ingot-compiler` | the driver and lowering |
 | `ingot-runtime` | the reference interpreter, providers and cassettes |
+| `ingot-mcp` | the MCP tool host, and the `ingot-mcp-fs` reference server |
 | `ingot-cli` | the `ingot` binary |
 
 ## Specifications
@@ -229,6 +285,7 @@ instead of quietly reusing a stale answer.
 * [Language 0.1](specs/language/v0.1.md) — syntax and static semantics
 * [Agent IR 0.1](specs/ir/v0.1.md) — the backend contract
 * [Runtime 0.1](specs/runtime/v0.1.md) — what executing an artifact means
+* [MCP binding 0.1](specs/tools/mcp-v0.1.md) — how a declared tool is served
 * [`agent-ir.schema.json`](specs/ir/agent-ir.schema.json) — machine-readable schema
 * [Architecture](docs/architecture/overview.md) — how the phases fit together
 * [Decision records](docs/adr/) — why the load-bearing choices were made
@@ -241,7 +298,7 @@ instead of quietly reusing a stale answer.
 | M1 | grammar, parser, diagnostics, formatter | done |
 | M2 | types, effects, policy, budgets, Agent IR | done |
 | M3 | reference interpreter, `ingot run`, end-to-end execution | done |
-| M4 | cassette record and replay, `ingot test` | done |
+| M4 | cassette record and replay, `ingot test`, MCP tool host | done |
 | M5 | a second backend and the portability report | next |
 | M6 | OCI artifact, lockfile, reproducible digest | planned |
 | M7 | language server and editor support | planned |
@@ -252,11 +309,18 @@ cassettes needed the interpreter to be worth recording. M5 is where the central
 claim is actually proven — the same source, two independent runtimes, with every
 unsupported feature named in a report rather than discovered in production.
 
-Two things are deliberately missing from the runtime today, and both fail loudly
-rather than silently: **tool calls** have no host until MCP lands (an agent that
-grants a tool stops with a message saying so), and `parallel` **executes
-sequentially** — valid because the compiler guarantees map iterations cannot
-observe each other, but not yet fast.
+Three things are deliberately missing from the runtime today, and all of them
+fail loudly rather than silently:
+
+* **Remote MCP servers.** Only a local subprocess, because reaching a server
+  over a network is itself a `network` effect and the language cannot yet say
+  which endpoints an agent may reach. Reasoning in
+  [ADR-0005](docs/adr/0005-mcp-over-stdio-only.md).
+* **Tool results in cassettes.** A cassette records model exchanges only, so
+  `ingot test` hosts no tools and a tool-using agent fails there.
+* **Concurrency.** `parallel` executes sequentially — valid, because the
+  compiler guarantees map iterations cannot observe each other, but not yet
+  fast.
 
 ## Contributing
 

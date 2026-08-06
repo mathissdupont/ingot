@@ -20,6 +20,7 @@ anthropic = ["ingot-runtime/anthropic"]
 [dependencies]
 ingot-compiler.workspace = true
 ingot-runtime.workspace = true
+ingot-mcp.workspace = true
 ingot-ir.workspace = true
 ingot-diagnostics.workspace = true
 ingot-lexer.workspace = true
@@ -32,3 +33,6 @@ toml = { workspace = true }
 [dev-dependencies]
 ingot-ir.workspace = true
 serde_json = { workspace = true }
+# `ingot run` is tested against the reference MCP server, so the tests need the
+# binary built alongside the one under test.
+ingot-mcp.workspace = true

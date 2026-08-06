@@ -1,0 +1,26 @@
+[package]
+name = "ingot-mcp"
+description = "Model Context Protocol tool host for Ingot: serves an agent's declared tools from MCP servers over stdio."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+[dependencies]
+ingot-runtime.workspace = true
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+# Only to show, in a doc example, the TOML an operator actually writes.
+toml = { workspace = true }
+
+# A sandboxed reference server, so that a fresh checkout has something to point
+# `[[mcp.server]]` at without installing anything else. It is also what the
+# integration tests spawn, which keeps the tested path the shipped path.
+[[bin]]
+name = "ingot-mcp-fs"
+path = "src/bin/fs_server.rs"

@@ -90,6 +90,16 @@ pub fn type_schema(
         return Ok(json!({ "type": "array", "items": type_schema(element, types)? }));
     }
 
+    // Content types a model cannot produce, wherever they appear — including as
+    // a field of a record it is being asked for.
+    if matches!(ty, "bytes" | "file") {
+        return Err(UnsupportedResponseType {
+            ty: ty.to_string(),
+            reason: "a model cannot produce binary content directly; \
+                     use a tool that writes the file and return its handle",
+        });
+    }
+
     let scalar = match ty {
         "string" | "text" | "markdown" => Some(json!({ "type": "string" })),
         "int" => Some(json!({ "type": "integer" })),
@@ -127,6 +137,14 @@ pub fn type_schema(
     }))
 }
 
+/// The runtime representation of a `file`: a handle, never the content.
+///
+/// A tool that produces a file returns where it put it, so that a later tool can
+/// pick it up without the bytes travelling through the agent — or through a
+/// cassette. `path` is required; a producer may add anything else it finds
+/// useful, such as a media type or a size.
+pub const FILE_HANDLE_FIELD: &str = "path";
+
 /// Check a value against an Ingot type. Returns the first mismatch found.
 ///
 /// Deliberately shallow-but-strict rather than a general JSON Schema validator:
@@ -147,11 +165,18 @@ pub fn validate(
         return Ok(());
     }
 
+    if ty == "file" {
+        return validate_file(value);
+    }
+
     let ok = match ty {
         "string" | "text" | "markdown" => value.is_string(),
         "int" => value.is_i64() || value.is_u64(),
         "float" => value.is_number(),
         "bool" => value.is_boolean(),
+        // Binary content travels base64-encoded, because the IR, the event
+        // stream and cassettes are all JSON.
+        "bytes" => value.is_string(),
         "json" => true,
         _ => {
             let Some(record) = types.get(ty) else {
@@ -175,6 +200,23 @@ pub fn validate(
         Ok(())
     } else {
         Err(format!("expected `{ty}`, found {}", describe(value)))
+    }
+}
+
+fn validate_file(value: &Value) -> Result<(), String> {
+    let Some(object) = value.as_object() else {
+        return Err(format!(
+            "expected `file` (an object with a `{FILE_HANDLE_FIELD}`), found {}",
+            describe(value)
+        ));
+    };
+    match object.get(FILE_HANDLE_FIELD) {
+        Some(Value::String(_)) => Ok(()),
+        Some(other) => Err(format!(
+            "`file` has a `{FILE_HANDLE_FIELD}` that is {}, and it must be a string",
+            describe(other)
+        )),
+        None => Err(format!("`file` is missing field `{FILE_HANDLE_FIELD}`")),
     }
 }
 
@@ -292,5 +334,52 @@ mod tests {
         let types = record_types();
         let error = validate(&json!({"title": "t"}), "search_result", &types).unwrap_err();
         assert!(error.contains("missing field `score`"), "{error}");
+    }
+
+    #[test]
+    fn a_file_is_a_handle_with_a_path() {
+        let types = BTreeMap::new();
+        assert!(validate(&json!({"path": "out/report.md"}), "file", &types).is_ok());
+        // Extra fields are a producer's business, not a mismatch.
+        assert!(validate(&json!({"path": "a", "bytes": 12}), "file", &types).is_ok());
+    }
+
+    #[test]
+    fn a_file_without_a_path_is_reported_as_such() {
+        let types = BTreeMap::new();
+        let error = validate(&json!({"bytes": 12}), "file", &types).unwrap_err();
+        assert!(error.contains("missing field `path`"), "{error}");
+
+        // The old behaviour was "unknown type `file`", which sent the reader
+        // looking for a missing record declaration.
+        let error = validate(&json!("out/report.md"), "file", &types).unwrap_err();
+        assert!(error.contains("expected `file`"), "{error}");
+        assert!(!error.contains("unknown type"), "{error}");
+    }
+
+    #[test]
+    fn bytes_travel_as_a_base64_string() {
+        let types = BTreeMap::new();
+        assert!(validate(&json!("aGVsbG8="), "bytes", &types).is_ok());
+        assert!(validate(&json!([104, 105]), "bytes", &types).is_err());
+    }
+
+    #[test]
+    fn a_record_field_a_model_cannot_produce_says_why() {
+        let types: BTreeMap<String, RecordType> = [(
+            "attachment".to_string(),
+            RecordType {
+                fields: vec![FieldType {
+                    name: "body".into(),
+                    ty: "file".into(),
+                }],
+            },
+        )]
+        .into_iter()
+        .collect();
+
+        let error = response_shape("attachment", &types).unwrap_err();
+        assert_eq!(error.ty, "file");
+        assert!(error.reason.contains("tool"), "{}", error.reason);
     }
 }

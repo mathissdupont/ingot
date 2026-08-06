@@ -104,6 +104,22 @@ jobs:
               ./target/debug/ingot test --color never "$example"
             fi
           done
+      # `repo-digest` is the example whose tools are all served by the server
+      # this repository ships, so its wiring is checkable end to end here.
+      - name: Every declared tool of repo-digest resolves to a server
+        run: |
+          export PATH="$PWD/target/debug:$PATH"
+          ./target/debug/ingot tools --color never examples/repo-digest
+      # An agent that declares a tool with nothing to serve it must exit
+      # non-zero here, rather than looking fine until the first call fails at
+      # run time. `research-agent` needs a web search server, which this
+      # repository deliberately does not ship.
+      - name: An unserved tool is reported, not discovered at run time
+        run: |
+          if ./target/debug/ingot tools --color never examples/research-agent; then
+            echo "expected a non-zero exit for an unserved tool" >&2
+            exit 1
+          fi
 
   supply-chain:
     name: Advisories and licences

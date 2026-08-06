@@ -7,6 +7,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
+use ingot_mcp::McpConfig;
 use serde::{Deserialize, Serialize};
 
 pub const MANIFEST_NAME: &str = "ingot.toml";
@@ -16,6 +17,13 @@ pub struct Manifest {
     pub project: Project,
     #[serde(default)]
     pub build: Build,
+    /// Where the agent's tools come from on this machine.
+    ///
+    /// Deployment configuration rather than part of the program: the artifact
+    /// names the tools it needs, this says which servers provide them. An
+    /// untouched manifest has no `[mcp]` table at all.
+    #[serde(default, skip_serializing_if = "McpConfig::is_empty")]
+    pub mcp: McpConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -66,6 +74,7 @@ impl Manifest {
                 description: None,
             },
             build: Build::default(),
+            mcp: McpConfig::default(),
         }
     }
 
@@ -85,10 +94,25 @@ impl Manifest {
 pub struct Target {
     /// The source file to compile.
     pub entry: PathBuf,
+    /// The project directory. Relative paths in the manifest — a tool server's
+    /// working directory, for instance — resolve against this rather than
+    /// against wherever the operator happened to be standing.
+    pub root: PathBuf,
     /// Where build output belongs.
     pub out_dir: PathBuf,
     /// The project this came from, when a manifest was found.
     pub manifest: Option<Manifest>,
+}
+
+impl Target {
+    /// The tool servers configured for this project. Empty without a manifest:
+    /// compiling a loose `.ing` file has no project to read configuration from.
+    pub fn mcp(&self) -> McpConfig {
+        self.manifest
+            .as_ref()
+            .map(|manifest| manifest.mcp.clone())
+            .unwrap_or_default()
+    }
 }
 
 /// Work out what to compile from an optional path argument.
@@ -103,6 +127,7 @@ pub fn resolve_target(path: Option<&Path>) -> Result<Target> {
             Ok(Target {
                 entry: path.to_path_buf(),
                 out_dir: parent.join("target").join("ingot"),
+                root: parent,
                 manifest: None,
             })
         }
@@ -139,6 +164,7 @@ fn from_project_dir(dir: &Path) -> Result<Target> {
     let out_dir = dir.join(&manifest.build.out_dir);
     Ok(Target {
         entry,
+        root: dir.to_path_buf(),
         out_dir,
         manifest: Some(manifest),
     })
@@ -174,5 +200,74 @@ mod tests {
         let manifest: Manifest = toml::from_str("[project]\nname = \"x\"\n").expect("must parse");
         assert_eq!(manifest.build.entry, "main.ing");
         assert_eq!(manifest.project.version, "0.1.0");
+    }
+
+    #[test]
+    fn a_new_manifest_writes_no_empty_mcp_table() {
+        let toml = Manifest::new("brief").to_toml();
+        assert!(!toml.contains("mcp"), "{toml}");
+    }
+
+    #[test]
+    fn tool_servers_are_read_from_the_manifest() {
+        let manifest: Manifest = toml::from_str(
+            r#"
+            [project]
+            name = "review"
+
+            [mcp]
+            timeout-seconds = 5
+
+            [[mcp.server]]
+            name = "files"
+            command = "ingot-mcp-fs"
+            args = ["--root", ".", "--allow-write"]
+            pass-env = ["GITHUB_TOKEN"]
+
+            [mcp.server.tools]
+            "repo.read_file" = "fs.read_file"
+            "#,
+        )
+        .expect("must parse");
+
+        assert_eq!(manifest.mcp.timeout_seconds, 5);
+        let server = &manifest.mcp.servers[0];
+        assert_eq!(server.command, "ingot-mcp-fs");
+        assert_eq!(server.pass_env, vec!["GITHUB_TOKEN".to_string()]);
+        assert_eq!(
+            server.tools.get("repo.read_file").map(String::as_str),
+            Some("fs.read_file")
+        );
+    }
+
+    #[test]
+    fn a_literal_secret_in_a_server_entry_is_refused_rather_than_ignored() {
+        // `pass-env` names variables; there is no `env` key to write a value
+        // into. An unknown key must fail loudly, or someone will commit a
+        // credential and believe it took effect.
+        let error = toml::from_str::<Manifest>(
+            r#"
+            [project]
+            name = "review"
+
+            [[mcp.server]]
+            name = "files"
+            command = "server"
+            env = { BRAVE_API_KEY = "sk-live-secret" }
+            "#,
+        )
+        .expect_err("an unknown key must not be silently dropped");
+        assert!(error.to_string().contains("env"), "{error}");
+    }
+
+    #[test]
+    fn a_project_without_a_manifest_configures_no_tool_servers() {
+        let target = Target {
+            entry: PathBuf::from("main.ing"),
+            root: PathBuf::from("."),
+            out_dir: PathBuf::from("target/ingot"),
+            manifest: None,
+        };
+        assert!(target.mcp().is_empty());
     }
 }

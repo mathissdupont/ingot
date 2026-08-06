@@ -4,18 +4,23 @@
 //! interpreter. `run` executes against a provider the operator chose; `test`
 //! replays recorded cassettes so the suite works with no API key and no network.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use ingot_compiler::Compilation;
+use ingot_mcp::{McpConfig, McpToolHost};
 use ingot_runtime::{
     run as run_agent, AgentRegistry, ApprovalHandler, ApprovalMode, ApprovalRequest, Artifact,
     Cassette, DenyAllTools, ModelProvider, RecordingProvider, ReplayProvider, RunError, RunEvent,
     RunOptions, RunReport, TeeSink, ToolHost,
 };
 use serde_json::Value;
+
+/// The transport an artifact declares for an MCP tool. The only one in
+/// language 0.1, and the only one `ingot-mcp` serves.
+const MCP_TRANSPORT: &str = "mcp";
 
 /// Which model provider to run against.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, clap::ValueEnum)]
@@ -49,6 +54,13 @@ pub struct RunConfig {
     pub events: EventFormat,
     pub yes: bool,
     pub max_steps: u32,
+    /// The project directory; tool servers start here.
+    pub root: PathBuf,
+    /// Tool servers declared in the manifest.
+    pub mcp: McpConfig,
+    /// Start no tool server, whatever the manifest says. For checking that an
+    /// agent fails the way it is supposed to when a tool is missing.
+    pub no_tools: bool,
 }
 
 /// Compile, execute, and write the artifacts.
@@ -57,7 +69,7 @@ pub fn execute(compilation: &Compilation, config: &RunConfig) -> Result<u8> {
 
     let inputs = parse_inputs(&config.inputs)?;
     let approval = approval_mode(config);
-    let mut tools = tool_host();
+    let mut tools = tool_host(compilation, config)?;
 
     let mut provider = build_provider(config, &ir.agent, &inputs)?;
     let format = config.events;
@@ -71,7 +83,7 @@ pub fn execute(compilation: &Compilation, config: &RunConfig) -> Result<u8> {
         &ir,
         &registry,
         provider.as_mut(),
-        &mut tools,
+        tools.as_mut(),
         &mut sink,
         RunOptions {
             inputs,
@@ -229,13 +241,57 @@ impl ApprovalHandler for TerminalApprovals {
     }
 }
 
-/// The tool host for this release.
+/// Every MCP tool the program declares, across all its agents.
 ///
-/// MCP is not implemented yet, so nothing is provided and any artifact that
-/// needs a tool stops with a clear message rather than a mystery. The type is
-/// deliberately the same one MCP will plug into.
-fn tool_host() -> impl ToolHost {
-    DenyAllTools
+/// A superset of what one run needs: which sub-agents a flow reaches is decided
+/// at run time, so narrowing this would mean starting a server halfway through
+/// a run. Starting one server too many is the cheaper mistake.
+fn required_tools(compilation: &Compilation) -> BTreeSet<String> {
+    compilation
+        .agents
+        .iter()
+        .flat_map(|agent| agent.tools.iter())
+        .filter(|tool| tool.transport == MCP_TRANSPORT)
+        .map(|tool| tool.name.clone())
+        .collect()
+}
+
+/// Connect to the tool servers this program needs.
+///
+/// The host is chosen here and nowhere else. When nothing is configured the
+/// answer is [`DenyAllTools`], so an artifact that needs a tool stops at the
+/// call with a message naming it — never by quietly skipping the step.
+fn tool_host(compilation: &Compilation, config: &RunConfig) -> Result<Box<dyn ToolHost>> {
+    let required = required_tools(compilation);
+    if config.no_tools || config.mcp.is_empty() {
+        if !required.is_empty() && !config.no_tools {
+            eprintln!(
+                "warning: this program declares {} tool(s) and the manifest configures no MCP \
+                 server, so any call will stop the run",
+                required.len()
+            );
+            eprintln!("hint: run `ingot tools` to see what is missing");
+        }
+        return Ok(Box::new(DenyAllTools));
+    }
+
+    let host = McpToolHost::connect(&config.mcp, &config.root, &required)
+        .map_err(|error| anyhow::anyhow!("{error}"))?;
+
+    for tool in host.resolved() {
+        eprintln!(
+            "tool {} <- {}:{}{}",
+            tool.tool,
+            tool.server,
+            tool.remote,
+            if tool.aliased { " (aliased)" } else { "" }
+        );
+    }
+    for missing in host.unresolved(&required) {
+        eprintln!("warning: no configured server provides `{missing}`");
+    }
+
+    Ok(Box::new(host))
 }
 
 /// A provider plus, optionally, the recorder wrapped around it.
@@ -335,6 +391,110 @@ fn artifact_path(dir: &Path, artifact: &Artifact) -> PathBuf {
     dir.join(format!("{}.{}", artifact.name, artifact.extension()))
 }
 
+// --- ingot tools ------------------------------------------------------------
+
+pub struct ToolsConfig {
+    pub root: PathBuf,
+    pub mcp: McpConfig,
+}
+
+/// Show what the configured servers publish and how it maps onto the program.
+///
+/// Exits non-zero when a declared tool has no server, so it can be a CI
+/// precondition: an agent that cannot reach its tools is not deployable, and
+/// finding that out at the first `call` is finding out too late.
+pub fn tools(compilation: &Compilation, config: &ToolsConfig) -> Result<u8> {
+    let required = required_tools(compilation);
+
+    if config.mcp.is_empty() {
+        println!("no MCP server is configured");
+        println!();
+        if required.is_empty() {
+            println!("this program declares no tools, so it needs none");
+            return Ok(super::EXIT_OK);
+        }
+        println!("this program declares:");
+        for tool in &required {
+            println!("  {tool}");
+        }
+        println!();
+        println!("add a server to {}:", super::MANIFEST_NAME);
+        println!();
+        println!("  [[mcp.server]]");
+        println!("  name = \"files\"");
+        println!("  command = \"ingot-mcp-fs\"");
+        println!("  args = [\"--root\", \".\"]");
+        return Ok(super::EXIT_DIAGNOSTICS);
+    }
+
+    let mut host = McpToolHost::connect_all(&config.mcp, &config.root)
+        .map_err(|error| anyhow::anyhow!("{error}"))?;
+
+    for (name, info, published) in host.inventory() {
+        match info {
+            Some(info) => println!(
+                "{name}  ({} {}, protocol {})",
+                info.name, info.version, info.protocol_version
+            ),
+            None => println!("{name}"),
+        }
+        if published.is_empty() {
+            println!("  (publishes nothing)");
+        }
+        for tool in published {
+            match tool.description {
+                Some(description) => println!("  {:<24}{}", tool.name, first_line(&description)),
+                None => println!("  {}", tool.name),
+            }
+        }
+        println!();
+    }
+
+    let resolved: Vec<_> = host
+        .resolved()
+        .into_iter()
+        .filter(|tool| required.contains(&tool.tool))
+        .collect();
+    let missing = host.unresolved(&required);
+    host.close();
+
+    if required.is_empty() {
+        println!("this program declares no tools");
+        return Ok(super::EXIT_OK);
+    }
+
+    println!("declared tools");
+    for tool in &resolved {
+        println!(
+            "  {:<24}-> {}:{}{}",
+            tool.tool,
+            tool.server,
+            tool.remote,
+            if tool.aliased { "  (aliased)" } else { "" }
+        );
+    }
+    for tool in &missing {
+        println!("  {tool:<24}-> nothing serves it");
+    }
+
+    if missing.is_empty() {
+        Ok(super::EXIT_OK)
+    } else {
+        eprintln!();
+        eprintln!(
+            "{} of {} declared tool(s) have no server",
+            missing.len(),
+            required.len()
+        );
+        eprintln!("hint: map a name explicitly under `[mcp.server.tools]` if the server calls it something else");
+        Ok(super::EXIT_DIAGNOSTICS)
+    }
+}
+
+fn first_line(text: &str) -> &str {
+    text.lines().next().unwrap_or_default()
+}
+
 // --- ingot test -----------------------------------------------------------
 
 pub struct TestConfig {
@@ -390,6 +550,12 @@ pub fn test(compilation: &Compilation, config: &TestConfig) -> Result<u8> {
 
         let inputs = cassette.inputs.clone();
         let mut provider = ReplayProvider::new(cassette);
+        // Replay hosts no tools, deliberately. A cassette records the model
+        // exchanges and nothing else, so a tool call during `ingot test` would
+        // have to reach a real server — and a test that touches the filesystem
+        // or the network is not the offline, repeatable thing `ingot test`
+        // promises. Recording tool results is the next piece of work; until it
+        // exists, a tools-using agent fails here rather than passing by luck.
         let mut tools = DenyAllTools;
         let mut sink = ingot_runtime::CollectingSink::default();
 

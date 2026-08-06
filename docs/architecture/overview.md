@@ -23,12 +23,25 @@ established.
      │  ingot-compiler      lowering
      ▼
   Agent IR                  ingot-ir         canonical JSON
+     │
+     │  ingot-runtime       the reference interpreter
+     ▼
+  Execution                 providers, cassettes, events
+     │
+     │  ingot-mcp           tool calls, over stdio
+     ▼
+  MCP servers               child processes the operator configured
 ```
 
 Each stage is a separate crate, and the dependency graph is acyclic in the
 direction shown. `ingot-parser` cannot see types; `ingot-semantic` cannot see
 targets; `ingot-ir` cannot see syntax. Those are compile-time facts, not
 conventions — see [ADR-0001](../adr/0001-rust-monorepo.md).
+
+The last two are the same discipline applied downwards. `ingot-runtime` knows
+about `ToolHost`, a three-method trait, and nothing about MCP; `ingot-mcp`
+depends on the runtime, never the reverse. A backend that hosts tools some other
+way replaces one crate — see [ADR-0005](../adr/0005-mcp-over-stdio-only.md).
 
 ## Where guarantees come from
 
@@ -159,7 +172,12 @@ catches mistakes.
 
 ## What is not built yet
 
-Backends, the portability report, OCI packaging, the lockfile, the mock model
-server and replay, and the language server. The [roadmap](../../README.md#roadmap)
-has the sequence; [ADR-0002](../adr/0002-compiler-not-runtime.md) explains why
-execution is delegated rather than implemented.
+A second backend and the portability report, OCI packaging, the lockfile, and
+the language server. The [roadmap](../../README.md#roadmap) has the sequence;
+[ADR-0002](../adr/0002-compiler-not-runtime.md) explains why execution is
+delegated rather than implemented, and why a reference interpreter exists
+anyway.
+
+Within what is built, three gaps are deliberate and all of them fail loudly:
+remote MCP transports ([ADR-0005](../adr/0005-mcp-over-stdio-only.md)), tool
+results in cassettes, and concurrent `parallel`.

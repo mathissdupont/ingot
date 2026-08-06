@@ -443,6 +443,7 @@ dependencies = [
  "ingot-diagnostics",
  "ingot-ir",
  "ingot-lexer",
+ "ingot-mcp",
  "ingot-runtime",
  "serde",
  "serde_json",
@@ -485,6 +486,16 @@ version = "0.2.0"
 dependencies = [
  "ingot-diagnostics",
  "ingot-source",
+]
+
+[[package]]
+name = "ingot-mcp"
+version = "0.2.0"
+dependencies = [
+ "ingot-runtime",
+ "serde",
+ "serde_json",
+ "toml",
 ]
 
 [[package]]

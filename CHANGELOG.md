@@ -8,7 +8,64 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
 
 ## [Unreleased]
 
-Nothing yet.
+Agents can act. Tools declared in an `.ing` file are served by MCP servers the
+operator configures, so the two examples that compiled but could not run now
+have a way to run.
+
+- Language version: **0.1** (unchanged)
+- Agent IR version: **0.1** (unchanged)
+- Runtime version: **0.1** (unchanged; §5.2, §6.1 and §10 clarified)
+
+### Added
+
+**MCP tool host** ([spec](specs/tools/mcp-v0.1.md), [RFC-0003](rfcs/0003-mcp-tool-host.md))
+
+- `ingot-mcp`: an MCP client and a `ToolHost` implementation. Separate from
+  `ingot-runtime` on purpose — a backend that hosts tools some other way
+  replaces one crate. See [ADR-0005](docs/adr/0005-mcp-over-stdio-only.md).
+- `[[mcp.server]]` in `ingot.toml`: where a tool comes from is deployment
+  configuration, not part of the artifact, so the same artifact runs against
+  different servers unrecompiled. `[mcp.server.tools]` maps an artifact's name
+  onto a server's when they differ.
+- `ingot tools`: what each configured server publishes and what routes where.
+  Exits non-zero when a declared tool has no server, so it works as a CI
+  precondition.
+- `ingot run --no-tools`: start nothing, for checking that an agent fails the
+  way it should when a tool is absent.
+- `ingot-mcp-fs`: a sandboxed filesystem MCP server, so a fresh checkout can run
+  a tool-using agent without installing anything else. `--root` is required and
+  writing needs `--allow-write`; paths that are absolute, contain `..`, or
+  resolve through a symlink outside the root are refused.
+- `examples/repo-digest`: the example that runs end to end with real tools.
+
+**Runtime**
+
+- `file` and `bytes` have defined runtime representations: a `file` is a handle
+  `{"path": "…"}`, and `bytes` is base64. Previously a tool returning either
+  failed with "unknown type", which was a defect rather than a design.
+
+### Security
+
+- A tool server starts with a **minimal environment**: `env_clear()`, a fixed
+  set of platform-essential variables, then whatever `pass-env` names. Nothing
+  the operator exported reaches a tool server by accident.
+- `pass-env` takes **names, never values**, and unknown manifest keys are
+  rejected. A manifest is committed; a secret written into one is a published
+  secret.
+- Three independent gates stand between an agent and a file — the compiler's
+  effect check, the runtime's re-check against the artifact's own policy, and
+  the server's own bound. An agent whose policy allows `filesystem_read` still
+  cannot read outside the server's root, and there is a test that asserts it.
+
+### Known gaps
+
+- Only the stdio transport. Reaching a remote server is a `network` effect the
+  language cannot yet scope to an endpoint, and shipping it without that would
+  put a hole in the effect system.
+- Cassettes record model exchanges only, so `ingot test` hosts no tools and a
+  tool-using agent fails there rather than passing by luck. `ingot run
+  --provider replay` does host them, which is how the end-to-end tests get a
+  deterministic model and real tools at the same time.
 
 ## [0.2.0] — 2026-08-06
 

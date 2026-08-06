@@ -26,6 +26,11 @@ artifact is allowed to reach**. Treat the following as security issues:
   through `..` or a symlink.
 * **Lowering divergence** — the IR grants more than the source states, or a
   backend can silently ignore a restriction.
+* **Tool host leakage** — a tool server started by Ingot receiving an
+  environment variable that its `pass-env` does not name, or a way to write a
+  literal credential into a manifest.
+* **Tool routing confusion** — a call reaching a server the operator did not map
+  it to, or an ambiguous route resolved silently instead of refused.
 * **Compiler denial of service** — input that makes the compiler hang, exhaust
   memory, or crash. The parser is designed never to loop; a counterexample is a
   bug.
@@ -37,6 +42,11 @@ artifact is allowed to reach**. Treat the following as security issues:
   concern, not a compiler one.
 * A tool doing something harmful when it was explicitly granted the capability.
   Ingot's job is to make the grant visible and required, not to second-guess it.
+* An MCP server exceeding what Ingot asked it to do. A server is a program the
+  operator chose to run, with the arguments and environment the operator gave
+  it; Ingot cannot sandbox an arbitrary process and does not claim to. Reports
+  about `ingot-mcp-fs` specifically — the server this repository ships — *do*
+  count, including any way past its `--root`.
 * Warnings that do not fail the build, when documented as warnings.
 
 ## Design commitments
@@ -60,8 +70,15 @@ that cannot fit its step budget is rejected. Unbounded cost is a safety problem,
 not just an economic one.
 
 **Backends reject rather than skip.** An unknown node kind, an unsupported
-policy decision or an unimplemented IR major version must stop a backend.
-Skipping a node is how a restriction gets lost.
+policy decision or an unimplemented IR major version must stop a backend. A tool
+no host serves must stop the run rather than being skipped. Skipping a node is
+how a restriction gets lost.
+
+**A tool server is told, never asked.** A server starts with a cleared
+environment plus the platform essentials and whatever `pass-env` names. There is
+no configuration key that takes a literal environment value, because a manifest
+is committed. Where a tool comes from is the operator's decision and is recorded
+outside the artifact.
 
 ## Supported versions
 

@@ -115,8 +115,14 @@ touching effects, policy or the artifact format also needs the security owner.
 
 Crate boundaries are deliberate. `ingot-parser` knows nothing about targets;
 `ingot-semantic` knows nothing about any particular runtime; `ingot-ir` knows
-nothing about providers. A pull request that blurs one of those lines will be
-asked to move code instead.
+nothing about providers; `ingot-runtime` knows about a `ToolHost` trait and
+nothing about MCP. A pull request that blurs one of those lines will be asked to
+move code instead.
+
+Two crates ship binaries: `ingot-cli` produces `ingot`, and `ingot-mcp` produces
+`ingot-mcp-fs`. `cargo test -p ingot-cli` does not build the latter, so the
+tests that need it build it themselves; `cargo test --workspace` builds
+everything and is the normal thing to run.
 
 ## Reporting security issues
 

@@ -1,0 +1,26 @@
+[project]
+name = "repo-digest"
+version = "0.1.0"
+language = "0.1"
+description = "Summarises a directory into a markdown digest, using real MCP tools."
+
+[build]
+entry = "main.ing"
+out-dir = "target/ingot"
+
+[mcp]
+timeout-seconds = 30
+
+# The sandboxed server this repository ships. `--root workspace` is the whole
+# of what the server can reach; the agent's own `policy` block narrows it
+# further, and the runtime enforces that separately.
+#
+# `ingot-mcp-fs` must be on PATH:
+#
+#     cargo install --path crates/ingot-mcp
+#
+# or point `command` at the built binary directly.
+[[mcp.server]]
+name = "workspace"
+command = "ingot-mcp-fs"
+args = ["--root", "workspace", "--allow-write"]

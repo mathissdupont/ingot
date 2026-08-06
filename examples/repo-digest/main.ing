@@ -1,0 +1,62 @@
+language 0.1
+package heptapus.examples.digest
+
+/// Lists the entries of a directory in the workspace.
+tool fs.list_dir(path: string) -> string[] !filesystem_read
+
+/// Reads a UTF-8 text file from the workspace.
+tool fs.read_file(path: string) -> text !filesystem_read
+
+/// Writes a UTF-8 text file into the workspace. Returns a handle, not content.
+tool fs.write_file(path: string, content: text) -> file !filesystem_write
+
+/// Summarises a directory into one markdown digest and files it.
+///
+/// The example that runs end to end with real tools: every tool here is served
+/// by `ingot-mcp-fs`, the sandboxed MCP server this repository ships, so no
+/// third-party server and no credential are involved.
+///
+/// Exercises: MCP tools over stdio, a `file` result, working memory, and a
+/// filesystem policy the runtime re-checks against the artifact.
+agent RepoDigest(directory: string, out: string) -> digest<markdown> {
+  model requires {
+    structured_output
+  }
+
+  tools {
+    mcp fs.list_dir
+    mcp fs.read_file
+    mcp fs.write_file
+  }
+
+  memory {
+    working ephemeral {
+      entries: string[]
+    }
+  }
+
+  budget {
+    steps <= 12
+    tokens <= 60000
+  }
+
+  policy {
+    filesystem_read allow ["."]
+    filesystem_write allow ["out"]
+    network deny
+    external_write deny
+    secrets deny export
+  }
+
+  flow {
+    entries = call fs.list_dir(directory)
+    state.entries = entries
+    overview = call fs.read_file("README.md")
+    summary = ask<markdown>(
+      "Write a digest of this directory for someone seeing it for the first time. Say what each entry appears to be, and name anything a newcomer would expect and not find.\n\nIts README says:\n\n${overview}",
+      context: entries
+    )
+    _filed = call fs.write_file(out, summary)
+    emit digest = summary
+  }
+}

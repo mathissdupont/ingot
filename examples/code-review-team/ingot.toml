@@ -7,3 +7,28 @@ description = "Sub-agents, filesystem capabilities, branching and an approval-ga
 [build]
 entry = "main.ing"
 out-dir = "target/ingot"
+
+[mcp]
+
+# The filesystem half of this agent's tools, served by the sandboxed server this
+# repository ships.
+#
+# `--root ../..` is the repository, because that is what a code review reads and
+# where its report goes. Be clear about what that grants: the *server* can touch
+# anything in the repository. What stops the agent doing so is its own policy —
+# `filesystem_read allow ["src", "crates"]`, `filesystem_write allow
+# ["target/review"]` — which the runtime re-checks before every call. In a real
+# deployment, narrow the server too: the two limits are independent, and relying
+# on only one of them is the mistake this example is written to make visible.
+#
+# `forge.comment` is deliberately unconfigured: posting to a hosting provider is
+# an `external_write`, and this repository ships no server that can do it. Run
+# `ingot tools` and it will tell you exactly that.
+[[mcp.server]]
+name = "repo"
+command = "ingot-mcp-fs"
+args = ["--root", "../..", "--allow-write"]
+
+[mcp.server.tools]
+"repo.read_file" = "fs.read_file"
+"repo.write_file" = "fs.write_file"
