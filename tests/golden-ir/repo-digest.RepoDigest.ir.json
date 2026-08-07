@@ -1,0 +1,259 @@
+{
+  "irVersion": "0.1",
+  "language": "0.1",
+  "agent": "heptapus.examples.digest.RepoDigest",
+  "doc": "Summarises a directory into one markdown digest and files it.\n\nThe example that runs end to end with real tools: every tool here is served\nby `ingot-mcp-fs`, the sandboxed MCP server this repository ships, so no\nthird-party server and no credential are involved.\n\nExercises: MCP tools over stdio, a `file` result, working memory, and a\nfilesystem policy the runtime re-checks against the artifact.",
+  "inputs": {
+    "directory": "string",
+    "out": "string"
+  },
+  "outputs": {
+    "digest": "artifact<markdown>"
+  },
+  "requirements": {
+    "model": {
+      "mode": "capabilities",
+      "capabilities": [
+        "structured_output"
+      ]
+    }
+  },
+  "tools": [
+    {
+      "ref": "mcp:fs.list_dir",
+      "name": "fs.list_dir",
+      "transport": "mcp",
+      "effects": [
+        "filesystem_read"
+      ],
+      "signature": {
+        "params": [
+          {
+            "name": "path",
+            "type": "string"
+          }
+        ],
+        "result": "string[]"
+      }
+    },
+    {
+      "ref": "mcp:fs.read_file",
+      "name": "fs.read_file",
+      "transport": "mcp",
+      "effects": [
+        "filesystem_read"
+      ],
+      "signature": {
+        "params": [
+          {
+            "name": "path",
+            "type": "string"
+          }
+        ],
+        "result": "text"
+      }
+    },
+    {
+      "ref": "mcp:fs.write_file",
+      "name": "fs.write_file",
+      "transport": "mcp",
+      "effects": [
+        "filesystem_write"
+      ],
+      "signature": {
+        "params": [
+          {
+            "name": "path",
+            "type": "string"
+          },
+          {
+            "name": "content",
+            "type": "text"
+          }
+        ],
+        "result": "file"
+      }
+    }
+  ],
+  "state": {
+    "entries": "string[]"
+  },
+  "budget": {
+    "steps": 12,
+    "tokens": 60000
+  },
+  "policy": {
+    "external_write": {
+      "decision": "deny"
+    },
+    "filesystem_read": {
+      "decision": "allow",
+      "values": [
+        "data"
+      ]
+    },
+    "filesystem_write": {
+      "decision": "allow",
+      "values": [
+        "data/out"
+      ]
+    },
+    "network": {
+      "decision": "deny"
+    },
+    "secrets": {
+      "decision": "deny",
+      "qualifier": "export"
+    }
+  },
+  "effects": [
+    "filesystem_read",
+    "filesystem_write",
+    "model_access"
+  ],
+  "entry": "n0",
+  "nodes": [
+    {
+      "id": "n0",
+      "kind": "tool.call",
+      "binding": "entries",
+      "tool": "mcp:fs.list_dir",
+      "args": [
+        {
+          "name": "path",
+          "value": {
+            "kind": "ref",
+            "scope": "input",
+            "path": [
+              "directory"
+            ]
+          }
+        }
+      ],
+      "effects": [
+        "filesystem_read"
+      ],
+      "next": "n1"
+    },
+    {
+      "id": "n1",
+      "kind": "state.write",
+      "field": "entries",
+      "value": {
+        "kind": "ref",
+        "scope": "binding",
+        "path": [
+          "entries"
+        ]
+      },
+      "next": "n2"
+    },
+    {
+      "id": "n2",
+      "kind": "tool.call",
+      "binding": "overview",
+      "tool": "mcp:fs.read_file",
+      "args": [
+        {
+          "name": "path",
+          "value": {
+            "kind": "literal",
+            "type": "string",
+            "value": "README.md"
+          }
+        }
+      ],
+      "effects": [
+        "filesystem_read"
+      ],
+      "next": "n3"
+    },
+    {
+      "id": "n3",
+      "kind": "llm.call",
+      "binding": "summary",
+      "prompt": {
+        "kind": "template",
+        "parts": [
+          {
+            "kind": "text",
+            "value": "Write a digest of this directory for someone seeing it for the first time. Say what each entry appears to be, and name anything a newcomer would expect and not find.\n\nIts README says:\n\n"
+          },
+          {
+            "kind": "value",
+            "value": {
+              "kind": "ref",
+              "scope": "binding",
+              "path": [
+                "overview"
+              ]
+            },
+            "type": "text"
+          }
+        ]
+      },
+      "responseType": "markdown",
+      "args": [
+        {
+          "name": "context",
+          "value": {
+            "kind": "ref",
+            "scope": "binding",
+            "path": [
+              "entries"
+            ]
+          }
+        }
+      ],
+      "effects": [
+        "model_access"
+      ],
+      "next": "n4"
+    },
+    {
+      "id": "n4",
+      "kind": "tool.call",
+      "binding": "_filed",
+      "tool": "mcp:fs.write_file",
+      "args": [
+        {
+          "name": "path",
+          "value": {
+            "kind": "ref",
+            "scope": "input",
+            "path": [
+              "out"
+            ]
+          }
+        },
+        {
+          "name": "content",
+          "value": {
+            "kind": "ref",
+            "scope": "binding",
+            "path": [
+              "summary"
+            ]
+          }
+        }
+      ],
+      "effects": [
+        "filesystem_write"
+      ],
+      "next": "n5"
+    },
+    {
+      "id": "n5",
+      "kind": "artifact.emit",
+      "value": {
+        "kind": "ref",
+        "scope": "binding",
+        "path": [
+          "summary"
+        ]
+      },
+      "output": "digest",
+      "next": null
+    }
+  ]
+}

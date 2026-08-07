@@ -11,9 +11,9 @@ out-dir = "target/ingot"
 [mcp]
 timeout-seconds = 30
 
-# The sandboxed server this repository ships. `--root workspace` is the whole
-# of what the server can reach; the agent's own `policy` block narrows it
-# further, and the runtime enforces that separately.
+# The sandboxed server this repository ships. `--root data` is the whole of what
+# the server can reach; the agent's own `policy` block narrows it further, and
+# the runtime enforces that separately. `ingot sandbox` shows both.
 #
 # `ingot-mcp-fs` must be on PATH:
 #
@@ -23,4 +23,4 @@ timeout-seconds = 30
 [[mcp.server]]
 name = "workspace"
 command = "ingot-mcp-fs"
-args = ["--root", "workspace", "--allow-write"]
+args = ["--root", "data", "--allow-write"]

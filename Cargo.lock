@@ -445,6 +445,7 @@ dependencies = [
  "ingot-lexer",
  "ingot-mcp",
  "ingot-runtime",
+ "ingot-sandbox",
  "serde",
  "serde_json",
  "toml",
@@ -518,6 +519,15 @@ dependencies = [
  "serde_json",
  "sha2",
  "ureq",
+]
+
+[[package]]
+name = "ingot-sandbox"
+version = "0.2.0"
+dependencies = [
+ "ingot-ir",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

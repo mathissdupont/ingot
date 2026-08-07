@@ -69,14 +69,10 @@ impl Project {
     fn new(tag: &str, source: &str, configure_tools: bool) -> Project {
         let dir = TempDir::new(tag);
         let root = dir.path();
-        let workspace = root.join("workspace");
-        std::fs::create_dir_all(&workspace).expect("creating the workspace");
-        std::fs::write(
-            workspace.join("README.md"),
-            "# Sample\n\nA sample workspace.\n",
-        )
-        .unwrap();
-        std::fs::write(workspace.join("notes.md"), "notes\n").unwrap();
+        let data = root.join("data");
+        std::fs::create_dir_all(&data).expect("creating the sample data");
+        std::fs::write(data.join("README.md"), "# Sample\n\nA sample workspace.\n").unwrap();
+        std::fs::write(data.join("notes.md"), "notes\n").unwrap();
         // Something outside the sandbox to try, and fail, to reach.
         std::fs::write(root.join("secret.txt"), "do not read me\n").unwrap();
 
@@ -87,7 +83,7 @@ impl Project {
         );
         if configure_tools {
             manifest.push_str(&format!(
-                "\n[mcp]\ntimeout-seconds = 10\n\n[[mcp.server]]\nname = \"workspace\"\ncommand = {}\nargs = [\"--root\", \"workspace\", \"--allow-write\"]\n",
+                "\n[mcp]\ntimeout-seconds = 10\n\n[[mcp.server]]\nname = \"workspace\"\ncommand = {}\nargs = [\"--root\", \"data\", \"--allow-write\"]\n",
                 toml_string(&fs_server().display().to_string())
             ));
         }
@@ -137,7 +133,7 @@ fn a_run_reaches_real_tools_over_stdio_and_the_bytes_land_on_disk() {
     assert_eq!(code(&output), EXIT_OK, "{}", stderr(&output));
     assert!(stdout(&output).contains("# Digest"), "{}", stdout(&output));
 
-    let written = project.workspace().join("workspace/out/digest.md");
+    let written = project.workspace().join("data/out/digest.md");
     assert!(written.is_file(), "expected {}", written.display());
     assert_eq!(
         std::fs::read_to_string(&written).unwrap(),
@@ -182,9 +178,9 @@ fn a_recorded_run_replays_with_the_tools_still_live() {
     // workspace and puts the listing in the prompt, so leaving an empty `out/`
     // behind would change the prompt and the cassette would — correctly —
     // refuse to replay it.
-    let written = project.workspace().join("workspace/out/digest.md");
+    let written = project.workspace().join("data/out/digest.md");
     assert!(written.is_file(), "the first run must have written it");
-    std::fs::remove_dir_all(project.workspace().join("workspace/out")).unwrap();
+    std::fs::remove_dir_all(project.workspace().join("data/out")).unwrap();
 
     let mut replay = digest_args(&project);
     replay.push("--provider".to_string());
@@ -304,6 +300,96 @@ fn ingot_tools_exits_non_zero_when_a_declared_tool_has_no_server() {
     assert!(listing.contains("no MCP server is configured"), "{listing}");
     assert!(listing.contains("fs.read_file"), "{listing}");
     assert!(listing.contains("[[mcp.server]]"), "{listing}");
+}
+
+// --- ingot sandbox ----------------------------------------------------------
+
+#[test]
+fn sandbox_derives_the_boundary_from_the_policy_and_names_its_source() {
+    let project = Project::new("sandbox", DIGEST_SOURCE, true);
+    let output = run(&["sandbox", &project.path()], None);
+
+    assert_eq!(code(&output), EXIT_OK, "{}", stderr(&output));
+    let plan = stdout(&output);
+    assert!(plan.contains("/workspace/data      ro"), "{plan}");
+    assert!(plan.contains("/workspace/data/out  rw"), "{plan}");
+    assert!(plan.contains("filesystem_read allow [\"data\"]"), "{plan}");
+    assert!(plan.contains("network  none"), "{plan}");
+    assert!(
+        plan.contains("every policy rule above is enforced"),
+        "{plan}"
+    );
+}
+
+#[test]
+fn sandbox_refuses_a_policy_path_that_is_not_there() {
+    // Mounting an empty directory would make a missing checkout look like an
+    // empty one, so the plan fails rather than producing a plausible box.
+    let source = DIGEST_SOURCE.replace(
+        "filesystem_read allow [\"data\"]",
+        "filesystem_read allow [\"absent\"]",
+    );
+    let project = Project::new("sandbox-missing", &source, true);
+    let output = run(&["sandbox", &project.path()], None);
+
+    assert_eq!(code(&output), EXIT_DIAGNOSTICS);
+    let message = stderr(&output);
+    assert!(message.contains("absent"), "{message}");
+    assert!(message.contains("does not exist"), "{message}");
+    assert!(message.contains("--workspace"), "{message}");
+}
+
+#[test]
+fn the_workspace_can_be_moved_from_the_command_line() {
+    // The artifact says `data`; the operator says where `data` lives. Pointed
+    // at a directory that has no `data`, the same artifact cannot be contained.
+    let project = Project::new("sandbox-workspace", DIGEST_SOURCE, true);
+    let elsewhere = TempDir::new("sandbox-elsewhere");
+
+    let output = run(
+        &[
+            "sandbox",
+            &project.path(),
+            "--workspace",
+            &elsewhere.path().display().to_string(),
+        ],
+        None,
+    );
+    assert_eq!(code(&output), EXIT_DIAGNOSTICS, "{}", stdout(&output));
+    assert!(
+        stderr(&output).contains("does not exist"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn sandbox_plans_are_machine_readable() {
+    let project = Project::new("sandbox-json", DIGEST_SOURCE, true);
+    let output = run(&["sandbox", &project.path(), "--json"], None);
+
+    assert_eq!(code(&output), EXIT_OK, "{}", stderr(&output));
+    let plans: serde_json::Value =
+        serde_json::from_str(&stdout(&output)).expect("--json must emit JSON on stdout");
+    let plan = &plans[0];
+    assert_eq!(plan["network"]["mode"], "none");
+    assert_eq!(plan["workdir"], "/workspace");
+    assert_eq!(plan["mounts"][0]["guest"], "/workspace/data");
+    assert_eq!(plan["mounts"][0]["writable"], false);
+    assert_eq!(plan["unenforceable"].as_array().unwrap().len(), 0);
+}
+
+#[test]
+fn sandbox_says_so_when_nothing_would_be_contained() {
+    let project = Project::new("sandbox-untooled", DIGEST_SOURCE, false);
+    let output = run(&["sandbox", &project.path()], None);
+
+    assert_eq!(code(&output), EXIT_OK);
+    assert!(
+        stderr(&output).contains("nothing would be contained"),
+        "{}",
+        stderr(&output)
+    );
 }
 
 #[test]

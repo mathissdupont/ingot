@@ -8,6 +8,12 @@ description = "Sub-agents, filesystem capabilities, branching and an approval-ga
 entry = "main.ing"
 out-dir = "target/ingot"
 
+# An agent's policy paths are relative to the workspace. This one reviews the
+# repository it sits inside, so its workspace is the repository — which is what
+# `filesystem_read allow ["crates"]` in main.ing is talking about.
+[run]
+workspace = "../.."
+
 [mcp]
 
 # The filesystem half of this agent's tools, served by the sandboxed server this

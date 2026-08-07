@@ -25,6 +25,7 @@ const EXAMPLES: &[(&str, &[&str])] = &[
     ("document-summarizer", &["DocumentSummarizer"]),
     ("research-agent", &["ResearchAgent"]),
     ("code-review-team", &["SecurityReviewer", "CodeReviewTeam"]),
+    ("repo-digest", &["RepoDigest"]),
 ];
 
 fn repo_root() -> PathBuf {

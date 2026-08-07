@@ -17,6 +17,9 @@ pub struct Manifest {
     pub project: Project,
     #[serde(default)]
     pub build: Build,
+    /// Settings that apply when an agent runs rather than when it compiles.
+    #[serde(default, skip_serializing_if = "Run::is_default")]
+    pub run: Run,
     /// Where the agent's tools come from on this machine.
     ///
     /// Deployment configuration rather than part of the program: the artifact
@@ -56,6 +59,27 @@ impl Default for Build {
     }
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Run {
+    /// The root an agent's policy paths are relative to, relative to the
+    /// manifest. Defaults to the project directory.
+    ///
+    /// An artifact says `src`; this says where `src` lives. An agent that
+    /// reviews the repository it sits inside sets `workspace = "../.."`; one
+    /// whose files sit beside it needs nothing here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
+}
+
+impl Run {
+    /// Whether the section carries anything, so an untouched manifest has no
+    /// empty `[run]` table.
+    pub fn is_default(&self) -> bool {
+        self.workspace.is_none()
+    }
+}
+
 fn default_version() -> String {
     "0.1.0".to_string()
 }
@@ -74,6 +98,7 @@ impl Manifest {
                 description: None,
             },
             build: Build::default(),
+            run: Run::default(),
             mcp: McpConfig::default(),
         }
     }
@@ -112,6 +137,22 @@ impl Target {
             .as_ref()
             .map(|manifest| manifest.mcp.clone())
             .unwrap_or_default()
+    }
+
+    /// The root an agent's policy paths are relative to.
+    ///
+    /// The manifest may move it — an agent that reviews the repository it sits
+    /// inside has a workspace above its own directory — and the operator may
+    /// override that in turn.
+    pub fn workspace(&self) -> PathBuf {
+        match self
+            .manifest
+            .as_ref()
+            .and_then(|manifest| manifest.run.workspace.as_deref())
+        {
+            Some(relative) => self.root.join(relative),
+            None => self.root.clone(),
+        }
     }
 }
 
@@ -269,5 +310,30 @@ mod tests {
             manifest: None,
         };
         assert!(target.mcp().is_empty());
+        assert_eq!(target.workspace(), PathBuf::from("."));
+    }
+
+    #[test]
+    fn the_manifest_can_move_the_workspace_above_the_project() {
+        // A code reviewer sits in `examples/code-review-team` and reads the
+        // repository, so its policy paths are relative to the repository.
+        let mut manifest = Manifest::new("code-review-team");
+        manifest.run.workspace = Some("../..".to_string());
+        let target = Target {
+            entry: PathBuf::from("examples/code-review-team/main.ing"),
+            root: PathBuf::from("examples/code-review-team"),
+            out_dir: PathBuf::from("examples/code-review-team/target/ingot"),
+            manifest: Some(manifest),
+        };
+        assert_eq!(
+            target.workspace(),
+            Path::new("examples/code-review-team").join("../..")
+        );
+    }
+
+    #[test]
+    fn a_new_manifest_writes_no_empty_run_table() {
+        let toml = Manifest::new("brief").to_toml();
+        assert!(!toml.contains("[run]"), "{toml}");
     }
 }

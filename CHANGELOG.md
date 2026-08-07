@@ -57,6 +57,40 @@ have a way to run.
   the server's own bound. An agent whose policy allows `filesystem_read` still
   cannot read outside the server's root, and there is a test that asserts it.
 
+**Ingot Containers, stage 1** ([RFC-0004](rfcs/0004-ingot-containers.md))
+
+- `ingot-sandbox` derives, from an agent's own `policy` block, the boundary its
+  tool servers should run inside: which paths are mounted and in which
+  direction, whether there is a network, which environment variable **names**
+  cross. Pure — it starts nothing, so the interesting logic is testable on a
+  machine with no container runtime.
+- `ingot sandbox` prints it, `--json` for piping, one plan per **(server,
+  agent)** pair. Not per server: in `code-review-team` the sub-agent may read
+  and the coordinator may write, and a box wide enough for both would hand the
+  sub-agent a grant its own policy denies.
+- What a boundary **cannot** enforce is named rather than glossed over — a host
+  allowlist needs an egress proxy, and `external_write` is not a thing a
+  boundary can judge. `ingot run --sandbox` will refuse to start on an
+  unenforced plan.
+- Two refusals at plan time: a read mount whose path is missing (mounting an
+  empty directory would make a missing checkout look like an empty one), and a
+  policy path that is absolute or climbs out of the workspace.
+
+**Language: what a policy path is relative to** ([Language 0.1 §7.1](specs/language/v0.1.md))
+
+- The language never said, and until enforcement existed nothing needed it to.
+  Both shipped examples turned out to write policy paths relative to the *tool
+  server's root* — which the artifact cannot see, so neither was interpretable
+  on its own.
+- **A policy path is relative to the workspace**, a root the operator binds at
+  run time with `--workspace` or `[run] workspace` in the manifest, defaulting
+  to the project. The artifact says `crates`; the operator says where `crates`
+  lives.
+- Both examples are corrected, and their IR changes accordingly.
+  `code-review-team` also turned out to claim it reads `src`, which this
+  repository does not have — nobody noticed for exactly as long as nothing
+  checked.
+
 **Scope** ([docs/vision.md](docs/vision.md), [ADR-0006](docs/adr/0006-a-policy-enforcing-runner.md))
 
 - `docs/vision.md` states what the project is for end to end, including the two

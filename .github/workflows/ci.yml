@@ -120,6 +120,15 @@ jobs:
             echo "expected a non-zero exit for an unserved tool" >&2
             exit 1
           fi
+      # The boundary derived from each example's policy must be producible —
+      # which means every path a policy names has to be a path that exists.
+      - name: Every example's policy describes a boundary that can be built
+        run: |
+          for example in examples/code-review-team examples/repo-digest; do
+            echo "::group::ingot sandbox $example"
+            ./target/debug/ingot sandbox --color never "$example"
+            echo "::endgroup::"
+          done
 
   supply-chain:
     name: Advisories and licences

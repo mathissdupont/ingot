@@ -43,7 +43,7 @@ time and never written into the manifest.
 
 The server is started with `--root ../..`, so it can touch anything in the
 repository. What stops the agent doing so is its own policy —
-`filesystem_read allow ["src", "crates"]` and
+`filesystem_read allow ["crates"]` and
 `filesystem_write allow ["target/review"]` — which the runtime re-checks before
 every call.
 

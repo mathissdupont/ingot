@@ -65,8 +65,7 @@
     "filesystem_read": {
       "decision": "allow",
       "values": [
-        "crates",
-        "src"
+        "crates"
       ]
     },
     "filesystem_write": {

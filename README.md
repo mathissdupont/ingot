@@ -161,6 +161,7 @@ export CARGO_TARGET_DIR=/c/build/ingot
 | `ingot run [--input k=v]` | execute the agent |
 | `ingot test` | replay recorded cassettes |
 | `ingot tools` | show which MCP server provides each declared tool |
+| `ingot sandbox` | show the boundary each tool server would run inside |
 | `ingot explain <CODE>` | explain a diagnostic in full |
 
 Exit codes: `0` success, `1` the program has blocking diagnostics, `2` the
@@ -242,6 +243,52 @@ ingot tools examples/repo-digest
 ```
 
 Details: [MCP binding 0.1](specs/tools/mcp-v0.1.md).
+
+### The policy block as a boundary
+
+A `policy` block is checked by the compiler and re-checked by the runtime, and
+both checks answer the same question: *may this call have this effect?* Neither
+can answer *where did it go?* — a tool server is a separate process with the
+operator's filesystem and the operator's network.
+
+`ingot sandbox` derives, from the same policy, the boundary that server should
+run inside:
+
+```text
+$ ingot sandbox examples/code-review-team
+workspace  /home/me/ingot
+
+server `repo`  (for agent heptapus.examples.review.SecurityReviewer)
+  mount    /workspace/crates  ro   filesystem_read allow ["crates"]
+  network  none
+  workdir  /workspace
+
+server `repo`  (for agent heptapus.examples.review.CodeReviewTeam)
+  mount    /workspace/crates         ro   filesystem_read allow ["crates"]
+  mount    /workspace/target/review  rw   filesystem_write allow ["target/review"]
+  network  none
+  workdir  /workspace
+
+  cannot enforce:
+    external_write require approval
+      a boundary cannot tell an intended external write from any other;
+      the effect check, and any approval gate, still apply
+```
+
+One plan per **agent**, not per server: the sub-agent may read and the
+coordinator may write, and a box wide enough for both would hand the sub-agent a
+grant its own policy denies.
+
+A policy path is relative to the **workspace** — a root the operator binds with
+`--workspace`, defaulting to the project. The artifact says `crates`; the
+operator says where `crates` lives, so the same artifact means the same thing on
+two machines.
+
+What a boundary **cannot** enforce is named rather than glossed over, and
+`ingot run --sandbox` refuses to start when anything is unenforced. See
+[RFC-0004](rfcs/0004-ingot-containers.md) and
+[ADR-0006](docs/adr/0006-a-policy-enforcing-runner.md); the executor that turns
+a plan into a running boundary is the next piece of work.
 
 ## How it fits together
 

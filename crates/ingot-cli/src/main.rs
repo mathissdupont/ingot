@@ -19,9 +19,11 @@ use ingot_diagnostics::{codes, ColorChoice as RenderColor};
 
 mod manifest;
 mod run;
+mod sandbox;
 
 use manifest::{resolve_target, Manifest, Target, MANIFEST_NAME};
 use run::{EventFormat, ProviderChoice, RunConfig, TestConfig, ToolsConfig};
+use sandbox::SandboxConfig;
 
 pub(crate) const EXIT_OK: u8 = 0;
 pub(crate) const EXIT_DIAGNOSTICS: u8 = 1;
@@ -86,6 +88,9 @@ enum Command {
     Test(TestArgs),
     /// Show which MCP server provides each tool the program declares.
     Tools(PathArgs),
+    /// Show the boundary each tool server would run inside, derived from the
+    /// agent's own policy.
+    Sandbox(SandboxArgs),
     /// Explain a diagnostic code in full.
     Explain(ExplainArgs),
 }
@@ -204,6 +209,23 @@ struct TestArgs {
 }
 
 #[derive(Args, Debug)]
+struct SandboxArgs {
+    #[command(flatten)]
+    target: PathArgs,
+
+    /// The root the artifact's policy paths are relative to.
+    ///
+    /// An artifact says `src`; this says where `src` lives. Defaults to the
+    /// project directory.
+    #[arg(long, value_name = "DIR")]
+    workspace: Option<PathBuf>,
+
+    /// Print the plans as JSON, for piping.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args, Debug)]
 struct ExplainArgs {
     /// A diagnostic code such as `ING4001`.
     code: String,
@@ -222,6 +244,7 @@ fn main() -> ExitCode {
         Command::Run(args) => run_run(args, color),
         Command::Test(args) => run_test(args, color),
         Command::Tools(args) => run_tools(args, color),
+        Command::Sandbox(args) => run_sandbox(args, color),
         Command::Explain(args) => run_explain(args),
     };
 
@@ -570,6 +593,31 @@ fn run_test(args: &TestArgs, color: RenderColor) -> Result<u8> {
         &TestConfig {
             cassette_dir,
             filter: args.filter.clone(),
+        },
+    )
+}
+
+// --- sandbox ---------------------------------------------------------------
+
+fn run_sandbox(args: &SandboxArgs, color: RenderColor) -> Result<u8> {
+    let target = resolve_target(args.target.path.as_deref())?;
+    let compilation = compile(&target)?;
+    report(&compilation, color);
+    if compilation.has_errors() {
+        return Ok(EXIT_DIAGNOSTICS);
+    }
+
+    let workspace = args.workspace.clone().unwrap_or_else(|| target.workspace());
+    let workspace = workspace
+        .canonicalize()
+        .with_context(|| format!("resolving the workspace {}", workspace.display()))?;
+
+    sandbox::inspect(
+        &compilation,
+        &SandboxConfig {
+            workspace,
+            mcp: target.mcp(),
+            json: args.json,
         },
     )
 }

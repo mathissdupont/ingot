@@ -46,24 +46,43 @@ export ANTHROPIC_API_KEY=...
 ingot run --input directory=. --input out=out/digest.md
 ```
 
-The digest is printed to stdout and written to `workspace/out/digest.md` by the
-server. `workspace/` is the entire filesystem as far as this agent is concerned:
-the manifest starts the server with `--root workspace`.
+The digest is printed to stdout and written to `data/out/digest.md` by the
+server. `data/` is the entire filesystem as far as this agent is concerned:
+the manifest starts the server with `--root data`.
 
 ## Two sandboxes
 
-`policy` in [`main.ing`](main.ing) says `filesystem_write allow ["out"]`, and
-the manifest says `--root workspace`. Both hold, independently:
+`policy` in [`main.ing`](main.ing) says `filesystem_write allow ["data/out"]`,
+and the manifest says `--root data`. Both hold, independently:
 
 * the **compiler** refused to build the artifact until the policy granted the
   effects of the tools it holds;
 * the **runtime** re-checks that grant before every call, because whoever runs
   an artifact is usually not whoever built it;
-* the **server** refuses anything outside `workspace/`, whatever the artifact
+* the **server** refuses anything outside `data/`, whatever the artifact
   says. A path that is absolute, contains `..`, or resolves through a symlink
   out of the root is refused.
 
 Widening the policy does not widen the server, and vice versa.
+
+Note which frame each is written in. The **policy** says `data/out` because a
+policy path is relative to the *workspace* — here, the project directory. The
+**server root** says `data` because that is the operator's own choice, made in
+the manifest. `ingot sandbox` prints the first of those:
+
+```text
+$ ingot sandbox
+workspace  …/examples/repo-digest
+
+server `workspace`  (for agent heptapus.examples.digest.RepoDigest)
+  mount    /workspace/data      ro   filesystem_read allow ["data"]
+  mount    /workspace/data/out  rw   filesystem_write allow ["data/out"]
+  network  none
+  env      (none)
+  workdir  /workspace
+
+every policy rule above is enforced by the boundary
+```
 
 ## Offline, with the tools still live
 
@@ -81,5 +100,5 @@ ingot run --input directory=. --input out=out/digest.md \
 ```
 
 One caveat worth knowing, because it is the digest check working correctly: the
-first run leaves `workspace/out/` behind, `fs.list_dir` then sees it, the prompt
+first run leaves `data/out/` behind, `fs.list_dir` then sees it, the prompt
 changes, and the replay is refused. Remove the directory between runs.

@@ -39,7 +39,7 @@ agent SecurityReviewer(path: string) -> notes<markdown> {
   }
 
   policy {
-    filesystem_read allow ["src", "crates"]
+    filesystem_read allow ["crates"]
     filesystem_write deny
     external_write deny
     network deny
@@ -85,7 +85,7 @@ agent CodeReviewTeam(pull_request: string, paths: string[]) -> review<markdown> 
   }
 
   policy {
-    filesystem_read allow ["src", "crates"]
+    filesystem_read allow ["crates"]
     filesystem_write allow ["target/review"]
     external_write require approval
     network deny

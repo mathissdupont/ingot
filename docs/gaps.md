@@ -36,7 +36,7 @@ to you*.
 
 | ID | Gap | Class | Closes with |
 |----|-----|-------|-------------|
-| [GAP-001](#gap-001) | Policy allowlist values are carried but never enforced | Unenforced | GAP-013, then a runtime change |
+| [GAP-001](#gap-001) | A policy's host allowlist is not enforced | Unenforced | an egress proxy in the runner |
 | [GAP-002](#gap-002) | `verify` reports a check that never ran | Unenforced | a verifier execution model (RFC) |
 | [GAP-003](#gap-003) | `cost` budgets are never charged | Unenforced | per-model pricing in the runtime |
 | [GAP-004](#gap-004) | No build-time secret scan | Unenforced | M6 |
@@ -65,32 +65,38 @@ would lead you to believe something the toolchain does not check.
 
 ### GAP-001
 
-**Policy allowlist values are carried but never enforced.**
+**A policy's host allowlist is not enforced.**
 
-`network allow ["arxiv.org", "github.com"]` and
-`filesystem_read allow ["src", "crates"]` parse, type-check, and reach the IR as
-a `values` array. Nothing reads that array. The runtime checks the *decision* —
-allow, deny, require approval — and stops there.
+*Narrowed 2026-08-07.* This entry used to cover paths as well. It no longer
+does: `ingot sandbox` derives a boundary from `filesystem_read allow [...]` and
+`filesystem_write allow [...]`, and paths are now defined relative to the
+workspace so they mean the same thing on two machines
+([Language 0.1 §7.1](../specs/language/v0.1.md),
+[RFC-0004](../rfcs/0004-ingot-containers.md)). What remains is the network.
+
+`network allow ["arxiv.org", "github.com"]` parses, type-checks, and reaches the
+IR as a `values` array. The boundary can give a tool server a network or
+withhold one; it cannot bound egress to named hosts.
 
 *How it shows up.* An agent granted `network allow ["arxiv.org"]` can call a
-tool that contacts anything, because the reach of a tool is decided by the tool
-server, not by the artifact. Ingot cannot see inside another process.
+tool that contacts anything. `ingot sandbox` says so rather than implying
+otherwise, and `ingot run --sandbox` refuses to start unless the operator
+acknowledges it — but the limit itself is not applied.
 
-*Why not yet.* Enforcing it needs somewhere to enforce it. A process boundary is
-not one: whatever the artifact says, a tool server runs with the operator's
-filesystem and the operator's network, and we cannot see inside it.
+*Why not yet.* An allowlist needs an egress proxy: a component every tool
+container routes through, which resolves and filters by host. That is a real
+piece of infrastructure with its own failure modes — DNS rebinding, IP-literal
+requests, TLS SNI versus Host header — and doing it badly would be worse than
+not doing it, because a sandbox that is trusted and wrong is the bad case.
 
-*What closing it needs.* A boundary the policy can configure. That is M9,
-[Ingot Containers](vision.md#ingot-containers-the-agents-environment) — the
-first place where `network allow ["arxiv.org"]` can be a kernel rule rather than
-a statement of intent. Accepted in
-[ADR-0006](adr/0006-a-policy-enforcing-runner.md). A conformance test must also
-require that a backend which *cannot* honour a scope **refuses** rather than
-ignoring it, per [Runtime 0.1 §2](../specs/runtime/v0.1.md). [GAP-013] is the
-separate, language-side half: expressing a scope per call rather than per agent.
+*What closing it needs.* An egress proxy in the runner, and a conformance test
+that a backend which cannot honour a scope **refuses** rather than ignoring it,
+per [Runtime 0.1 §2](../specs/runtime/v0.1.md). [GAP-013] is the separate,
+language-side half: expressing a scope per call rather than per agent.
 
 *Recorded in.* [`examples/research-agent/README.md`](../examples/research-agent/README.md),
-[Runtime 0.1 §7](../specs/runtime/v0.1.md).
+[Runtime 0.1 §7](../specs/runtime/v0.1.md),
+[RFC-0004](../rfcs/0004-ingot-containers.md).
 
 ### GAP-002
 

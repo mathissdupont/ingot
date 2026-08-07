@@ -41,8 +41,8 @@ agent RepoDigest(directory: string, out: string) -> digest<markdown> {
   }
 
   policy {
-    filesystem_read allow ["."]
-    filesystem_write allow ["out"]
+    filesystem_read allow ["data"]
+    filesystem_write allow ["data/out"]
     network deny
     external_write deny
     secrets deny export

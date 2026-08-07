@@ -21,6 +21,7 @@ anthropic = ["ingot-runtime/anthropic"]
 ingot-compiler.workspace = true
 ingot-runtime.workspace = true
 ingot-mcp.workspace = true
+ingot-sandbox.workspace = true
 ingot-ir.workspace = true
 ingot-diagnostics.workspace = true
 ingot-lexer.workspace = true
