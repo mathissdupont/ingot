@@ -8,6 +8,19 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.3.0] — 2026-08-07
+
+More than one model service, and the policy block enforced rather than only
+checked. The first release with prebuilt binaries.
+
+- Language version: **0.1** (unchanged; §7.1 defines what a policy path is
+  relative to, which it never had)
+- Agent IR version: **0.1** (unchanged)
+- Runtime version: **0.1** (unchanged; §5.2, §6.1, §7 and §10 clarified)
+- CLI version: **0.3.0**
+
 **More than one model vendor** (closes [GAP-021](docs/gaps.md#gap-021))
 
 - An OpenAI-compatible provider, speaking **Chat Completions**. That shape was
@@ -32,17 +45,6 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
 - Eleven wire tests against a localhost stub, covering bearer auth, the strict
   JSON schema, refusals, truncation, and a gateway that reports an error with a
   200 status.
-
-
-Agents can act. Tools declared in an `.ing` file are served by MCP servers the
-operator configures, so the two examples that compiled but could not run now
-have a way to run.
-
-- Language version: **0.1** (unchanged)
-- Agent IR version: **0.1** (unchanged)
-- Runtime version: **0.1** (unchanged; §5.2, §6.1 and §10 clarified)
-
-### Added
 
 **MCP tool host** ([spec](specs/tools/mcp-v0.1.md), [RFC-0003](rfcs/0003-mcp-tool-host.md))
 

@@ -41,14 +41,140 @@ agent Pinned(topic: string) -> brief<markdown> {{
 }
 
 fn pinned_project(tag: &str, reference: &str) -> TempDir {
+    project_with(tag, reference, "")
+}
+
+fn project_with(tag: &str, reference: &str, extra_manifest: &str) -> TempDir {
     let dir = TempDir::new(tag);
     std::fs::write(dir.path().join("main.ing"), pinned_agent(reference)).unwrap();
     std::fs::write(
         dir.path().join("ingot.toml"),
-        "[project]\nname = \"pinned\"\n",
+        format!("[project]\nname = \"pinned\"\n{extra_manifest}"),
     )
     .unwrap();
     dir
+}
+
+#[test]
+fn an_operator_can_declare_their_own_model_service() {
+    // The whole point: somebody running Ollama, vLLM or llama.cpp names it,
+    // pins it in the source, and needs no key and no vendor account.
+    let stub = stub_provider(vec![openai_reply("# From my own server")]);
+    let project = project_with(
+        "own-llm",
+        "local/llama-test",
+        &format!(
+            "\n[[model.provider]]\nname = \"local\"\nkind = \"openai\"\nbase-url = \"{}\"\n",
+            stub.url
+        ),
+    );
+
+    let output = run_env(
+        &[
+            "run",
+            &project.path().display().to_string(),
+            "--input",
+            "topic=compilers",
+            "--events",
+            "quiet",
+        ],
+        &[],
+    );
+
+    assert_eq!(code(&output), EXIT_OK, "{}", stderr(&output));
+    assert_eq!(stdout(&output).trim(), "# From my own server");
+    assert!(
+        stderr(&output).contains("model calls go to local"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn a_declared_provider_can_take_the_place_of_a_built_in_name() {
+    // Pointing the familiar name somewhere else — a company gateway that
+    // fronts OpenAI, say — without every artifact having to be edited.
+    let stub = stub_provider(vec![openai_reply("# Through the gateway")]);
+    let project = project_with(
+        "override-openai",
+        "openai/gpt-test",
+        &format!(
+            "\n[[model.provider]]\nname = \"openai\"\nkind = \"openai\"\nbase-url = \"{}\"\n",
+            stub.url
+        ),
+    );
+
+    // A real key is exported and must be ignored: the declaration wins, and it
+    // asks for no key at all.
+    let output = run_env(
+        &[
+            "run",
+            &project.path().display().to_string(),
+            "--input",
+            "topic=compilers",
+            "--events",
+            "quiet",
+        ],
+        &[("OPENAI_API_KEY", "should-not-be-used")],
+    );
+
+    assert_eq!(code(&output), EXIT_OK, "{}", stderr(&output));
+    assert_eq!(stdout(&output).trim(), "# Through the gateway");
+}
+
+#[test]
+fn a_declaration_naming_a_key_variable_that_is_not_set_stops_the_run() {
+    // A declared provider is a stated intention, so a missing key is an error
+    // rather than a provider that quietly is not there.
+    let project = project_with(
+        "declared-nokey",
+        "local/llama-test",
+        "\n[[model.provider]]\nname = \"local\"\nkind = \"openai\"\n\
+         base-url = \"http://127.0.0.1:1/v1/chat/completions\"\n\
+         api-key-env = \"A_KEY_NOBODY_EXPORTED\"\n",
+    );
+
+    let output = run_env(
+        &[
+            "run",
+            &project.path().display().to_string(),
+            "--input",
+            "topic=compilers",
+        ],
+        &[],
+    );
+
+    assert_ne!(code(&output), EXIT_OK);
+    assert!(
+        stderr(&output).contains("A_KEY_NOBODY_EXPORTED"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn a_default_naming_no_provider_is_refused_before_anything_runs() {
+    let project = project_with(
+        "bad-default",
+        "local/llama-test",
+        "\n[model]\ndefault = \"typo\"\n\n[[model.provider]]\nname = \"local\"\n\
+         kind = \"openai\"\nbase-url = \"http://127.0.0.1:1/v1/chat/completions\"\n",
+    );
+
+    let output = run_env(
+        &[
+            "run",
+            &project.path().display().to_string(),
+            "--input",
+            "topic=compilers",
+        ],
+        &[],
+    );
+
+    assert_ne!(code(&output), EXIT_OK);
+    let message = stderr(&output);
+    assert!(message.contains("typo"), "{message}");
+    assert!(message.contains("local"), "{message}");
 }
 
 #[test]

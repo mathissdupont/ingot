@@ -40,6 +40,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 pub mod cassette;
+pub mod catalogue;
 pub mod events;
 mod interp;
 pub mod provider;
@@ -65,6 +66,7 @@ pub use cassette::{
     load_directory, Cassette, Interaction, RecordingProvider, ReplayProvider, ScriptedProvider,
     CASSETTE_VERSION,
 };
+pub use catalogue::{ModelConfig, ProviderConfig, ProviderKind};
 pub use events::{Artifact, CollectingSink, EventSink, NullSink, RunEvent, TeeSink};
 pub use interp::{run, AgentRegistry, RunOptions};
 pub use provider::{

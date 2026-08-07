@@ -1,0 +1,160 @@
+name: Release
+
+# Cutting a release is one command:
+#
+#     git tag v0.3.0 && git push origin v0.3.0
+#
+# Everything below is what happens next. `workflow_dispatch` builds the same
+# archives without publishing anything, so the machinery can be exercised
+# before a tag exists.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # A tag that disagrees with the manifest produces archives whose name and
+  # contents say different things, which is the sort of thing nobody notices
+  # until they are debugging the wrong binary.
+  check-version:
+    name: The tag matches the manifest
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.read.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: read
+        run: |
+          manifest=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          echo "version=$manifest" >> "$GITHUB_OUTPUT"
+          echo "workspace version: $manifest"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            tag="${GITHUB_REF_NAME#v}"
+            if [ "$tag" != "$manifest" ]; then
+              echo "::error::tag v$tag does not match the workspace version $manifest" >&2
+              exit 1
+            fi
+          fi
+
+  build:
+    name: ${{ matrix.target }}
+    needs: check-version
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-apple-darwin
+            os: macos-13
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      # Both binaries ship: `ingot` is the toolchain, `ingot-mcp-fs` is the
+      # reference tool server, and an agent that uses tools needs one to point
+      # at before it can do anything.
+      - name: Build
+        run: |
+          cargo build --release --locked --target ${{ matrix.target }} -p ingot-cli --bin ingot
+          cargo build --release --locked --target ${{ matrix.target }} -p ingot-mcp --bin ingot-mcp-fs
+
+      - name: Archive (unix)
+        if: runner.os != 'Windows'
+        run: |
+          name="ingot-${{ needs.check-version.outputs.version }}-${{ matrix.target }}"
+          mkdir -p "dist/$name"
+          cp target/${{ matrix.target }}/release/ingot "dist/$name/"
+          cp target/${{ matrix.target }}/release/ingot-mcp-fs "dist/$name/"
+          cp README.md LICENSE NOTICE CHANGELOG.md "dist/$name/"
+          tar -czf "dist/$name.tar.gz" -C dist "$name"
+          shasum -a 256 "dist/$name.tar.gz" | sed "s| dist/| |" > "dist/$name.tar.gz.sha256"
+
+      - name: Archive (windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          name="ingot-${{ needs.check-version.outputs.version }}-${{ matrix.target }}"
+          mkdir -p "dist/$name"
+          cp target/${{ matrix.target }}/release/ingot.exe "dist/$name/"
+          cp target/${{ matrix.target }}/release/ingot-mcp-fs.exe "dist/$name/"
+          cp README.md LICENSE NOTICE CHANGELOG.md "dist/$name/"
+          7z a -tzip "dist/$name.zip" "./dist/$name/*"
+          certutil -hashfile "dist/$name.zip" SHA256 | sed -n 2p | tr -d ' \r' > "dist/$name.zip.sha256.raw"
+          echo "$(cat dist/$name.zip.sha256.raw)  $name.zip" > "dist/$name.zip.sha256"
+          rm "dist/$name.zip.sha256.raw"
+
+      # The archive is only worth shipping if the binary in it runs, so it is
+      # unpacked and asked a question here rather than by whoever downloads it.
+      - name: The archived binary works
+        shell: bash
+        run: |
+          name="ingot-${{ needs.check-version.outputs.version }}-${{ matrix.target }}"
+          "dist/$name/ingot${{ runner.os == 'Windows' && '.exe' || '' }}" --version
+          "dist/$name/ingot${{ runner.os == 'Windows' && '.exe' || '' }}" \
+            check --color never examples/document-summarizer
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.sha256
+          if-no-files-found: error
+
+  publish:
+    name: Publish the release
+    needs: [check-version, build]
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: One file of checksums, so a download can be verified in one step
+        run: |
+          cd dist
+          cat *.sha256 > SHA256SUMS
+          rm -f *.sha256
+          ls -la
+
+      # Pre-1.0, so every release is marked as such: the language, the IR and
+      # the artifact format can still change between them.
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "Ingot ${GITHUB_REF_NAME}" \
+            --notes "See [CHANGELOG.md](https://github.com/${GITHUB_REPOSITORY}/blob/${GITHUB_REF_NAME}/CHANGELOG.md).
+
+          Verify a download against \`SHA256SUMS\`:
+
+          \`\`\`
+          sha256sum -c SHA256SUMS --ignore-missing
+          \`\`\`
+
+          Each archive carries \`ingot\` and \`ingot-mcp-fs\`. Pre-1.0: the language, the Agent IR and the artifact format may change between releases." \
+            --prerelease \
+            dist/*

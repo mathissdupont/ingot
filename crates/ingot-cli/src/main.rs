@@ -567,6 +567,7 @@ fn run_run(args: &RunArgs, color: RenderColor) -> Result<u8> {
             sandbox: args.sandbox,
             sandbox_allow_unenforced: args.sandbox_allow_unenforced,
             workspace: workspace(args.workspace.as_deref(), &target)?,
+            models: target.model(),
         },
     )
 }

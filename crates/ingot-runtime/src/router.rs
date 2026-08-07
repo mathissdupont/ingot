@@ -43,8 +43,12 @@ impl RoutingProvider {
     }
 
     /// The provider for a call that names no vendor.
-    pub fn or_else(mut self, provider: Box<dyn ModelProvider>) -> Self {
-        self.fallback_name = provider.name().to_string();
+    ///
+    /// `vendor` is the operator's label for it, which is not the same as the
+    /// provider's own name: a service called `local` may well speak the OpenAI
+    /// protocol, and an artifact that pins `local/…` means the label.
+    pub fn or_else(mut self, vendor: impl Into<String>, provider: Box<dyn ModelProvider>) -> Self {
+        self.fallback_name = vendor.into();
         self.fallback = Some(provider);
         self
     }
@@ -237,7 +241,7 @@ mod tests {
 
     #[test]
     fn an_unpinned_call_goes_to_the_fallback() {
-        let mut router = router().or_else(Box::new(Echo("anthropic")));
+        let mut router = router().or_else("anthropic", Box::new(Echo("anthropic")));
         let response = router.complete(&request(ModelSelection::Default)).unwrap();
         assert_eq!(response.value, json!("anthropic"));
     }
@@ -256,7 +260,7 @@ mod tests {
     fn a_single_provider_serves_its_own_vendor_without_being_registered_twice() {
         // The common case: one key exported. `model exact "anthropic/claude-x"`
         // must reach it, and so must an artifact that pins nothing.
-        let mut router = RoutingProvider::new().or_else(Box::new(Echo("anthropic")));
+        let mut router = RoutingProvider::new().or_else("anthropic", Box::new(Echo("anthropic")));
         assert_eq!(router.vendors(), vec!["anthropic"]);
 
         let pinned = router
@@ -287,7 +291,7 @@ mod tests {
     fn a_bare_model_name_is_not_read_as_a_vendor() {
         // `model exact "gpt-test"` names a model, not a vendor, so it goes to
         // the fallback rather than looking for a `gpt-test` provider.
-        let mut router = router().or_else(Box::new(Echo("anthropic")));
+        let mut router = router().or_else("anthropic", Box::new(Echo("anthropic")));
         let response = router
             .complete(&request(ModelSelection::Exact("claude-test".into())))
             .unwrap();
@@ -296,7 +300,9 @@ mod tests {
 
     #[test]
     fn the_description_says_what_this_run_can_reach() {
-        let described = router().or_else(Box::new(Echo("anthropic"))).describe();
+        let described = router()
+            .or_else("anthropic", Box::new(Echo("anthropic")))
+            .describe();
         assert!(described.contains("anthropic, openai"), "{described}");
     }
 

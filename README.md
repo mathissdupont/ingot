@@ -133,6 +133,21 @@ Four complete examples live in [`examples/`](examples/).
 
 ## Install
 
+Each release carries `ingot` and `ingot-mcp-fs` for Linux, macOS (Intel and
+Apple silicon) and Windows. Download the archive for your platform from
+[Releases](https://github.com/mathissdupont/ingot/releases), verify it, and put
+the binaries on your `PATH`:
+
+```bash
+sha256sum -c SHA256SUMS --ignore-missing
+tar -xzf ingot-*-x86_64-unknown-linux-gnu.tar.gz
+```
+
+Pre-1.0: the language, the Agent IR and the artifact format may change between
+releases.
+
+### From source
+
 Requires a stable Rust toolchain (MSRV 1.85).
 
 ```bash
@@ -190,9 +205,32 @@ answer from the wrong model is the worst outcome available.
 | `anthropic/…` | Messages API. `ANTHROPIC_API_KEY` |
 | `openai/…` | Chat Completions. `OPENAI_API_KEY` |
 
-The OpenAI provider speaks **Chat Completions** on purpose: that is the shape a
-dozen other services also speak. `INGOT_OPENAI_BASE_URL` points it at Azure, a
-gateway, or a local vLLM or llama.cpp server, and the artifact does not change.
+Those two need no configuring. **Anything else you name yourself:**
+
+```toml
+# ingot.toml
+[[model.provider]]
+name = "local"          # the vendor half of `model exact "local/…"`
+kind = "openai"         # the protocol it speaks, not the company
+base-url = "http://localhost:11434/v1/chat/completions"
+# no api-key-env: a server on your own machine usually wants no auth
+
+[[model.provider]]
+name = "azure"
+kind = "openai"
+base-url = "https://….openai.azure.com/openai/deployments/x/chat/completions?api-version=2024-10-21"
+api-key-env = "AZURE_OPENAI_KEY"     # a name; a manifest never holds a key
+```
+
+```ingot
+model exact "local/llama-3.3-70b"
+```
+
+`kind` names a **protocol**. Ingot implements two, and Chat Completions is
+spoken by Ollama, vLLM, llama.cpp, LM Studio, Azure OpenAI and most hosted
+gateways — so "how many providers does Ingot support" is the wrong question.
+A declaration may also take over a built-in name, pointing `openai/…` at a
+company gateway without editing a single agent.
 
 An agent may instead state what it needs — `model requires { structured_output,
 context >= 128k }` — and let the provider pick. Anthropic resolves that against

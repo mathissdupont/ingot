@@ -435,7 +435,7 @@ dependencies = [
 
 [[package]]
 name = "ingot-cli"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -453,7 +453,7 @@ dependencies = [
 
 [[package]]
 name = "ingot-compiler"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "ingot-diagnostics",
  "ingot-ir",
@@ -467,7 +467,7 @@ dependencies = [
 
 [[package]]
 name = "ingot-diagnostics"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "ingot-source",
  "serde",
@@ -475,7 +475,7 @@ dependencies = [
 
 [[package]]
 name = "ingot-ir"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -483,7 +483,7 @@ dependencies = [
 
 [[package]]
 name = "ingot-lexer"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "ingot-diagnostics",
  "ingot-source",
@@ -491,7 +491,7 @@ dependencies = [
 
 [[package]]
 name = "ingot-mcp"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "ingot-runtime",
  "serde",
@@ -501,7 +501,7 @@ dependencies = [
 
 [[package]]
 name = "ingot-parser"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "ingot-diagnostics",
  "ingot-lexer",
@@ -511,19 +511,20 @@ dependencies = [
 
 [[package]]
 name = "ingot-runtime"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "ingot-ir",
  "ingot-types",
  "serde",
  "serde_json",
  "sha2",
+ "toml",
  "ureq",
 ]
 
 [[package]]
 name = "ingot-sandbox"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "ingot-ir",
  "serde",
@@ -532,7 +533,7 @@ dependencies = [
 
 [[package]]
 name = "ingot-semantic"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "ingot-diagnostics",
  "ingot-parser",
@@ -543,18 +544,18 @@ dependencies = [
 
 [[package]]
 name = "ingot-source"
-version = "0.2.0"
+version = "0.3.0"
 
 [[package]]
 name = "ingot-syntax"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "ingot-source",
 ]
 
 [[package]]
 name = "ingot-types"
-version = "0.2.0"
+version = "0.3.0"
 
 [[package]]
 name = "is_terminal_polyfill"

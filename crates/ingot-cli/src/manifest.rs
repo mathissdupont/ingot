@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use ingot_mcp::McpConfig;
+use ingot_runtime::ModelConfig;
 use serde::{Deserialize, Serialize};
 
 pub const MANIFEST_NAME: &str = "ingot.toml";
@@ -20,6 +21,9 @@ pub struct Manifest {
     /// Settings that apply when an agent runs rather than when it compiles.
     #[serde(default, skip_serializing_if = "Run::is_default")]
     pub run: Run,
+    /// Model services this machine can reach, beyond the two built in.
+    #[serde(default, skip_serializing_if = "ModelConfig::is_empty")]
+    pub model: ModelConfig,
     /// Where the agent's tools come from on this machine.
     ///
     /// Deployment configuration rather than part of the program: the artifact
@@ -99,6 +103,7 @@ impl Manifest {
             },
             build: Build::default(),
             run: Run::default(),
+            model: ModelConfig::default(),
             mcp: McpConfig::default(),
         }
     }
@@ -136,6 +141,14 @@ impl Target {
         self.manifest
             .as_ref()
             .map(|manifest| manifest.mcp.clone())
+            .unwrap_or_default()
+    }
+
+    /// Model services declared for this project. Empty without a manifest.
+    pub fn model(&self) -> ModelConfig {
+        self.manifest
+            .as_ref()
+            .map(|manifest| manifest.model.clone())
             .unwrap_or_default()
     }
 

@@ -45,7 +45,9 @@ fn reasoning_effort(effort: &str) -> &str {
 }
 
 pub struct OpenAiProvider {
-    api_key: String,
+    /// Absent for a server that wants no authentication, which is the usual
+    /// arrangement for one running on the same machine.
+    api_key: Option<String>,
     /// Overrides whatever the artifact asks for. Set from `--model`.
     model_override: Option<String>,
     effort: Option<String>,
@@ -69,7 +71,15 @@ impl OpenAiProvider {
 
     pub fn with_key(api_key: impl Into<String>) -> OpenAiProvider {
         OpenAiProvider {
-            api_key: api_key.into(),
+            api_key: Some(api_key.into()),
+            ..OpenAiProvider::without_key()
+        }
+    }
+
+    /// For a server that authenticates no requests — a local one, usually.
+    pub fn without_key() -> OpenAiProvider {
+        OpenAiProvider {
+            api_key: None,
             model_override: None,
             effort: None,
             max_retries: DEFAULT_MAX_RETRIES,
@@ -203,10 +213,14 @@ impl ModelProvider for OpenAiProvider {
         request: &CompletionRequest,
     ) -> Result<CompletionResponse, ProviderError> {
         let body = self.build_body(request)?;
-        let authorization = format!("Bearer {}", self.api_key);
+        let authorization = self.api_key.as_ref().map(|key| format!("Bearer {key}"));
+        let headers: Vec<(&str, &str)> = match &authorization {
+            Some(value) => vec![("authorization", value.as_str())],
+            None => Vec::new(),
+        };
         let payload = http::post_json(
             &self.base_url,
-            &[("authorization", authorization.as_str())],
+            &headers,
             &body,
             self.timeout,
             self.max_retries,

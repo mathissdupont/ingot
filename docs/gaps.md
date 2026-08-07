@@ -56,6 +56,7 @@ to you*.
 | [GAP-018](#gap-018) | The IR has one consumer, so portability is undemonstrated | Unproven | M5 |
 | [GAP-019](#gap-019) | The name has had no trademark or registry clearance | Absent | legal review |
 | [GAP-020](#gap-020) | The boundary needs Linux containers | Refused | a second expression of the boundary |
+| [GAP-022](#gap-022) | Nothing has been released; you build from source | Absent | one tag |
 
 ---
 
@@ -354,6 +355,26 @@ signed by digest — even though the IR encoding was designed for exactly that
 ([ADR-0004](adr/0004-canonical-ir-encoding.md)).
 
 *Closes with.* M6.
+
+### GAP-022
+
+**Nothing has been released; you build from source.**
+
+`cargo build --release` works and is tested on three platforms, but there is no
+tag, no GitHub Release and no prebuilt binary. Trying Ingot therefore starts
+with installing a Rust toolchain, which is a large first step for someone
+deciding whether the idea is worth ten minutes.
+
+*What closing it needs.* One command —
+`git tag v0.3.0 && git push origin v0.3.0`. The machinery is in place:
+[`.github/workflows/release.yml`](../.github/workflows/release.yml) builds
+`ingot` and `ingot-mcp-fs` for Linux, macOS on both architectures, and Windows;
+refuses a tag that disagrees with the workspace version; runs each archived
+binary before shipping it; and publishes one `SHA256SUMS` covering all of them.
+
+*Not closed yet on purpose.* Publishing is outward-facing and
+[GAP-019](#gap-019) — no trademark or registry clearance for the name — is still
+open. That is a decision for the maintainer, not a build step.
 
 ### GAP-016
 

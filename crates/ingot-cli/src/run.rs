@@ -13,8 +13,8 @@ use ingot_compiler::Compilation;
 use ingot_mcp::{AgentTools, McpConfig, McpToolHost};
 use ingot_runtime::{
     run as run_agent, AgentRegistry, ApprovalHandler, ApprovalMode, ApprovalRequest, Artifact,
-    Cassette, DenyAllTools, ModelProvider, RecordingProvider, ReplayProvider, RoutingProvider,
-    RunError, RunEvent, RunOptions, RunReport, TeeSink, ToolHost,
+    Cassette, DenyAllTools, ModelConfig, ModelProvider, RecordingProvider, ReplayProvider,
+    RoutingProvider, RunError, RunEvent, RunOptions, RunReport, TeeSink, ToolHost,
 };
 use serde_json::Value;
 
@@ -72,6 +72,8 @@ pub struct RunConfig {
     pub sandbox_allow_unenforced: bool,
     /// The root policy paths are relative to.
     pub workspace: PathBuf,
+    /// Model services declared in the manifest, beyond the built-in two.
+    pub models: ModelConfig,
 }
 
 /// Compile, execute, and write the artifacts.
@@ -426,18 +428,35 @@ fn build_provider(
     })
 }
 
-/// Every vendor this build can reach and this machine has a key for.
+/// Vendors that need no declaring, when a key for them is exported.
+pub const BUILT_IN_PROVIDERS: &[&str] = &["anthropic", "openai"];
+
+/// Every vendor this run can reach: the built-in two, plus whatever the
+/// manifest declared.
 ///
 /// A vendor whose key is absent is not an error here — it is only an error if
-/// the artifact asks for it, and then the router says so by name.
-fn available(config: &RunConfig) -> Vec<(&'static str, Box<dyn ModelProvider>)> {
-    let mut providers: Vec<(&'static str, Box<dyn ModelProvider>)> = Vec::new();
+/// the artifact asks for it, and then the router says so by name. A declared
+/// provider replaces a built-in of the same name, so `[[model.provider]] name =
+/// "openai"` points the familiar name somewhere else.
+fn available(config: &RunConfig) -> Result<Vec<(String, Box<dyn ModelProvider>)>> {
+    config
+        .models
+        .validate(BUILT_IN_PROVIDERS)
+        .map_err(|reason| anyhow::anyhow!("{reason}"))?;
+
+    let declared: BTreeSet<&str> = config
+        .models
+        .providers
+        .iter()
+        .map(|provider| provider.name.as_str())
+        .collect();
+    let mut providers: Vec<(String, Box<dyn ModelProvider>)> = Vec::new();
 
     #[cfg(feature = "anthropic")]
-    if std::env::var_os("ANTHROPIC_API_KEY").is_some() {
+    if !declared.contains("anthropic") && std::env::var_os("ANTHROPIC_API_KEY").is_some() {
         if let Ok(provider) = ingot_runtime::anthropic::AnthropicProvider::from_env() {
             providers.push((
-                ingot_runtime::anthropic::PROVIDER,
+                ingot_runtime::anthropic::PROVIDER.to_string(),
                 Box::new(
                     provider
                         .with_model(config.model.clone())
@@ -448,10 +467,10 @@ fn available(config: &RunConfig) -> Vec<(&'static str, Box<dyn ModelProvider>)> 
     }
 
     #[cfg(feature = "openai")]
-    if std::env::var_os("OPENAI_API_KEY").is_some() {
+    if !declared.contains("openai") && std::env::var_os("OPENAI_API_KEY").is_some() {
         if let Ok(provider) = ingot_runtime::openai::OpenAiProvider::from_env() {
             providers.push((
-                ingot_runtime::openai::PROVIDER,
+                ingot_runtime::openai::PROVIDER.to_string(),
                 Box::new(
                     provider
                         .with_model(config.model.clone())
@@ -461,8 +480,20 @@ fn available(config: &RunConfig) -> Vec<(&'static str, Box<dyn ModelProvider>)> 
         }
     }
 
-    let _ = config;
-    providers
+    // A declared provider is a stated intention, so a missing key for one is an
+    // error rather than a quiet absence.
+    for declaration in &config.models.providers {
+        let provider = ingot_runtime::catalogue::build(
+            declaration,
+            config.model.clone(),
+            config.effort.clone(),
+        )
+        .map_err(|error| anyhow::anyhow!("{error}"))?;
+        providers.push((declaration.name.clone(), provider));
+    }
+
+    let _ = declared;
+    Ok(providers)
 }
 
 /// Route by the vendor the artifact pinned, falling back to the only key
@@ -472,26 +503,34 @@ fn available(config: &RunConfig) -> Vec<(&'static str, Box<dyn ModelProvider>)> 
 /// should just run, without the operator having to repeat that on the command
 /// line — and must never be answered by a vendor it did not name.
 fn auto(config: &RunConfig) -> Result<Box<dyn ModelProvider>> {
-    let providers = available(config);
+    let mut providers = available(config)?;
     if providers.is_empty() {
         bail!(
             "no model provider is available\n  \
-             export ANTHROPIC_API_KEY or OPENAI_API_KEY, or use \
-             `--provider replay --cassette <FILE>`"
+             export ANTHROPIC_API_KEY or OPENAI_API_KEY, declare one with `[[model.provider]]` \
+             in {}, or use `--provider replay --cassette <FILE>`",
+            super::MANIFEST_NAME
         );
     }
 
+    // `default = "…"` in the manifest, else the only one there is. With several
+    // and no default, an artifact that names no vendor is asked to pick, rather
+    // than being answered by whichever happened to sort first.
+    let chosen_default = config
+        .models
+        .default
+        .clone()
+        .or_else(|| (providers.len() == 1).then(|| providers[0].0.clone()));
+
     let mut router = RoutingProvider::new();
-    if providers.len() == 1 {
-        // One key exported: nothing to disambiguate, so an artifact that names
-        // no vendor still runs. The router serves the fallback's own vendor by
-        // name, so a pinned reference to it works too.
-        let (_, provider) = providers.into_iter().next().expect("length checked");
-        router = router.or_else(provider);
-    } else {
-        for (vendor, provider) in providers {
-            router = router.with(vendor, provider);
+    if let Some(name) = &chosen_default {
+        if let Some(index) = providers.iter().position(|(vendor, _)| vendor == name) {
+            let (vendor, provider) = providers.remove(index);
+            router = router.or_else(vendor, provider);
         }
+    }
+    for (vendor, provider) in providers {
+        router = router.with(vendor, provider);
     }
 
     eprintln!("{}", router.describe());
