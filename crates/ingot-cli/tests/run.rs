@@ -10,9 +10,124 @@ use std::sync::atomic::Ordering;
 
 use serde_json::Value;
 use support::{
-    code, repo_root, run, stderr, stdout, stub_provider, text_reply, TempDir, EXIT_DIAGNOSTICS,
-    EXIT_OK,
+    code, openai_reply, repo_root, run, run_env, stderr, stdout, stub_provider, text_reply,
+    TempDir, EXIT_DIAGNOSTICS, EXIT_OK,
 };
+
+/// An agent that pins a vendor, so the run has to choose a provider from the
+/// artifact rather than from a flag.
+fn pinned_agent(reference: &str) -> String {
+    format!(
+        r#"language 0.1
+
+agent Pinned(topic: string) -> brief<markdown> {{
+  model exact "{reference}"
+
+  budget {{
+    steps <= 2
+    tokens <= 20000
+  }}
+
+  policy {{
+    network deny
+  }}
+
+  flow {{
+    emit brief = ask<markdown>("Write about ${{topic}}.")
+  }}
+}}
+"#
+    )
+}
+
+fn pinned_project(tag: &str, reference: &str) -> TempDir {
+    let dir = TempDir::new(tag);
+    std::fs::write(dir.path().join("main.ing"), pinned_agent(reference)).unwrap();
+    std::fs::write(
+        dir.path().join("ingot.toml"),
+        "[project]\nname = \"pinned\"\n",
+    )
+    .unwrap();
+    dir
+}
+
+#[test]
+fn an_artifact_that_pins_openai_reaches_openai() {
+    // The point of pinning: the source names the vendor, and the run honours it
+    // without the operator repeating it on the command line.
+    let project = pinned_project("pin-openai", "openai/gpt-test");
+    let stub = stub_provider(vec![openai_reply("# From OpenAI")]);
+
+    let output = run_env(
+        &[
+            "run",
+            &project.path().display().to_string(),
+            "--input",
+            "topic=compilers",
+            "--events",
+            "quiet",
+        ],
+        &[
+            ("OPENAI_API_KEY", "stub-key"),
+            ("INGOT_OPENAI_BASE_URL", &stub.url),
+        ],
+    );
+
+    assert_eq!(code(&output), EXIT_OK, "{}", stderr(&output));
+    assert_eq!(stdout(&output).trim(), "# From OpenAI");
+    assert!(
+        stderr(&output).contains("model calls go to openai"),
+        "the run must say which service answered: {}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn an_artifact_pinning_a_vendor_with_no_key_is_refused_rather_than_redirected() {
+    // An artifact that says `openai/…` must never be answered by Anthropic and
+    // come back with a plausible answer from the wrong model.
+    let project = pinned_project("pin-unavailable", "openai/gpt-test");
+    let stub = stub_provider(vec![text_reply("# From the wrong vendor")]);
+
+    let output = run_env(
+        &[
+            "run",
+            &project.path().display().to_string(),
+            "--input",
+            "topic=compilers",
+            "--events",
+            "quiet",
+        ],
+        &[
+            ("ANTHROPIC_API_KEY", "stub-key"),
+            ("INGOT_ANTHROPIC_BASE_URL", &stub.url),
+        ],
+    );
+
+    assert_ne!(code(&output), EXIT_OK);
+    let message = stderr(&output);
+    assert!(message.contains("openai"), "{message}");
+    assert!(message.contains("no provider"), "{message}");
+}
+
+#[test]
+fn with_no_key_at_all_the_run_says_what_to_export() {
+    let project = pinned_project("pin-nokey", "openai/gpt-test");
+    let output = run_env(
+        &[
+            "run",
+            &project.path().display().to_string(),
+            "--input",
+            "topic=compilers",
+        ],
+        &[],
+    );
+
+    assert_ne!(code(&output), EXIT_OK);
+    let message = stderr(&output);
+    assert!(message.contains("OPENAI_API_KEY"), "{message}");
+    assert!(message.contains("--provider replay"), "{message}");
+}
 
 fn summarizer() -> String {
     repo_root()

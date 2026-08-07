@@ -43,11 +43,20 @@ pub mod cassette;
 pub mod events;
 mod interp;
 pub mod provider;
+pub mod router;
 pub mod schema;
 pub mod tools;
 
+/// Shared by every network provider, so there is one retry rule rather than one
+/// per vendor.
+#[cfg(any(feature = "anthropic", feature = "openai"))]
+pub mod http;
+
 #[cfg(feature = "anthropic")]
 pub mod anthropic;
+
+#[cfg(feature = "openai")]
+pub mod openai;
 
 #[cfg(test)]
 mod tests;
@@ -61,6 +70,7 @@ pub use interp::{run, AgentRegistry, RunOptions};
 pub use provider::{
     CompletionRequest, CompletionResponse, ModelProvider, ModelSelection, ProviderError, Usage,
 };
+pub use router::RoutingProvider;
 pub use tools::{
     ApprovalHandler, ApprovalMode, ApprovalRequest, DenyAllTools, ScriptedApprovals,
     StaticToolHost, ToolError, ToolHost, ToolInvocation,

@@ -10,9 +10,11 @@ authors.workspace = true
 
 [features]
 default = []
-# The real model provider. Off by default so the core interpreter, and CI,
-# carry no TLS or HTTP dependency.
+# Network model providers. Off by default so the core interpreter, and its
+# tests, carry no TLS or HTTP dependency. Both share `http.rs`, so the retry
+# rule and the timeout are the same whichever service answers.
 anthropic = ["dep:ureq"]
+openai = ["dep:ureq"]
 
 [dependencies]
 ingot-ir.workspace = true

@@ -47,7 +47,17 @@ whose reach is known.
 Ingot is a toolchain, and each part exists because the one before it is not
 enough on its own.
 
-**1. A language.** Inputs, outputs, types, tools, permissions, budgets, flow.
+**1. A language.** One file holds the whole agent, and "the whole agent" is four
+things that are usually scattered across a codebase, a config file, a deployment
+manifest and somebody's memory:
+
+| | |
+|---|---|
+| **which model** | `model exact "openai/gpt-5.1"` — vendor and model, in the source |
+| **which tools** | `tools { mcp repo.read_file }` — typed signatures, checked at each call |
+| **what it may touch** | `policy { filesystem_read allow ["src"] }` |
+| **what it may spend** | `budget { steps <= 40  tokens <= 200000 }` |
+
 Small on purpose: no generics, no optionals, no user-defined functions. The
 value is not expressiveness; it is that everything expressible is checkable.
 

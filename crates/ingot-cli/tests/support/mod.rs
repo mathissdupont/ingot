@@ -126,18 +126,50 @@ pub fn text_reply(text: &str) -> Value {
     })
 }
 
+/// A Chat Completions reply, for the OpenAI-compatible provider.
+pub fn openai_reply(text: &str) -> Value {
+    json!({
+        "id": "chatcmpl-stub",
+        "model": "gpt-test",
+        "choices": [{
+            "index": 0,
+            "message": { "role": "assistant", "content": text },
+            "finish_reason": "stop",
+        }],
+        "usage": { "prompt_tokens": 120, "completion_tokens": 40 },
+    })
+}
+
 pub fn run(args: &[&str], base_url: Option<&str>) -> Output {
+    match base_url {
+        Some(url) => run_env(
+            args,
+            &[
+                ("ANTHROPIC_API_KEY", "stub-key"),
+                ("INGOT_ANTHROPIC_BASE_URL", url),
+            ],
+        ),
+        None => run_env(args, &[]),
+    }
+}
+
+/// Run with exactly these provider variables set, and no others.
+///
+/// Every key is cleared first: a run must never pick up a real credential from
+/// the developer's shell and reach a real service.
+pub fn run_env(args: &[&str], env: &[(&str, &str)]) -> Output {
     let mut command = Command::new(binary());
     command.args(args).arg("--color").arg("never");
-    match base_url {
-        Some(url) => {
-            command.env("ANTHROPIC_API_KEY", "stub-key");
-            command.env("INGOT_ANTHROPIC_BASE_URL", url);
-        }
-        None => {
-            command.env_remove("ANTHROPIC_API_KEY");
-            command.env_remove("INGOT_ANTHROPIC_BASE_URL");
-        }
+    for name in [
+        "ANTHROPIC_API_KEY",
+        "INGOT_ANTHROPIC_BASE_URL",
+        "OPENAI_API_KEY",
+        "INGOT_OPENAI_BASE_URL",
+    ] {
+        command.env_remove(name);
+    }
+    for (name, value) in env {
+        command.env(name, value);
     }
     command.output().expect("the ingot binary must be runnable")
 }

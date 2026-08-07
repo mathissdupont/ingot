@@ -17,6 +17,7 @@ use std::time::Duration;
 
 use serde_json::{json, Map, Value};
 
+use crate::http::{self, DEFAULT_MAX_RETRIES, DEFAULT_TIMEOUT};
 use crate::provider::{
     CompletionRequest, CompletionResponse, ModelProvider, ModelSelection, ProviderError, Usage,
 };
@@ -24,6 +25,9 @@ use crate::schema::ResponseShape;
 
 const API_URL: &str = "https://api.anthropic.com/v1/messages";
 const API_VERSION: &str = "2023-06-01";
+
+/// The prefix an artifact uses to pin this provider: `anthropic/claude-…`.
+pub const PROVIDER: &str = "anthropic";
 
 /// Default model. Capability-based requirements resolve to this unless the
 /// artifact pins one.
@@ -59,23 +63,9 @@ impl AnthropicProvider {
     /// `INGOT_ANTHROPIC_BASE_URL` overrides the endpoint, for a gateway, a
     /// proxy, or the stub server the wire tests run against.
     pub fn from_env() -> Result<AnthropicProvider, ProviderError> {
-        let api_key = std::env::var("ANTHROPIC_API_KEY").map_err(|_| {
-            ProviderError::Configuration(
-                "ANTHROPIC_API_KEY is not set. Export it, or run with \
-                 `--provider replay` against a recorded cassette."
-                    .to_string(),
-            )
-        })?;
-        if api_key.trim().is_empty() {
-            return Err(ProviderError::Configuration(
-                "ANTHROPIC_API_KEY is set but empty".to_string(),
-            ));
-        }
-        let mut provider = AnthropicProvider::with_key(api_key);
-        if let Ok(url) = std::env::var("INGOT_ANTHROPIC_BASE_URL") {
-            if !url.trim().is_empty() {
-                provider = provider.with_base_url(url);
-            }
+        let mut provider = AnthropicProvider::with_key(http::key_from_env("ANTHROPIC_API_KEY")?);
+        if let Some(url) = http::base_url_from_env("INGOT_ANTHROPIC_BASE_URL") {
+            provider = provider.with_base_url(url);
         }
         Ok(provider)
     }
@@ -85,8 +75,8 @@ impl AnthropicProvider {
             api_key: api_key.into(),
             model_override: None,
             effort: None,
-            max_retries: 3,
-            timeout: Duration::from_secs(180),
+            max_retries: DEFAULT_MAX_RETRIES,
+            timeout: DEFAULT_TIMEOUT,
             base_url: API_URL.to_string(),
         }
     }
@@ -202,67 +192,17 @@ impl ModelProvider for AnthropicProvider {
         request: &CompletionRequest,
     ) -> Result<CompletionResponse, ProviderError> {
         let body = self.build_body(request)?;
-        let mut attempt = 0;
-
-        loop {
-            attempt += 1;
-            let response = ureq::post(&self.base_url)
-                .config()
-                .timeout_global(Some(self.timeout))
-                .build()
-                .header("content-type", "application/json")
-                .header("x-api-key", &self.api_key)
-                .header("anthropic-version", API_VERSION)
-                .send_json(&body);
-
-            match response {
-                Ok(mut ok) => {
-                    let payload: Value = ok
-                        .body_mut()
-                        .read_json()
-                        .map_err(|error| ProviderError::Transport(error.to_string()))?;
-                    return parse_response(request, &payload);
-                }
-                Err(ureq::Error::StatusCode(status)) => {
-                    let retryable = status == 429 || status >= 500;
-                    if retryable && attempt <= self.max_retries {
-                        // No jitter: runs should be reproducible, and the retry
-                        // count is small enough that thundering herds are not
-                        // the failure mode a reference interpreter guards against.
-                        std::thread::sleep(Duration::from_millis(500 * u64::from(attempt)));
-                        continue;
-                    }
-                    if status == 429 {
-                        return Err(ProviderError::RateLimited {
-                            retry_after_seconds: None,
-                        });
-                    }
-                    return Err(ProviderError::Request {
-                        status,
-                        message: describe_status(status).to_string(),
-                    });
-                }
-                Err(error) => {
-                    if attempt <= self.max_retries {
-                        std::thread::sleep(Duration::from_millis(500 * u64::from(attempt)));
-                        continue;
-                    }
-                    return Err(ProviderError::Transport(error.to_string()));
-                }
-            }
-        }
-    }
-}
-
-fn describe_status(status: u16) -> &'static str {
-    match status {
-        400 => "the request was malformed or used an unsupported parameter",
-        401 => "the API key is missing or invalid",
-        403 => "the API key lacks permission for this model",
-        404 => "no such model or endpoint",
-        413 => "the request is too large",
-        529 => "the service is temporarily overloaded",
-        _ => "the provider rejected the request",
+        let payload = http::post_json(
+            &self.base_url,
+            &[
+                ("x-api-key", self.api_key.as_str()),
+                ("anthropic-version", API_VERSION),
+            ],
+            &body,
+            self.timeout,
+            self.max_retries,
+        )?;
+        parse_response(request, &payload)
     }
 }
 

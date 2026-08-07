@@ -13,9 +13,10 @@ name = "ingot"
 path = "src/main.rs"
 
 [features]
-default = ["anthropic"]
-# The real model provider, and the TLS stack it needs.
+default = ["anthropic", "openai"]
+# The network model providers, and the TLS stack they share.
 anthropic = ["ingot-runtime/anthropic"]
+openai = ["ingot-runtime/openai"]
 
 [dependencies]
 ingot-compiler.workspace = true

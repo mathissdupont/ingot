@@ -422,9 +422,29 @@ name.
 
 ## Closed
 
-None yet. When a gap closes, move it here with the release that closed it, and
-leave its section in place. Identifiers are never reused: a link to GAP-007 must
-keep meaning what it meant.
+When a gap closes it moves here with the release that closed it, and its section
+stays where a link can find it. Identifiers are never reused: a link to GAP-007
+must keep meaning what it meant.
+
+### GAP-021
+
+**One model vendor.** *Closed in 0.3.0.*
+
+Until 0.3.0 the only network provider was Anthropic. An artifact could say
+`model exact "openai/gpt-5.1"` — the language and the IR had carried a
+`vendor/model` reference since 0.1 — and the runtime would drop the vendor half
+and send the call to Anthropic anyway. That was the worst available behaviour:
+not a refusal, but a plausible answer from a model the artifact did not name.
+
+Closed by an OpenAI-compatible provider and a `RoutingProvider` that dispatches
+on the vendor prefix. A vendor the run cannot reach is now an error naming it.
+
+The provider speaks Chat Completions rather than a vendor-only shape, so
+`INGOT_OPENAI_BASE_URL` reaches Azure, a gateway, or a local server with no
+change to the artifact — which is what makes "one vendor" no longer the right
+way to count.
+
+*Recorded in.* [README](../README.md), [CHANGELOG](../CHANGELOG.md).
 
 [GAP-001]: #gap-001
 [GAP-007]: #gap-007

@@ -13,8 +13,8 @@ use ingot_compiler::Compilation;
 use ingot_mcp::{AgentTools, McpConfig, McpToolHost};
 use ingot_runtime::{
     run as run_agent, AgentRegistry, ApprovalHandler, ApprovalMode, ApprovalRequest, Artifact,
-    Cassette, DenyAllTools, ModelProvider, RecordingProvider, ReplayProvider, RunError, RunEvent,
-    RunOptions, RunReport, TeeSink, ToolHost,
+    Cassette, DenyAllTools, ModelProvider, RecordingProvider, ReplayProvider, RoutingProvider,
+    RunError, RunEvent, RunOptions, RunReport, TeeSink, ToolHost,
 };
 use serde_json::Value;
 
@@ -25,8 +25,13 @@ const MCP_TRANSPORT: &str = "mcp";
 /// Which model provider to run against.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, clap::ValueEnum)]
 pub enum ProviderChoice {
+    /// Route by the vendor the artifact pins, using whichever keys are set.
+    Auto,
     /// Call the Anthropic Messages API. Needs `ANTHROPIC_API_KEY`.
     Anthropic,
+    /// Call an OpenAI-compatible Chat Completions endpoint. Needs
+    /// `OPENAI_API_KEY`; `INGOT_OPENAI_BASE_URL` points it elsewhere.
+    Openai,
     /// Replay a recorded cassette. No network, no key, same answers every time.
     Replay,
 }
@@ -403,32 +408,15 @@ fn build_provider(
             let Some(path) = &config.cassette else {
                 bail!(
                     "`--provider replay` needs `--cassette <FILE>`\n\
-                     record one first with: ingot run --provider anthropic --record <FILE>"
+                     record one first with: ingot run --record <FILE>"
                 );
             };
             let cassette = Cassette::load(path).map_err(anyhow::Error::msg)?;
             Box::new(ReplayProvider::new(cassette))
         }
-        ProviderChoice::Anthropic => {
-            #[cfg(feature = "anthropic")]
-            {
-                Box::new(
-                    ingot_runtime::anthropic::AnthropicProvider::from_env()
-                        .map_err(anyhow::Error::msg)?
-                        .with_model(config.model.clone())
-                        .with_effort(config.effort.clone()),
-                )
-            }
-            #[cfg(not(feature = "anthropic"))]
-            {
-                let _ = config;
-                bail!(
-                    "this build has no Anthropic provider\n\
-                     rebuild with `cargo build --features anthropic`, or use \
-                     `--provider replay --cassette <FILE>`"
-                );
-            }
-        }
+        ProviderChoice::Anthropic => anthropic(config)?,
+        ProviderChoice::Openai => openai(config)?,
+        ProviderChoice::Auto => auto(config)?,
     };
 
     Ok(if config.record.is_some() {
@@ -436,6 +424,120 @@ fn build_provider(
     } else {
         Provider::Plain(inner)
     })
+}
+
+/// Every vendor this build can reach and this machine has a key for.
+///
+/// A vendor whose key is absent is not an error here — it is only an error if
+/// the artifact asks for it, and then the router says so by name.
+fn available(config: &RunConfig) -> Vec<(&'static str, Box<dyn ModelProvider>)> {
+    let mut providers: Vec<(&'static str, Box<dyn ModelProvider>)> = Vec::new();
+
+    #[cfg(feature = "anthropic")]
+    if std::env::var_os("ANTHROPIC_API_KEY").is_some() {
+        if let Ok(provider) = ingot_runtime::anthropic::AnthropicProvider::from_env() {
+            providers.push((
+                ingot_runtime::anthropic::PROVIDER,
+                Box::new(
+                    provider
+                        .with_model(config.model.clone())
+                        .with_effort(config.effort.clone()),
+                ),
+            ));
+        }
+    }
+
+    #[cfg(feature = "openai")]
+    if std::env::var_os("OPENAI_API_KEY").is_some() {
+        if let Ok(provider) = ingot_runtime::openai::OpenAiProvider::from_env() {
+            providers.push((
+                ingot_runtime::openai::PROVIDER,
+                Box::new(
+                    provider
+                        .with_model(config.model.clone())
+                        .with_effort(config.effort.clone()),
+                ),
+            ));
+        }
+    }
+
+    let _ = config;
+    providers
+}
+
+/// Route by the vendor the artifact pinned, falling back to the only key
+/// present.
+///
+/// The point of the default: an artifact that says `model exact "openai/…"`
+/// should just run, without the operator having to repeat that on the command
+/// line — and must never be answered by a vendor it did not name.
+fn auto(config: &RunConfig) -> Result<Box<dyn ModelProvider>> {
+    let providers = available(config);
+    if providers.is_empty() {
+        bail!(
+            "no model provider is available\n  \
+             export ANTHROPIC_API_KEY or OPENAI_API_KEY, or use \
+             `--provider replay --cassette <FILE>`"
+        );
+    }
+
+    let mut router = RoutingProvider::new();
+    if providers.len() == 1 {
+        // One key exported: nothing to disambiguate, so an artifact that names
+        // no vendor still runs. The router serves the fallback's own vendor by
+        // name, so a pinned reference to it works too.
+        let (_, provider) = providers.into_iter().next().expect("length checked");
+        router = router.or_else(provider);
+    } else {
+        for (vendor, provider) in providers {
+            router = router.with(vendor, provider);
+        }
+    }
+
+    eprintln!("{}", router.describe());
+    Ok(Box::new(router))
+}
+
+fn anthropic(config: &RunConfig) -> Result<Box<dyn ModelProvider>> {
+    #[cfg(feature = "anthropic")]
+    {
+        Ok(Box::new(
+            ingot_runtime::anthropic::AnthropicProvider::from_env()
+                .map_err(anyhow::Error::msg)?
+                .with_model(config.model.clone())
+                .with_effort(config.effort.clone()),
+        ))
+    }
+    #[cfg(not(feature = "anthropic"))]
+    {
+        let _ = config;
+        bail!(
+            "this build has no Anthropic provider\n\
+             rebuild with `cargo build --features anthropic`, or use \
+             `--provider replay --cassette <FILE>`"
+        );
+    }
+}
+
+fn openai(config: &RunConfig) -> Result<Box<dyn ModelProvider>> {
+    #[cfg(feature = "openai")]
+    {
+        Ok(Box::new(
+            ingot_runtime::openai::OpenAiProvider::from_env()
+                .map_err(anyhow::Error::msg)?
+                .with_model(config.model.clone())
+                .with_effort(config.effort.clone()),
+        ))
+    }
+    #[cfg(not(feature = "openai"))]
+    {
+        let _ = config;
+        bail!(
+            "this build has no OpenAI provider\n\
+             rebuild with `cargo build --features openai`, or use \
+             `--provider replay --cassette <FILE>`"
+        );
+    }
 }
 
 fn write_outputs(report: &RunReport, config: &RunConfig) -> Result<()> {

@@ -8,6 +8,32 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
 
 ## [Unreleased]
 
+**More than one model vendor** (closes [GAP-021](docs/gaps.md#gap-021))
+
+- An OpenAI-compatible provider, speaking **Chat Completions**. That shape was
+  chosen over a vendor-only one because a dozen other services speak it:
+  `INGOT_OPENAI_BASE_URL` reaches Azure, a gateway, or a local vLLM or
+  llama.cpp server, and the artifact does not change.
+- `RoutingProvider` sends each call to the vendor the artifact pinned with
+  `model exact "<vendor>/<model>"`. `--provider auto` is the new default, so a
+  source that names OpenAI runs against OpenAI without the operator repeating
+  it on the command line.
+- **A vendor the run cannot reach is an error naming it**, never a redirection.
+  Before this release the vendor half of a pinned reference was dropped and the
+  call went to Anthropic regardless — a plausible answer from a model the
+  artifact did not name, which is worse than a failure.
+- `http.rs` is shared by both providers, so the timeout, the retry rule and the
+  mapping from status code to error are decided once. Two providers that
+  retried differently would make one artifact behave two ways for reasons it
+  never mentions.
+- The OpenAI provider **refuses to guess a model**. Names change often enough
+  that a default produces a `404` reading like a bug in Ingot; the artifact
+  pins one, or `--model` does, or the run stops and says so.
+- Eleven wire tests against a localhost stub, covering bearer auth, the strict
+  JSON schema, refusals, truncation, and a gateway that reports an error with a
+  200 status.
+
+
 Agents can act. Tools declared in an `.ing` file are served by MCP servers the
 operator configures, so the two examples that compiled but could not run now
 have a way to run.

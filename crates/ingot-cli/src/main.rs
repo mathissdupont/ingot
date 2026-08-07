@@ -148,7 +148,10 @@ struct RunArgs {
     inputs: Vec<String>,
 
     /// Where completions come from.
-    #[arg(long, value_enum, default_value_t = ProviderChoice::Anthropic)]
+    ///
+    /// `auto` sends each call to the vendor the artifact pinned with
+    /// `model exact "<vendor>/<model>"`, using whichever API keys are exported.
+    #[arg(long, value_enum, default_value_t = ProviderChoice::Auto)]
     provider: ProviderChoice,
 
     /// Cassette to replay, for `--provider replay`.

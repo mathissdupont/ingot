@@ -169,6 +169,36 @@ command itself failed. Diagnostics, progress events and status lines go to
 stderr; `ingot ir` and `ingot run` write only their payload to stdout, so both
 are safe to pipe.
 
+### Choosing a model
+
+Which model an agent uses is part of the agent, not part of the command line:
+
+```ingot
+agent Brief(topic: string) -> brief<markdown> {
+  model exact "openai/gpt-5.1"      // or "anthropic/claude-opus-5"
+  ...
+}
+```
+
+`ingot run` reads the vendor from the artifact and sends the call there, using
+whichever keys are exported. An artifact that names a vendor you have no key for
+**stops** — it is never answered by a different vendor, because a plausible
+answer from the wrong model is the worst outcome available.
+
+| | |
+|---|---|
+| `anthropic/…` | Messages API. `ANTHROPIC_API_KEY` |
+| `openai/…` | Chat Completions. `OPENAI_API_KEY` |
+
+The OpenAI provider speaks **Chat Completions** on purpose: that is the shape a
+dozen other services also speak. `INGOT_OPENAI_BASE_URL` points it at Azure, a
+gateway, or a local vLLM or llama.cpp server, and the artifact does not change.
+
+An agent may instead state what it needs — `model requires { structured_output,
+context >= 128k }` — and let the provider pick. Anthropic resolves that against
+its default model; OpenAI refuses, because a guessed model name produces a `404`
+that reads like a bug here.
+
 ### Running an agent
 
 ```bash
