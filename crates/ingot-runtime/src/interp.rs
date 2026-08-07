@@ -427,6 +427,7 @@ impl Interp<'_> {
         }
 
         let invocation = ToolInvocation {
+            agent: self.ir.agent.clone(),
             reference: binding.reference.clone(),
             name: binding.name.clone(),
             transport: binding.transport.clone(),

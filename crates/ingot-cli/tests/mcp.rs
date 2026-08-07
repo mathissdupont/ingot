@@ -393,6 +393,63 @@ fn sandbox_says_so_when_nothing_would_be_contained() {
 }
 
 #[test]
+fn run_sandbox_refuses_before_starting_anything_it_cannot_enforce() {
+    // The refusal happens while planning, so this holds whether or not a
+    // container runtime is installed — which is what makes it assertable in CI
+    // on three platforms.
+    let source = DIGEST_SOURCE.replace("network deny", "network allow [\"example.org\"]");
+    let project = Project::new("sandbox-unenforced", &source, true);
+    let stub = stub_provider(vec![text_reply("# never reached")]);
+
+    let mut args = digest_args(&project);
+    args.push("--sandbox".to_string());
+    let output = run(&as_args(&args), Some(&stub.url));
+
+    assert_ne!(code(&output), EXIT_OK);
+    let message = stderr(&output);
+    assert!(message.contains("cannot honour every rule"), "{message}");
+    assert!(message.contains("example.org"), "{message}");
+    assert!(message.contains("--sandbox-allow-unenforced"), "{message}");
+}
+
+#[test]
+fn run_sandbox_reports_a_policy_path_that_is_not_there() {
+    let source = DIGEST_SOURCE.replace(
+        "filesystem_read allow [\"data\"]",
+        "filesystem_read allow [\"absent\"]",
+    );
+    let project = Project::new("sandbox-run-missing", &source, true);
+    let stub = stub_provider(vec![text_reply("# never reached")]);
+
+    let mut args = digest_args(&project);
+    args.push("--sandbox".to_string());
+    let output = run(&as_args(&args), Some(&stub.url));
+
+    assert_ne!(code(&output), EXIT_OK);
+    assert!(
+        stderr(&output).contains("does not exist"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn a_run_says_whether_the_policy_is_enforced_or_merely_checked() {
+    // Without --sandbox the policy is checked and not enforced, and the run
+    // says so rather than leaving it to be inferred from remembered flags.
+    let project = Project::new("sandbox-unstated", DIGEST_SOURCE, true);
+    let stub = stub_provider(vec![text_reply("# Digest")]);
+
+    let output = run(&as_args(&digest_args(&project)), Some(&stub.url));
+    assert_eq!(code(&output), EXIT_OK, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("checked, not enforced"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
 fn a_program_without_tools_needs_no_servers() {
     let path = repo_root()
         .join("examples/document-summarizer")

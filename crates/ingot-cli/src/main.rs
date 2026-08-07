@@ -189,6 +189,21 @@ struct RunArgs {
     #[arg(long)]
     no_tools: bool,
 
+    /// Run each tool server inside a boundary derived from the agent's policy.
+    ///
+    /// Needs a container runtime and an `image` on each server. `ingot sandbox`
+    /// shows what the boundary would be.
+    #[arg(long)]
+    sandbox: bool,
+
+    /// Proceed even where the boundary cannot honour a rule the policy states.
+    #[arg(long, requires = "sandbox")]
+    sandbox_allow_unenforced: bool,
+
+    /// The root the artifact's policy paths are relative to.
+    #[arg(long, value_name = "DIR")]
+    workspace: Option<PathBuf>,
+
     /// Stop after this many steps, whatever the artifact's own budget allows.
     #[arg(long, default_value_t = 1000, value_name = "N")]
     max_steps: u32,
@@ -546,8 +561,22 @@ fn run_run(args: &RunArgs, color: RenderColor) -> Result<u8> {
             mcp: target.mcp(),
             root: target.root.clone(),
             no_tools: args.no_tools,
+            sandbox: args.sandbox,
+            sandbox_allow_unenforced: args.sandbox_allow_unenforced,
+            workspace: workspace(args.workspace.as_deref(), &target)?,
         },
     )
+}
+
+/// The root policy paths are relative to: the flag, then the manifest, then the
+/// project directory.
+fn workspace(flag: Option<&Path>, target: &Target) -> Result<PathBuf> {
+    let chosen = flag
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| target.workspace());
+    chosen
+        .canonicalize()
+        .with_context(|| format!("resolving the workspace {}", chosen.display()))
 }
 
 fn run_tools(args: &PathArgs, color: RenderColor) -> Result<u8> {
@@ -607,15 +636,10 @@ fn run_sandbox(args: &SandboxArgs, color: RenderColor) -> Result<u8> {
         return Ok(EXIT_DIAGNOSTICS);
     }
 
-    let workspace = args.workspace.clone().unwrap_or_else(|| target.workspace());
-    let workspace = workspace
-        .canonicalize()
-        .with_context(|| format!("resolving the workspace {}", workspace.display()))?;
-
     sandbox::inspect(
         &compilation,
         &SandboxConfig {
-            workspace,
+            workspace: workspace(args.workspace.as_deref(), &target)?,
             mcp: target.mcp(),
             json: args.json,
         },

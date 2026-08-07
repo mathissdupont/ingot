@@ -33,6 +33,7 @@ fn config(root: &Path, allow_write: bool, tools: &[(&str, &str)]) -> McpConfig {
             name: "files".to_string(),
             command: SERVER.to_string(),
             args,
+            image: None,
             cwd: None,
             pass_env: Vec::new(),
             tools: tools
@@ -51,6 +52,7 @@ fn required(names: &[&str]) -> BTreeSet<String> {
 
 fn invocation(name: &str, result_type: &str, arguments: &[(&str, Value)]) -> ToolInvocation {
     ToolInvocation {
+        agent: "test.Agent".to_string(),
         reference: format!("mcp:{name}"),
         name: name.to_string(),
         transport: "mcp".to_string(),

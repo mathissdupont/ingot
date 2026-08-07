@@ -6,6 +6,12 @@
 //!
 //! Two servers publishing the same tool is a configuration error, not a race:
 //! which one answers must not depend on which one started first.
+//!
+//! A server is started **once per agent that holds one of its tools**, not once
+//! overall. Two agents in a program deliberately differ — in
+//! `examples/code-review-team` the sub-agent may read and the coordinator may
+//! write — and when a [`Launcher`] bounds what a server can reach, one shared
+//! instance would have to be wide enough for both.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -16,10 +22,65 @@ use serde_json::{Map, Value};
 use crate::client::{McpClient, McpError, ServerInfo, ToolDescriptor};
 use crate::config::{McpConfig, ServerConfig};
 use crate::convert::to_ingot_value;
-use crate::transport::ChildTransport;
+use crate::transport::{ChildTransport, Transport};
 
 /// The only transport an artifact may declare in language 0.1.
 const TRANSPORT: &str = "mcp";
+
+/// One agent and the MCP tools it holds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentTools {
+    pub agent: String,
+    pub tools: BTreeSet<String>,
+}
+
+impl AgentTools {
+    pub fn new(agent: impl Into<String>, tools: BTreeSet<String>) -> AgentTools {
+        AgentTools {
+            agent: agent.into(),
+            tools,
+        }
+    }
+}
+
+/// How a server process is started.
+///
+/// The default starts it directly. A sandboxing launcher starts it inside a
+/// boundary derived from the calling agent's policy — which is why the agent's
+/// name is a parameter rather than something the launcher could look up.
+pub trait Launcher {
+    fn launch(
+        &self,
+        server: &ServerConfig,
+        agent: &str,
+        cwd: &Path,
+    ) -> Result<Box<dyn Transport>, String>;
+
+    /// One line for the run log, so it is never a mystery whether a boundary
+    /// was in effect.
+    fn describe(&self) -> String;
+}
+
+/// Starts a server as a child process of this one, with the operator's
+/// filesystem and the operator's network. What Ingot has always done.
+pub struct DirectLauncher;
+
+impl Launcher for DirectLauncher {
+    fn launch(
+        &self,
+        server: &ServerConfig,
+        _agent: &str,
+        cwd: &Path,
+    ) -> Result<Box<dyn Transport>, String> {
+        ChildTransport::spawn(&server.command, &server.args, Some(cwd), &server.pass_env)
+            .map(|transport| Box::new(transport) as Box<dyn Transport>)
+            .map_err(|error| error.to_string())
+    }
+
+    fn describe(&self) -> String {
+        "tool servers run as child processes; the policy is checked, not enforced".to_string()
+    }
+}
 
 /// Where one Ingot tool name is served from.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,98 +95,140 @@ pub struct ResolvedTool {
     pub aliased: bool,
 }
 
-struct Connected {
-    name: String,
+struct Instance {
+    agent: String,
     client: McpClient,
     published: Vec<ToolDescriptor>,
 }
 
+struct Slot {
+    name: String,
+    instances: Vec<Instance>,
+}
+
 struct Route {
-    server: usize,
+    slot: usize,
     remote: String,
 }
 
 pub struct McpToolHost {
-    servers: Vec<Connected>,
+    slots: Vec<Slot>,
     routes: BTreeMap<String, Route>,
     aliased: BTreeSet<String>,
+    launcher: String,
 }
 
 impl McpToolHost {
-    /// Connect to the servers needed to serve `required`.
+    /// Connect for a single unnamed agent, starting servers directly.
     ///
-    /// A server whose manifest entry maps none of the required tools is not
-    /// started at all: configuring a tool server should not mean paying for it
-    /// on every run of every agent.
+    /// The shape most callers want, and the one every test that does not care
+    /// about boundaries uses.
     pub fn connect(
         config: &McpConfig,
         root: &Path,
         required: &BTreeSet<String>,
     ) -> Result<McpToolHost, McpError> {
-        McpToolHost::connect_inner(config, root, Some(required))
+        let agents = [AgentTools::new(String::new(), required.clone())];
+        McpToolHost::connect_agents(config, root, &agents, &DirectLauncher)
     }
 
     /// Connect to every configured server, whatever the artifact needs. Used by
     /// `ingot tools`, whose whole job is to show what is out there.
     pub fn connect_all(config: &McpConfig, root: &Path) -> Result<McpToolHost, McpError> {
-        McpToolHost::connect_inner(config, root, None)
+        McpToolHost::build(config, root, None, &DirectLauncher)
     }
 
-    fn connect_inner(
+    /// Connect for each agent that needs a server, through `launcher`.
+    pub fn connect_agents(
         config: &McpConfig,
         root: &Path,
-        required: Option<&BTreeSet<String>>,
+        agents: &[AgentTools],
+        launcher: &dyn Launcher,
+    ) -> Result<McpToolHost, McpError> {
+        McpToolHost::build(config, root, Some(agents), launcher)
+    }
+
+    fn build(
+        config: &McpConfig,
+        root: &Path,
+        agents: Option<&[AgentTools]>,
+        launcher: &dyn Launcher,
     ) -> Result<McpToolHost, McpError> {
         config.validate().map_err(McpError::Configuration)?;
 
         let mut host = McpToolHost {
-            servers: Vec::new(),
+            slots: Vec::new(),
             routes: BTreeMap::new(),
             aliased: BTreeSet::new(),
+            launcher: launcher.describe(),
         };
 
-        if required.is_some_and(BTreeSet::is_empty) {
+        // `None` means "show me everything", which `ingot tools` wants. One
+        // unnamed agent that needs nothing means "start nothing".
+        let wanted: Vec<AgentTools> = match agents {
+            Some(agents) => agents
+                .iter()
+                .filter(|agent| !agent.tools.is_empty())
+                .cloned()
+                .collect(),
+            None => vec![AgentTools::new(String::new(), BTreeSet::new())],
+        };
+        if agents.is_some() && wanted.is_empty() {
             return Ok(host);
         }
 
         for server in &config.servers {
-            if let Some(required) = required {
-                if skippable(server, required) {
-                    continue;
+            let needed: Vec<&AgentTools> = wanted
+                .iter()
+                .filter(|agent| agents.is_none() || !skippable(server, &agent.tools))
+                .collect();
+            if needed.is_empty() {
+                continue;
+            }
+
+            let cwd = working_directory(root, server);
+            let mut instances = Vec::new();
+            for agent in needed {
+                let transport = launcher
+                    .launch(server, &agent.agent, &cwd)
+                    .map_err(|reason| McpError::Transport {
+                        server: server.name.clone(),
+                        reason,
+                        stderr: String::new(),
+                    })?;
+
+                let mut client = McpClient::new(server.name.clone(), transport, config.timeout());
+                let info = client.initialize()?.clone();
+                if !info.serves_tools {
+                    return Err(McpError::Configuration(format!(
+                        "MCP server `{}` ({} {}) declares no `tools` capability, so it has no \
+                         tools to serve",
+                        server.name, info.name, info.version
+                    )));
                 }
+                let published = client.list_tools()?;
+                instances.push(Instance {
+                    agent: agent.agent.clone(),
+                    client,
+                    published,
+                });
             }
 
-            let transport = ChildTransport::spawn(
-                &server.command,
-                &server.args,
-                Some(&working_directory(root, server)),
-                &server.pass_env,
-            )
-            .map_err(|error| McpError::Transport {
-                server: server.name.clone(),
-                reason: error.to_string(),
-                stderr: String::new(),
-            })?;
-
-            let mut client =
-                McpClient::new(server.name.clone(), Box::new(transport), config.timeout());
-            let info = client.initialize()?.clone();
-            if !info.serves_tools {
-                return Err(McpError::Configuration(format!(
-                    "MCP server `{}` ({} {}) declares no `tools` capability, so it has no tools \
-                     to serve",
-                    server.name, info.name, info.version
-                )));
-            }
-            let published = client.list_tools()?;
-
-            let index = host.servers.len();
-            host.servers.push(Connected {
+            let index = host.slots.len();
+            host.slots.push(Slot {
                 name: server.name.clone(),
-                client,
-                published,
+                instances,
             });
-            host.add_routes(index, server, required)?;
+            // Routing comes from the first instance. A server publishes the
+            // same tools whichever agent it was started for; only what those
+            // tools can reach differs.
+            let filter = agents.map(|_| {
+                wanted
+                    .iter()
+                    .flat_map(|agent| agent.tools.iter().cloned())
+                    .collect::<BTreeSet<String>>()
+            });
+            host.add_routes(index, server, filter.as_ref())?;
         }
 
         Ok(host)
@@ -137,11 +240,17 @@ impl McpToolHost {
         config: &ServerConfig,
         required: Option<&BTreeSet<String>>,
     ) -> Result<(), McpError> {
-        let published: BTreeSet<&str> = self.servers[index]
-            .published
-            .iter()
-            .map(|tool| tool.name.as_str())
-            .collect();
+        let published: BTreeSet<&str> = self.slots[index]
+            .instances
+            .first()
+            .map(|instance| {
+                instance
+                    .published
+                    .iter()
+                    .map(|tool| tool.name.as_str())
+                    .collect()
+            })
+            .unwrap_or_default();
 
         // Explicit aliases first: they are the operator's stated intent, and
         // they win over an accidental name match on the same server.
@@ -174,7 +283,7 @@ impl McpToolHost {
 
         for (tool, remote) in local {
             if let Some(existing) = self.routes.get(&tool) {
-                let first = &self.servers[existing.server].name;
+                let first = &self.slots[existing.slot].name;
                 return Err(McpError::Configuration(format!(
                     "both `{first}` and `{}` serve the tool `{tool}`\n  \
                      rename one with an entry under `[mcp.server.tools]`, or drop a server",
@@ -184,7 +293,7 @@ impl McpToolHost {
             self.routes.insert(
                 tool,
                 Route {
-                    server: index,
+                    slot: index,
                     remote,
                 },
             );
@@ -198,7 +307,7 @@ impl McpToolHost {
             .iter()
             .map(|(tool, route)| ResolvedTool {
                 tool: tool.clone(),
-                server: self.servers[route.server].name.clone(),
+                server: self.slots[route.slot].name.clone(),
                 remote: route.remote.clone(),
                 aliased: self.aliased.contains(tool),
             })
@@ -216,27 +325,40 @@ impl McpToolHost {
 
     /// Connected servers and what each publishes, for `ingot tools`.
     pub fn inventory(&self) -> Vec<(String, Option<ServerInfo>, Vec<ToolDescriptor>)> {
-        self.servers
+        self.slots
             .iter()
-            .map(|server| {
-                (
-                    server.name.clone(),
-                    server.client.info().cloned(),
-                    server.published.clone(),
-                )
+            .filter_map(|slot| {
+                let instance = slot.instances.first()?;
+                Some((
+                    slot.name.clone(),
+                    instance.client.info().cloned(),
+                    instance.published.clone(),
+                ))
             })
             .collect()
     }
 
+    /// How servers were started, for the run log.
+    pub fn launcher(&self) -> &str {
+        &self.launcher
+    }
+
+    /// How many server processes are running.
+    pub fn instances(&self) -> usize {
+        self.slots.iter().map(|slot| slot.instances.len()).sum()
+    }
+
     pub fn is_empty(&self) -> bool {
-        self.servers.is_empty()
+        self.slots.is_empty()
     }
 
     /// Stop every server. Also happens on drop; explicit so a caller can do it
     /// before printing a summary.
     pub fn close(&mut self) {
-        for server in &mut self.servers {
-            server.client.close();
+        for slot in &mut self.slots {
+            for instance in &mut slot.instances {
+                instance.client.close();
+            }
         }
     }
 }
@@ -261,14 +383,25 @@ impl ToolHost for McpToolHost {
             return Err(ToolError::NotAvailable(invocation.name.clone()));
         };
         let remote = route.remote.clone();
-        let server = route.server;
+        let slot = route.slot;
+
+        let instance = match instance_for(&mut self.slots[slot], &invocation.agent) {
+            Some(instance) => instance,
+            None => {
+                return Err(ToolError::Failed(format!(
+                    "no instance of `{}` was started for agent `{}`; \
+                     a server is started per agent so that each gets its own policy's bound",
+                    self.slots[slot].name, invocation.agent
+                )))
+            }
+        };
 
         let mut arguments = Map::new();
         for (name, value) in &invocation.arguments {
             arguments.insert(name.clone(), value.clone());
         }
 
-        let outcome = self.servers[server]
+        let outcome = instance
             .client
             .call_tool(&remote, Value::Object(arguments))
             .map_err(|error| ToolError::Failed(error.to_string()))?;
@@ -277,7 +410,20 @@ impl ToolHost for McpToolHost {
     }
 }
 
-/// Whether a server can be left unstarted for this run.
+/// The instance started for this agent.
+///
+/// Falls back to the only instance when there is exactly one and it was started
+/// for no particular agent — the shape [`McpToolHost::connect`] produces.
+fn instance_for<'a>(slot: &'a mut Slot, agent: &str) -> Option<&'a mut Instance> {
+    if slot.instances.len() == 1 && slot.instances[0].agent.is_empty() {
+        return slot.instances.first_mut();
+    }
+    slot.instances
+        .iter_mut()
+        .find(|instance| instance.agent == agent)
+}
+
+/// Whether a server can be left unstarted for this agent.
 ///
 /// Only decidable when the operator mapped names explicitly. With no map, the
 /// server's tool list is the only way to know what it offers, and reading that
@@ -310,6 +456,7 @@ mod tests {
             name: name.to_string(),
             command: "unused".to_string(),
             args: Vec::new(),
+            image: None,
             cwd: None,
             pass_env: Vec::new(),
             tools: tools
@@ -324,7 +471,7 @@ mod tests {
     }
 
     #[test]
-    fn a_server_that_maps_nothing_this_run_needs_is_not_started() {
+    fn a_server_that_maps_nothing_this_agent_needs_is_not_started() {
         let server = config("mail", &[("mailer.send", "send")]);
         assert!(skippable(&server, &required(&["web.search"])));
         assert!(!skippable(&server, &required(&["mailer.send"])));
@@ -362,6 +509,22 @@ mod tests {
         };
         assert!(host.is_empty());
         assert!(host.resolved().is_empty());
+        assert_eq!(host.instances(), 0);
+    }
+
+    #[test]
+    fn an_agent_that_holds_no_tools_starts_nothing() {
+        let config = McpConfig {
+            servers: vec![config("files", &[])],
+            ..McpConfig::default()
+        };
+        let agents = [AgentTools::new("test.Quiet", BTreeSet::new())];
+        let Ok(host) =
+            McpToolHost::connect_agents(&config, Path::new("."), &agents, &DirectLauncher)
+        else {
+            panic!("an agent with no tools needs no server");
+        };
+        assert!(host.is_empty());
     }
 
     #[test]
@@ -377,5 +540,11 @@ mod tests {
             matches!(error, McpError::Configuration(ref reason) if reason.contains("unique")),
             "{error}"
         );
+    }
+
+    #[test]
+    fn the_direct_launcher_says_the_policy_is_not_enforced() {
+        let described = DirectLauncher.describe();
+        assert!(described.contains("not enforced"), "{described}");
     }
 }

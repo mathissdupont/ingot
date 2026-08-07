@@ -4,13 +4,14 @@
 //! can this agent actually reach?" from the artifact and the manifest alone,
 //! before a container exists and without starting anything.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use ingot_compiler::Compilation;
 use ingot_ir::AgentIr;
-use ingot_mcp::{McpConfig, ServerConfig};
-use ingot_sandbox::{render, SandboxPlan};
+use ingot_mcp::{ChildTransport, Launcher, McpConfig, ServerConfig, Transport};
+use ingot_sandbox::{invocation, render, ExecutorError, Runtime, SandboxPlan};
 
 pub struct SandboxConfig {
     /// The root the artifact's policy paths are relative to.
@@ -22,35 +23,31 @@ pub struct SandboxConfig {
 
 /// Report the boundary for every (server, agent) pair this program needs.
 pub fn inspect(compilation: &Compilation, config: &SandboxConfig) -> Result<u8> {
-    let pairs = pairs(compilation, &config.mcp);
-
-    if pairs.is_empty() {
+    if pairs(compilation, &config.mcp).is_empty() {
         eprintln!("no tool server is configured, so nothing would be contained");
         eprintln!("hint: `ingot tools` shows what this program declares and what serves it");
         return Ok(super::EXIT_OK);
     }
 
-    let mut plans = Vec::new();
-    let mut failed = false;
-
-    for (server, agent) in pairs {
-        match ingot_sandbox::plan(agent, &server.name, &config.workspace, &server.pass_env) {
-            Ok(plan) => plans.push(plan),
-            Err(error) => {
-                eprintln!("error: agent {} cannot be contained: {error}", agent.agent);
-                failed = true;
+    let plans = match plan_all(compilation, &config.mcp, &config.workspace) {
+        Ok(plans) => plans.into_values().collect::<Vec<_>>(),
+        Err(problems) => {
+            for problem in problems {
+                eprintln!("error: {problem}");
             }
+            eprintln!();
+            eprintln!(
+                "hint: a policy path is relative to the workspace ({})",
+                config.workspace.display()
+            );
+            eprintln!("      pass --workspace <DIR> if that is not where the files are");
+            return Ok(super::EXIT_DIAGNOSTICS);
         }
-    }
+    };
 
-    if failed {
-        eprintln!();
-        eprintln!(
-            "hint: a policy path is relative to the workspace ({})",
-            config.workspace.display()
-        );
-        eprintln!("      pass --workspace <DIR> if that is not where the files are");
-        return Ok(super::EXIT_DIAGNOSTICS);
+    match ingot_sandbox::detect() {
+        Ok(runtime) => eprintln!("runtime   {} {}", runtime.program, runtime.version),
+        Err(error) => eprintln!("runtime   unavailable — {error}"),
     }
 
     if config.json {
@@ -83,6 +80,109 @@ fn print_plans(plans: &[SandboxPlan], workspace: &Path) {
              `ingot run --sandbox` refuses these unless you pass --sandbox-allow-unenforced",
             plans.len()
         );
+    }
+}
+
+/// Every boundary this program needs, keyed by the server and the agent.
+pub type Plans = BTreeMap<(String, String), SandboxPlan>;
+
+/// Plan a boundary for each (server, agent) pair.
+pub fn plan_all(
+    compilation: &Compilation,
+    mcp: &McpConfig,
+    workspace: &Path,
+) -> Result<Plans, Vec<String>> {
+    let mut plans = Plans::new();
+    let mut problems = Vec::new();
+
+    for (server, agent) in pairs(compilation, mcp) {
+        match ingot_sandbox::plan(agent, &server.name, workspace, &server.pass_env) {
+            Ok(plan) => {
+                plans.insert((server.name.clone(), agent.agent.clone()), plan);
+            }
+            Err(error) => problems.push(format!(
+                "agent {} cannot be contained: {error}",
+                agent.agent
+            )),
+        }
+    }
+
+    if problems.is_empty() {
+        Ok(plans)
+    } else {
+        Err(problems)
+    }
+}
+
+/// Starts each tool server inside the boundary planned for the calling agent.
+pub struct ContainerLauncher {
+    runtime: Runtime,
+    workspace: PathBuf,
+    plans: Plans,
+}
+
+impl ContainerLauncher {
+    pub fn new(runtime: Runtime, workspace: PathBuf, plans: Plans) -> ContainerLauncher {
+        ContainerLauncher {
+            runtime,
+            workspace,
+            plans,
+        }
+    }
+}
+
+impl Launcher for ContainerLauncher {
+    fn launch(
+        &self,
+        server: &ServerConfig,
+        agent: &str,
+        _cwd: &Path,
+    ) -> Result<Box<dyn Transport>, String> {
+        let plan = self
+            .plans
+            .get(&(server.name.clone(), agent.to_string()))
+            .ok_or_else(|| {
+                format!(
+                    "no boundary was planned for `{}` and agent `{agent}`",
+                    server.name
+                )
+            })?;
+
+        let image = server.image.as_deref().ok_or_else(|| {
+            ExecutorError::NoImage {
+                server: server.name.clone(),
+            }
+            .to_string()
+        })?;
+
+        // A write grant is how an artifact says "put the output here", so the
+        // directory is created rather than the run failing on its absence.
+        for directory in plan.directories_to_create() {
+            std::fs::create_dir_all(directory)
+                .map_err(|error| format!("creating {}: {error}", directory.display()))?;
+        }
+
+        let mut command = vec![server.command.clone()];
+        command.extend(server.args.iter().cloned());
+        let args = invocation(plan, image, &command, &self.workspace);
+
+        // The named variables have to reach the runtime's own environment for
+        // `--env NAME` to forward them, and nowhere else.
+        ChildTransport::spawn(
+            &self.runtime.program,
+            &args,
+            Some(&self.workspace),
+            &plan.env,
+        )
+        .map(|transport| Box::new(transport) as Box<dyn Transport>)
+        .map_err(|error| error.to_string())
+    }
+
+    fn describe(&self) -> String {
+        format!(
+            "tool servers run contained, by {} {}; the policy is enforced",
+            self.runtime.program, self.runtime.version
+        )
     }
 }
 
@@ -134,6 +234,7 @@ mod tests {
             name: name.to_string(),
             command: "unused".to_string(),
             args: Vec::new(),
+            image: None,
             cwd: None,
             pass_env: Vec::new(),
             tools: tools

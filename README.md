@@ -285,10 +285,34 @@ operator says where `crates` lives, so the same artifact means the same thing on
 two machines.
 
 What a boundary **cannot** enforce is named rather than glossed over, and
-`ingot run --sandbox` refuses to start when anything is unenforced. See
-[RFC-0004](rfcs/0004-ingot-containers.md) and
-[ADR-0006](docs/adr/0006-a-policy-enforcing-runner.md); the executor that turns
-a plan into a running boundary is the next piece of work.
+`ingot run --sandbox` refuses to start when anything is unenforced.
+
+`--sandbox` turns the plan into a real boundary: each tool server runs in a
+container with those mounts, that network, no capabilities, a read-only root
+filesystem, and only the environment variables `pass-env` named.
+
+```bash
+docker build -f tools/mcp-fs.Dockerfile -t ingot/mcp-fs:0.2 .
+ingot run examples/repo-digest --sandbox --input directory=. --input out=out/digest.md
+```
+
+Every run says which it is:
+
+```text
+tool servers run contained, by docker 28.3.2; the policy is enforced
+tool servers run as child processes; the policy is checked, not enforced
+```
+
+The image is the operator's choice — `image` on each `[[mcp.server]]` — because
+the server is the operator's program. Without one, `--sandbox` says so instead
+of running the server loose.
+
+See [RFC-0004](rfcs/0004-ingot-containers.md) and
+[ADR-0006](docs/adr/0006-a-policy-enforcing-runner.md). What the boundary
+actually grants is asserted against a real runtime in
+[`crates/ingot-sandbox/tests/container.rs`](crates/ingot-sandbox/tests/container.rs):
+a read mount refuses a write, an unnamed path does not exist inside, and
+`network deny` leaves no interface at all.
 
 ## How it fits together
 

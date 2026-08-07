@@ -47,8 +47,10 @@
 //! [RFC-0004]: https://github.com/mathissdupont/ingot/blob/main/rfcs/0004-ingot-containers.md
 //! [ADR-0006]: https://github.com/mathissdupont/ingot/blob/main/docs/adr/0006-a-policy-enforcing-runner.md
 
+pub mod executor;
 pub mod plan;
 pub mod report;
 
+pub use executor::{detect, invocation, ExecutorError, Runtime, RUNTIMES};
 pub use plan::{plan, Mount, Network, PlanError, SandboxPlan, Unenforceable, GUEST_WORKSPACE};
 pub use report::render;

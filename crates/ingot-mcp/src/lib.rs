@@ -56,5 +56,5 @@ pub use client::{
     PREFERRED_PROTOCOL_VERSION, SUPPORTED_PROTOCOL_VERSIONS,
 };
 pub use config::{McpConfig, ServerConfig, DEFAULT_TIMEOUT_SECONDS};
-pub use host::{McpToolHost, ResolvedTool};
+pub use host::{AgentTools, DirectLauncher, Launcher, McpToolHost, ResolvedTool};
 pub use transport::{ChildTransport, LoopbackTransport, Transport, TransportError};

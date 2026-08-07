@@ -50,6 +50,14 @@ jobs:
       # Golden files are checked in; a platform-dependent encoding fails here.
       - name: Golden IR is platform independent
         run: cargo test -p ingot-compiler --test golden_ir
+      # The boundary tests skip themselves where no container runtime exists,
+      # which would make them worthless if nothing ever insisted. The Linux
+      # runner has Docker, so it insists.
+      - name: The boundary holds against a real container runtime
+        if: runner.os == 'Linux'
+        run: cargo test -p ingot-sandbox --test container
+        env:
+          INGOT_REQUIRE_CONTAINER: "1"
 
   msrv:
     name: Minimum supported Rust version

@@ -13,6 +13,12 @@ use serde_json::Value;
 /// One resolved tool call.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ToolInvocation {
+    /// The agent making the call.
+    ///
+    /// A host that bounds what a tool can reach needs this: two agents in one
+    /// program deliberately hold different policies, and a bound wide enough
+    /// for both would hand each of them the other's grants.
+    pub agent: String,
     /// Transport-qualified reference, e.g. `mcp:web.search`.
     pub reference: String,
     /// Bare tool name, e.g. `web.search`.
@@ -186,6 +192,7 @@ mod tests {
 
     fn invocation(name: &str) -> ToolInvocation {
         ToolInvocation {
+            agent: "test.Agent".to_string(),
             reference: format!("mcp:{name}"),
             name: name.to_string(),
             transport: "mcp".to_string(),

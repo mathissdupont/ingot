@@ -57,7 +57,41 @@ have a way to run.
   the server's own bound. An agent whose policy allows `filesystem_read` still
   cannot read outside the server's root, and there is a test that asserts it.
 
-**Ingot Containers, stage 1** ([RFC-0004](rfcs/0004-ingot-containers.md))
+**Ingot Containers, stage 1 — the boundary runs** ([RFC-0004](rfcs/0004-ingot-containers.md))
+
+- `ingot run --sandbox` starts each tool server inside the boundary planned for
+  the calling agent: those mounts and no others, that network, no capabilities,
+  a read-only root filesystem, `/tmp` on tmpfs, and only the environment
+  variables `pass-env` named — forwarded by name, so a value never appears in an
+  argument vector or a process listing.
+- It **refuses before starting anything** when the boundary cannot honour a rule
+  the policy states, naming each one. `--sandbox-allow-unenforced` proceeds and
+  says which limits are advisory.
+- Every run now says which regime is in force — *"the policy is enforced"* or
+  *"the policy is checked, not enforced"* — rather than leaving it to be
+  inferred from which flags were remembered.
+- A server is started **once per agent** that holds one of its tools, so each
+  gets its own policy's bound. `ToolInvocation` carries the calling agent,
+  because a host that bounds reach cannot apply the right policy without it.
+- `image` on each `[[mcp.server]]` says what to run the server inside. The image
+  is the operator's choice because the server is the operator's program; without
+  one, `--sandbox` says so instead of running it loose.
+- `tools/mcp-fs.Dockerfile` builds the reference server from source.
+- What the boundary *grants* — as opposed to what we ask for — is asserted
+  against a real container runtime in `crates/ingot-sandbox/tests/container.rs`:
+  a read mount refuses a write, a write mount reaches the host, a path the
+  policy did not name does not exist inside, and `network deny` leaves no
+  interface at all. They report and return where no runtime exists;
+  `INGOT_REQUIRE_CONTAINER=1` makes that a failure, which is how CI runs them.
+
+### Fixed
+
+- **Every mount failed on Windows.** `Path::canonicalize` yields an
+  extended-length path (`\\?\C:\…`), and a container runtime splits a volume
+  specification on colons, so `\\?\C:` is one too many and the whole spec is
+  rejected. Found by running the boundary rather than by reading it.
+
+**Ingot Containers, stage 1 — planning** ([RFC-0004](rfcs/0004-ingot-containers.md))
 
 - `ingot-sandbox` derives, from an agent's own `policy` block, the boundary its
   tool servers should run inside: which paths are mounted and in which

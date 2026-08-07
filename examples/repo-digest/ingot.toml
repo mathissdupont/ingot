@@ -23,4 +23,7 @@ timeout-seconds = 30
 [[mcp.server]]
 name = "workspace"
 command = "ingot-mcp-fs"
+# Only used by `ingot run --sandbox`:
+#     docker build -f tools/mcp-fs.Dockerfile -t ingot/mcp-fs:0.2 .
+image = "ingot/mcp-fs:0.2"
 args = ["--root", "data", "--allow-write"]

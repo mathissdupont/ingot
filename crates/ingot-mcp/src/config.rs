@@ -100,6 +100,14 @@ pub struct ServerConfig {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub args: Vec<String>,
 
+    /// The container image to run `command` inside, under `--sandbox`.
+    ///
+    /// Required to contain a server and ignored otherwise. The image is the
+    /// operator's choice because the server is the operator's program: Ingot
+    /// cannot know what a third-party MCP server needs installed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
+
     /// Working directory, relative to the manifest. Defaults to the project
     /// root, so `args = ["--root", "."]` means the project, not wherever the
     /// operator happened to be standing.
@@ -134,6 +142,7 @@ mod tests {
             name: name.to_string(),
             command: "ingot-mcp-fs".to_string(),
             args: Vec::new(),
+            image: None,
             cwd: None,
             pass_env: Vec::new(),
             tools: BTreeMap::new(),

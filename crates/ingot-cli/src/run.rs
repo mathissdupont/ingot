@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use ingot_compiler::Compilation;
-use ingot_mcp::{McpConfig, McpToolHost};
+use ingot_mcp::{AgentTools, McpConfig, McpToolHost};
 use ingot_runtime::{
     run as run_agent, AgentRegistry, ApprovalHandler, ApprovalMode, ApprovalRequest, Artifact,
     Cassette, DenyAllTools, ModelProvider, RecordingProvider, ReplayProvider, RunError, RunEvent,
@@ -61,6 +61,12 @@ pub struct RunConfig {
     /// Start no tool server, whatever the manifest says. For checking that an
     /// agent fails the way it is supposed to when a tool is missing.
     pub no_tools: bool,
+    /// Run each tool server inside a boundary derived from the policy.
+    pub sandbox: bool,
+    /// Proceed even where the boundary cannot honour a policy rule.
+    pub sandbox_allow_unenforced: bool,
+    /// The root policy paths are relative to.
+    pub workspace: PathBuf,
 }
 
 /// Compile, execute, and write the artifacts.
@@ -256,6 +262,69 @@ fn required_tools(compilation: &Compilation) -> BTreeSet<String> {
         .collect()
 }
 
+/// The same, split by agent, for a host that gives each its own boundary.
+fn tools_per_agent(compilation: &Compilation) -> Vec<AgentTools> {
+    compilation
+        .agents
+        .iter()
+        .map(|agent| {
+            AgentTools::new(
+                agent.agent.clone(),
+                agent
+                    .tools
+                    .iter()
+                    .filter(|tool| tool.transport == MCP_TRANSPORT)
+                    .map(|tool| tool.name.clone())
+                    .collect(),
+            )
+        })
+        .collect()
+}
+
+/// Build the host that contains each tool server.
+///
+/// Refuses before starting anything when a boundary cannot honour a rule the
+/// artifact states. An operator who switched a sandbox on and believes
+/// `network allow ["arxiv.org"]` is in force is worse off than one who knows it
+/// is not.
+fn contained_host(compilation: &Compilation, config: &RunConfig) -> Result<McpToolHost> {
+    let plans = crate::sandbox::plan_all(compilation, &config.mcp, &config.workspace)
+        .map_err(|problems| anyhow::anyhow!("{}", problems.join("\n")))?;
+
+    let unenforced: Vec<String> = plans
+        .values()
+        .filter(|plan| !plan.is_fully_enforced())
+        .flat_map(|plan| {
+            plan.unenforceable
+                .iter()
+                .map(move |note| format!("  {} ({})\n    {}", note.policy, plan.agent, note.reason))
+        })
+        .collect();
+
+    if !unenforced.is_empty() && !config.sandbox_allow_unenforced {
+        bail!(
+            "the boundary cannot honour every rule this program states:\n{}\n\n\
+             run `ingot sandbox` to see the whole picture, tighten the policy, or pass \
+             --sandbox-allow-unenforced to proceed knowing which limits are advisory",
+            unenforced.join("\n")
+        );
+    }
+    for note in &unenforced {
+        eprintln!("warning: proceeding with an unenforced rule\n{note}");
+    }
+
+    let runtime = ingot_sandbox::detect().map_err(|error| anyhow::anyhow!("{error}"))?;
+    let launcher = crate::sandbox::ContainerLauncher::new(runtime, config.workspace.clone(), plans);
+
+    McpToolHost::connect_agents(
+        &config.mcp,
+        &config.root,
+        &tools_per_agent(compilation),
+        &launcher,
+    )
+    .map_err(|error| anyhow::anyhow!("{error}"))
+}
+
 /// Connect to the tool servers this program needs.
 ///
 /// The host is chosen here and nowhere else. When nothing is configured the
@@ -275,9 +344,17 @@ fn tool_host(compilation: &Compilation, config: &RunConfig) -> Result<Box<dyn To
         return Ok(Box::new(DenyAllTools));
     }
 
-    let host = McpToolHost::connect(&config.mcp, &config.root, &required)
-        .map_err(|error| anyhow::anyhow!("{error}"))?;
+    let host = if config.sandbox {
+        contained_host(compilation, config)?
+    } else {
+        McpToolHost::connect(&config.mcp, &config.root, &required)
+            .map_err(|error| anyhow::anyhow!("{error}"))?
+    };
 
+    // Say what got wired to what, and whether a boundary is in force. Whether
+    // the policy is enforced or merely checked must never be something an
+    // operator has to infer from which flags they remembered.
+    eprintln!("{}", host.launcher());
     for tool in host.resolved() {
         eprintln!(
             "tool {} <- {}:{}{}",
