@@ -761,6 +761,141 @@ fn assume_yes_is_an_explicit_opt_in() {
     assert!(result.is_ok());
 }
 
+/// A coordinator that calls a sub-agent and *then* reaches an approval gate.
+///
+/// This is the shape of `examples/code-review-team`: sub-agents review the
+/// files, and only afterwards does the external write need a human.
+fn gated_after_a_sub_agent() -> (AgentIr, crate::AgentRegistry) {
+    let mut child = base("test.Child");
+    child
+        .outputs
+        .insert("notes".into(), "artifact<markdown>".into());
+    child.entry = Some("c0".into());
+    child.nodes = vec![
+        llm("c0", Some("notes"), "review it", "markdown", Some("c1")),
+        emit("c1", "notes", "notes", None),
+    ];
+
+    let mut parent = base("test.Parent");
+    parent
+        .outputs
+        .insert("out".into(), "artifact<markdown>".into());
+    parent.effects = vec!["external_write".into(), "model_access".into()];
+    parent.policy.insert(
+        "external_write".into(),
+        PolicyRule {
+            decision: Decision::RequireApproval,
+            values: Vec::new(),
+            qualifier: None,
+        },
+    );
+    parent.tools = vec![ToolBinding {
+        reference: "mcp:mailer.send".into(),
+        name: "mailer.send".into(),
+        transport: "mcp".into(),
+        effects: vec!["external_write".into()],
+        signature: ToolSignature {
+            params: Vec::new(),
+            result: "bool".into(),
+        },
+    }];
+    parent.entry = Some("n0".into());
+
+    let mut call_child = Node::new("n0", NodeKind::AgentCall);
+    call_child.binding = Some("notes".into());
+    call_child.agent = Some("test.Child".into());
+    call_child.next = Some("n1".into());
+
+    let mut approval = Node::new("n1", NodeKind::Approval);
+    approval.label = Some("approval required before calling mcp:mailer.send".into());
+    approval.effects = vec!["external_write".into()];
+    approval.next = Some("n2".into());
+
+    let mut send = Node::new("n2", NodeKind::ToolCall);
+    send.binding = Some("sent".into());
+    send.tool = Some("mcp:mailer.send".into());
+    send.effects = vec!["external_write".into()];
+    send.next = Some("n3".into());
+
+    parent.nodes = vec![
+        call_child,
+        approval,
+        send,
+        llm("n3", Some("note"), "done", "markdown", Some("n4")),
+        emit("n4", "out", "note", None),
+    ];
+
+    let registry: crate::AgentRegistry = [("test.Child".to_string(), child)].into_iter().collect();
+    (parent, registry)
+}
+
+fn run_gated_after_a_sub_agent(
+    approval: ApprovalMode,
+) -> (Result<crate::RunReport, RunError>, Vec<RunEvent>) {
+    let (ir, registry) = gated_after_a_sub_agent();
+    let mut provider = ScriptedProvider::new(vec![json!("child notes"), json!("parent note")]);
+    let mut tools = StaticToolHost::new().with("mailer.send", |_| Ok(json!(true)));
+    let mut sink = CollectingSink::default();
+    let result = run(
+        &ir,
+        &registry,
+        &mut provider,
+        &mut tools,
+        &mut sink,
+        RunOptions {
+            approval,
+            ..RunOptions::default()
+        },
+    );
+    (result, sink.events)
+}
+
+#[test]
+fn calling_a_sub_agent_does_not_disarm_a_later_approval_gate() {
+    // The approval mode used to be *moved* into the sub-agent, leaving the
+    // parent set to deny. Every gate after the first `agent.call` was then
+    // refused without anyone being asked — including under `--yes`.
+    let (result, events) = run_gated_after_a_sub_agent(ApprovalMode::AssumeYes);
+    assert!(
+        result.is_ok(),
+        "the gate must still be approvable after a sub-agent call: {:?}",
+        result.err().map(|error| error.to_string())
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, RunEvent::ToolCall { .. })),
+        "the gated tool must run"
+    );
+}
+
+#[test]
+fn the_operator_is_asked_by_the_parent_even_after_a_sub_agent_ran() {
+    let (result, events) =
+        run_gated_after_a_sub_agent(ApprovalMode::Ask(Box::new(ScriptedApprovals::new(vec![
+            true,
+        ]))));
+    assert!(result.is_ok(), "{:?}", result.err().map(|e| e.to_string()));
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, RunEvent::ApprovalRequested { .. }))
+            .count(),
+        1,
+        "exactly one gate, and it was reached"
+    );
+    assert!(events
+        .iter()
+        .any(|event| matches!(event, RunEvent::ApprovalDecided { allowed: true, .. })));
+}
+
+#[test]
+fn a_denial_after_a_sub_agent_still_stops_the_run() {
+    let (result, _) = run_gated_after_a_sub_agent(ApprovalMode::Deny);
+    let error = result.unwrap_err();
+    assert!(matches!(error, RunError::ApprovalDenied { .. }), "{error}");
+}
+
 // --- state ----------------------------------------------------------------
 
 #[test]

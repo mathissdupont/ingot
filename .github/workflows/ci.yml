@@ -141,3 +141,8 @@ jobs:
         run: cargo doc --workspace --no-deps --all-features
         env:
           RUSTDOCFLAGS: -D warnings
+      # The gap register, the specs, the RFCs and the ADRs cross-reference each
+      # other heavily. A register full of dead links reads as maintained and is
+      # not.
+      - name: Documentation cross-references resolve
+        run: python3 scripts/check-links.py

@@ -57,15 +57,37 @@ have a way to run.
   the server's own bound. An agent whose policy allows `filesystem_read` still
   cannot read outside the server's root, and there is a test that asserts it.
 
+**Gap register** ([docs/gaps.md](docs/gaps.md))
+
+- Every known limitation now has a stable identifier, a class describing *what
+  happens to you* (unenforced, refused, degraded, absent, unproven), and an
+  entry saying why it is not done and what closing it would take. The same gaps
+  had been restated across six files, and restatements drift.
+- Two entries were not written down anywhere before: [GAP-001], a policy
+  allowlist whose values are carried into the IR and never enforced, and
+  [GAP-002], a `verify` node that reports `passed: true` without a verifier
+  existing to have checked anything. Both are **unenforced** — they look like
+  guarantees and are not.
+
+### Fixed
+
+- **A sub-agent call disarmed every later approval gate.** The approval mode was
+  *moved* into the callee and the caller was left set to deny, so the first
+  `agent.call` silently consumed the operator's handler: every gate after it was
+  refused without anyone being asked, including under `--yes`. This is exactly
+  the shape of `examples/code-review-team`, where sub-agents review the files
+  and only then does the external write need a human. The mode is now borrowed —
+  there is one operator, and both caller and callee reach the same one.
+
 ### Known gaps
 
-- Only the stdio transport. Reaching a remote server is a `network` effect the
-  language cannot yet scope to an endpoint, and shipping it without that would
-  put a hole in the effect system.
-- Cassettes record model exchanges only, so `ingot test` hosts no tools and a
-  tool-using agent fails there rather than passing by luck. `ingot run
-  --provider replay` does host them, which is how the end-to-end tests get a
-  deterministic model and real tools at the same time.
+See the [gap register](docs/gaps.md). New or changed in this release:
+[GAP-006](docs/gaps.md#gap-006) (cassettes carry no tool results),
+[GAP-007](docs/gaps.md#gap-007) (MCP over stdio only),
+[GAP-009](docs/gaps.md#gap-009) (MCP prompts, resources and sampling).
+
+[GAP-001]: docs/gaps.md#gap-001
+[GAP-002]: docs/gaps.md#gap-002
 
 ## [0.2.0] — 2026-08-06
 

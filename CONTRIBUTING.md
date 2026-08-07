@@ -112,6 +112,27 @@ touching effects, policy or the artifact format also needs the security owner.
 | `tests/golden-ir/` | checked-in IR the examples must reproduce |
 | `rfcs/` | proposals that change observable behaviour |
 | `docs/adr/` | records of decisions already made |
+| `docs/gaps.md` | every known limitation, with a stable identifier |
+
+## The gap register
+
+[`docs/gaps.md`](docs/gaps.md) is the list of everything this project knows it
+does not do. It is load-bearing, so it has rules:
+
+* **Shipping a limitation means adding an entry.** A pull request that leaves
+  something unenforced, unsupported or unproven adds a `GAP-nnn` and links to it
+  from wherever a reader would otherwise be misled. "We will document it later"
+  is how a limitation becomes a surprise.
+* **A bug is not a gap.** Something that does not do what it says it does gets
+  fixed. It becomes a gap only once the documentation stops claiming otherwise.
+* **Identifiers are never reused.** A closed gap moves to the bottom of the file
+  with the release that closed it; its section stays where a link can find it.
+* **Prefer a link to a restatement.** Specs, RFCs and ADRs keep the reasoning;
+  the register keeps the list. Copying the list into a fifth place is how the
+  five copies start disagreeing.
+
+`python3 scripts/check-links.py` verifies every relative link and heading anchor
+between Markdown files, and runs in CI.
 
 Crate boundaries are deliberate. `ingot-parser` knows nothing about targets;
 `ingot-semantic` knows nothing about any particular runtime; `ingot-ir` knows

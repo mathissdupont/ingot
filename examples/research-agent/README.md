@@ -50,6 +50,10 @@ which hosts the server actually contacts, because it cannot see inside another
 process. The allowlist is a statement of intent that a compliant backend, or the
 server itself, is expected to honour.
 
-This is a real limitation and worth knowing before relying on it. Confining a
-tool server's reach is the server's job, the same way `--root` is for
-`ingot-mcp-fs`.
+This is a real limitation and worth knowing before relying on it — it is
+[GAP-001](../../docs/gaps.md#gap-001) in the register. Confining a tool server's
+reach is the server's job, the same way `--root` is for `ingot-mcp-fs`.
+
+The `verify CitationCheck(...)` line has the same shape of caveat:
+[GAP-002](../../docs/gaps.md#gap-002). It evaluates its arguments and reports a
+pass, because IR 0.1 carries no way to run a verifier.

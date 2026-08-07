@@ -178,6 +178,7 @@ the language server. The [roadmap](../../README.md#roadmap) has the sequence;
 delegated rather than implemented, and why a reference interpreter exists
 anyway.
 
-Within what is built, three gaps are deliberate and all of them fail loudly:
-remote MCP transports ([ADR-0005](../adr/0005-mcp-over-stdio-only.md)), tool
-results in cassettes, and concurrent `parallel`.
+Within what is built, the known limitations are catalogued with stable
+identifiers in the [gap register](../gaps.md) — including the two that are
+*unenforced* rather than merely absent, and are therefore the ones to read
+first.

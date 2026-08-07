@@ -289,6 +289,7 @@ Details: [MCP binding 0.1](specs/tools/mcp-v0.1.md).
 * [`agent-ir.schema.json`](specs/ir/agent-ir.schema.json) — machine-readable schema
 * [Architecture](docs/architecture/overview.md) — how the phases fit together
 * [Decision records](docs/adr/) — why the load-bearing choices were made
+* [Gap register](docs/gaps.md) — every known limitation, with an identifier
 
 ## Roadmap
 
@@ -309,18 +310,25 @@ cassettes needed the interpreter to be worth recording. M5 is where the central
 claim is actually proven — the same source, two independent runtimes, with every
 unsupported feature named in a report rather than discovered in production.
 
-Three things are deliberately missing from the runtime today, and all of them
-fail loudly rather than silently:
+## What is missing
 
-* **Remote MCP servers.** Only a local subprocess, because reaching a server
-  over a network is itself a `network` effect and the language cannot yet say
-  which endpoints an agent may reach. Reasoning in
-  [ADR-0005](docs/adr/0005-mcp-over-stdio-only.md).
-* **Tool results in cassettes.** A cassette records model exchanges only, so
-  `ingot test` hosts no tools and a tool-using agent fails there.
-* **Concurrency.** `parallel` executes sequentially — valid, because the
-  compiler guarantees map iterations cannot observe each other, but not yet
-  fast.
+Every known limitation has an identifier and an entry in the
+**[gap register](docs/gaps.md)** — what is missing, how it shows up, why it is
+not done, and what closing it would take. Read it before relying on anything
+here.
+
+The four worth knowing before you write an agent:
+
+| | |
+|---|---|
+| [GAP-018](docs/gaps.md#gap-018) | The IR has one consumer, so *portability* is a design intention rather than an observed property. This is what M5 is for. |
+| [GAP-001](docs/gaps.md#gap-001) | `network allow ["arxiv.org"]` does not constrain which hosts a tool reaches. The decision is enforced; the list is not. |
+| [GAP-002](docs/gaps.md#gap-002) | `verify` evaluates its arguments and reports `passed: true` without a verifier existing to have checked anything. |
+| [GAP-006](docs/gaps.md#gap-006) | Cassettes record model exchanges only, so `ingot test` cannot test a tool-using agent. |
+
+The first two of those are **unenforced**: they look like guarantees and are
+not. Everything else in the register either fails loudly or cannot be expressed
+at all.
 
 ## Contributing
 

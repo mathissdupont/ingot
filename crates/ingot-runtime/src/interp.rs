@@ -72,20 +72,54 @@ struct Interp<'a> {
 }
 
 /// Execute an agent.
-#[allow(clippy::too_many_arguments)]
 pub fn run(
     ir: &AgentIr,
     registry: &AgentRegistry,
     provider: &mut dyn ModelProvider,
     tools: &mut dyn ToolHost,
     sink: &mut dyn EventSink,
-    mut options: RunOptions,
+    options: RunOptions,
+) -> Result<RunReport, RunError> {
+    let RunOptions {
+        inputs,
+        mut approval,
+        max_steps,
+    } = options;
+    run_nested(
+        ir,
+        registry,
+        provider,
+        tools,
+        sink,
+        inputs,
+        &mut approval,
+        max_steps,
+    )
+}
+
+/// The body of a run, with the approval mode **borrowed** rather than owned.
+///
+/// A sub-agent has to be able to ask the same operator the parent would, and
+/// the parent has to still be able to ask afterwards. Handing the mode down by
+/// value did the first and broke the second: the handler was consumed by the
+/// first sub-agent call and every later gate in the parent was denied without
+/// anyone being asked.
+#[allow(clippy::too_many_arguments)]
+fn run_nested(
+    ir: &AgentIr,
+    registry: &AgentRegistry,
+    provider: &mut dyn ModelProvider,
+    tools: &mut dyn ToolHost,
+    sink: &mut dyn EventSink,
+    inputs: BTreeMap<String, Value>,
+    approval: &mut ApprovalMode,
+    step_ceiling: u32,
 ) -> Result<RunReport, RunError> {
     check_ir_version(ir)?;
 
     let mut bindings = BTreeMap::new();
     for (name, declared_type) in &ir.inputs {
-        let Some(value) = options.inputs.get(name) else {
+        let Some(value) = inputs.get(name) else {
             return Err(RunError::MissingInput {
                 name: name.clone(),
                 ty: declared_type.clone(),
@@ -99,7 +133,7 @@ pub fn run(
         })?;
         bindings.insert(name.clone(), value.clone());
     }
-    for name in options.inputs.keys() {
+    for name in inputs.keys() {
         if !ir.inputs.contains_key(name) {
             return Err(RunError::UnknownInput {
                 name: name.clone(),
@@ -114,8 +148,8 @@ pub fn run(
     });
 
     let max_steps = match ir.budget.steps {
-        Some(limit) if limit >= 0 => (limit as u32).min(options.max_steps),
-        _ => options.max_steps,
+        Some(limit) if limit >= 0 => (limit as u32).min(step_ceiling),
+        _ => step_ceiling,
     };
 
     let mut interp = Interp {
@@ -124,7 +158,7 @@ pub fn run(
         provider,
         tools,
         sink,
-        approval: &mut options.approval,
+        approval,
         bindings,
         state: BTreeMap::new(),
         outputs: BTreeMap::new(),
@@ -453,18 +487,20 @@ impl Interp<'_> {
         // The sub-agent gets its own budget and its own policy. The parent
         // cannot widen either: this is a fresh run against the callee's own
         // artifact, not an inlined continuation of the caller's.
+        //
+        // The approval mode is the one thing that is shared rather than
+        // duplicated. It is the operator, not the artifact, and there is only
+        // one of them.
         let sub = sub.clone();
-        let report = run(
+        let report = run_nested(
             &sub,
             self.registry,
             self.provider,
             self.tools,
             self.sink,
-            RunOptions {
-                inputs,
-                approval: std::mem::replace(self.approval, ApprovalMode::Deny),
-                max_steps: self.max_steps.saturating_sub(self.steps).max(1),
-            },
+            inputs,
+            &mut *self.approval,
+            self.max_steps.saturating_sub(self.steps).max(1),
         )
         .map_err(|error| RunError::SubAgent {
             node: node.id.clone(),

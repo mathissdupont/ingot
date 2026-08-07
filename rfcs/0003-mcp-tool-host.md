@@ -220,16 +220,25 @@ with a plugin system.
 
 ## What this leaves undone
 
-* **`ingot test` hosts no tools.** A cassette records model exchanges and
-  nothing else, so a tool call during replay would have to reach a real server —
-  and a test that touches the filesystem is not the offline, repeatable thing
-  `ingot test` promises. A tools-using agent therefore fails under `ingot test`
-  rather than passing by luck. Recording tool results is the obvious next piece
-  of work, and it is a cassette format change.
-* **Remote servers.** Only stdio, per the non-goals.
-* **Per-call effect narrowing.** A tool's effects are declared once for the
-  tool. There is no way to say "this call reads only `docs/`" beyond what the
-  policy allowlist and the server's root already give.
+Each of these has an entry in the [gap register](../docs/gaps.md), which is
+where their current state is tracked; this section is why they were left.
+
+* **`ingot test` hosts no tools** ([GAP-006]). A cassette records model
+  exchanges and nothing else, so a tool call during replay would have to reach a
+  real server — and a test that touches the filesystem is not the offline,
+  repeatable thing `ingot test` promises. A tools-using agent therefore fails
+  under `ingot test` rather than passing by luck. Recording tool results is the
+  obvious next piece of work, and it is a cassette format change.
+* **Remote servers** ([GAP-007]). Only stdio, per the non-goals.
+* **Per-call effect narrowing** ([GAP-013]). A tool's effects are declared once
+  for the tool. There is no way to say "this call reads only `docs/`" beyond
+  what the server's root already gives — and note that the policy allowlist does
+  *not* give it either ([GAP-001]).
+
+[GAP-001]: ../docs/gaps.md#gap-001
+[GAP-006]: ../docs/gaps.md#gap-006
+[GAP-007]: ../docs/gaps.md#gap-007
+[GAP-013]: ../docs/gaps.md#gap-013
 
 `ingot run --provider replay --cassette …` *does* work with live tools, which is
 how the end-to-end tests get determinism on the model side and reality on the
