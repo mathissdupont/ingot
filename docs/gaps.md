@@ -76,15 +76,18 @@ allow, deny, require approval — and stops there.
 tool that contacts anything, because the reach of a tool is decided by the tool
 server, not by the artifact. Ingot cannot see inside another process.
 
-*Why not yet.* Enforcing it needs somewhere to enforce it. For filesystem paths
-that could be the tool host; for hosts it cannot be, without either proxying
-every tool's traffic or trusting the server to self-limit. Both are designs, not
-patches. See [GAP-013] for the language side.
+*Why not yet.* Enforcing it needs somewhere to enforce it. A process boundary is
+not one: whatever the artifact says, a tool server runs with the operator's
+filesystem and the operator's network, and we cannot see inside it.
 
-*What closing it needs.* [GAP-013] first, then a runtime that passes the scope
-to a host that can honour it, and a conformance test that a backend which cannot
-honour it **refuses** rather than ignoring it — the rule in
-[Runtime 0.1 §2](../specs/runtime/v0.1.md).
+*What closing it needs.* A boundary the policy can configure. That is M9,
+[Ingot Containers](vision.md#ingot-containers-the-agents-environment) — the
+first place where `network allow ["arxiv.org"]` can be a kernel rule rather than
+a statement of intent. Accepted in
+[ADR-0006](adr/0006-a-policy-enforcing-runner.md). A conformance test must also
+require that a backend which *cannot* honour a scope **refuses** rather than
+ignoring it, per [Runtime 0.1 §2](../specs/runtime/v0.1.md). [GAP-013] is the
+separate, language-side half: expressing a scope per call rather than per agent.
 
 *Recorded in.* [`examples/research-agent/README.md`](../examples/research-agent/README.md),
 [Runtime 0.1 §7](../specs/runtime/v0.1.md).

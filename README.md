@@ -64,11 +64,17 @@ Ingot deliberately does **not** reimplement the layers that already exist:
 | Tool protocol | MCP. No new tool protocol. |
 | Agent-to-agent messaging | A2A. No new messaging protocol. |
 | Distribution | OCI registries. No new registry. |
-| Execution | Existing runtimes, through backends. A native runtime is deferred. |
+| General execution | Existing runtimes, through backends. |
+| Sandboxing | **Ours** — the policy block, enforced. See [ADR-0006](docs/adr/0006-a-policy-enforcing-runner.md). |
 
 The differentiators are compile-time portability, typed effects and
 capabilities, a machine-readable target compatibility report, reproducible
 artifacts, and a conformance suite backends can be tested against.
+
+The one place Ingot does build its own execution machinery is the last row, and
+the scope there is narrow on purpose: a **policy-enforcing runner**, not a
+general execution engine. [`docs/vision.md`](docs/vision.md) is the full picture
+of what the project is for.
 
 ## An example
 
@@ -287,6 +293,7 @@ Details: [MCP binding 0.1](specs/tools/mcp-v0.1.md).
 * [Runtime 0.1](specs/runtime/v0.1.md) — what executing an artifact means
 * [MCP binding 0.1](specs/tools/mcp-v0.1.md) — how a declared tool is served
 * [`agent-ir.schema.json`](specs/ir/agent-ir.schema.json) — machine-readable schema
+* [Vision](docs/vision.md) — what the project is for, and where it is going
 * [Architecture](docs/architecture/overview.md) — how the phases fit together
 * [Decision records](docs/adr/) — why the load-bearing choices were made
 * [Gap register](docs/gaps.md) — every known limitation, with an identifier
@@ -300,10 +307,16 @@ Details: [MCP binding 0.1](specs/tools/mcp-v0.1.md).
 | M2 | types, effects, policy, budgets, Agent IR | done |
 | M3 | reference interpreter, `ingot run`, end-to-end execution | done |
 | M4 | cassette record and replay, `ingot test`, MCP tool host | done |
-| M5 | a second backend and the portability report | next |
+| M5 | a second backend and the portability report | planned |
 | M6 | OCI artifact, lockfile, reproducible digest | planned |
 | M7 | language server and editor support | planned |
 | M8 | conformance suite and backend author guide | planned |
+| M9 | Ingot Containers — the policy block as an enforced boundary | next |
+| M10 | `ingot new` — authoring with a model, verified by the compiler | planned |
+
+A number is an identity, not a position in a queue; things get referenced by it,
+so they keep it. The order we intend to work in is **M9 → M5 → M6 → M10 → M8 →
+M7**, and [`docs/vision.md`](docs/vision.md) says why each is there at all.
 
 M3 and M4 landed together: the interpreter needed cassettes to be testable, and
 cassettes needed the interpreter to be worth recording. M5 is where the central

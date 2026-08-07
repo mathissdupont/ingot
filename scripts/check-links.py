@@ -25,13 +25,23 @@ HEADING = re.compile(r"^#{1,6}\s+(.*)$", re.MULTILINE)
 FENCE = re.compile(r"^```.*?^```", re.MULTILINE | re.DOTALL)
 
 
-def slug(heading: str) -> str:
-    """GitHub's heading-to-anchor rule, near enough for our own headings."""
+def slugs(heading: str) -> set[str]:
+    """The anchors a heading might plausibly have.
+
+    Renderers disagree about punctuation — GitHub's slugger keeps dash
+    characters and turns each space into a hyphen, so `A — B` becomes
+    `a-—-b`, while a stricter reading gives `a-b`. Rather than pick a side and
+    be wrong somewhere, accept either, and prefer headings that do not make the
+    question arise.
+    """
     text = heading.strip().lower()
     text = re.sub(r"`([^`]*)`", r"\1", text)
     text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text)
-    text = re.sub(r"[^\w\s-]", "", text)
-    return re.sub(r"\s+", "-", text)
+
+    strict = re.sub(r"\s+", "-", re.sub(r"[^\w\s-]", "", text))
+    # GitHub: drop other punctuation, keep dashes, one hyphen per space.
+    github = re.sub(r"\s", "-", re.sub(r"[^\w\s‐-―-]", "", text))
+    return {strict, github}
 
 
 def markdown_files(root: Path) -> list[Path]:
@@ -48,7 +58,9 @@ def main() -> int:
     anchors = {}
     for path in files:
         body = path.read_text(encoding="utf-8")
-        anchors[path] = {slug(match) for match in HEADING.findall(body)}
+        anchors[path] = {
+            anchor for match in HEADING.findall(body) for anchor in slugs(match)
+        }
 
     problems: list[str] = []
     checked = 0

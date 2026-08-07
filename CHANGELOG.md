@@ -57,6 +57,22 @@ have a way to run.
   the server's own bound. An agent whose policy allows `filesystem_read` still
   cannot read outside the server's root, and there is a test that asserts it.
 
+**Scope** ([docs/vision.md](docs/vision.md), [ADR-0006](docs/adr/0006-a-policy-enforcing-runner.md))
+
+- `docs/vision.md` states what the project is for end to end, including the two
+  things it is growing into: **Ingot Containers**, where an agent's `policy`
+  block configures an enforced boundary rather than serving as a checklist, and
+  **authoring with a model**, where the compiler is the verifier in the loop.
+- [ADR-0006](docs/adr/0006-a-policy-enforcing-runner.md) amends
+  [ADR-0002](docs/adr/0002-compiler-not-runtime.md), which had listed five
+  conditions for owning a runtime. Two are met and three are not, so the scope
+  is narrowed structurally: stage 1 contains the **tool servers** and adds no
+  new consumer of the IR, and stage 2 — containing the run itself — is blocked
+  on a second backend existing, because a project with its own runtime has an
+  incentive to make that runtime the good target.
+- Roadmap gains M9 (Ingot Containers) and M10 (`ingot new`). Milestone numbers
+  are identities, not positions; the intended order is stated separately.
+
 **Gap register** ([docs/gaps.md](docs/gaps.md))
 
 - Every known limitation now has a stable identifier, a class describing *what
