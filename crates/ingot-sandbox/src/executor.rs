@@ -64,6 +64,14 @@ pub struct Runtime {
     pub version: String,
 }
 
+/// The only kind of container the boundary can be expressed in.
+///
+/// A read-only root filesystem, `--cap-drop`, `--network none` and a POSIX
+/// working directory are all Linux-container features. A Windows-container
+/// daemon accepts some of them and rejects others, which would mean a boundary
+/// that is partly applied — the one outcome worth refusing over.
+const REQUIRED_OS: &str = "linux";
+
 /// Find a usable container runtime.
 ///
 /// Asks each candidate for its version rather than merely looking on `PATH`:
@@ -81,6 +89,23 @@ pub fn detect() -> Result<Runtime, ExecutorError> {
         match output {
             Ok(output) if output.status.success() => {
                 let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+
+                // Docker Desktop can be pointed at either a Linux or a Windows
+                // daemon, and the same `docker` command answers for both.
+                if let Some(os) = server_os(program) {
+                    if os != REQUIRED_OS {
+                        last = Some(ExecutorError::RuntimeUnavailable {
+                            runtime: (*program).to_string(),
+                            reason: format!(
+                                "it is serving {os} containers, and the boundary needs {REQUIRED_OS} \
+                                 ones — a read-only root filesystem and `--network none` are not \
+                                 available otherwise, so the boundary would be partly applied"
+                            ),
+                        });
+                        continue;
+                    }
+                }
+
                 return Ok(Runtime {
                     program: (*program).to_string(),
                     version: if version.is_empty() {
@@ -178,6 +203,28 @@ pub fn invocation(
     args.push(image.to_string());
     args.extend(command.iter().cloned());
     args
+}
+
+/// What kind of container this daemon serves, when it will say.
+///
+/// `None` means it did not answer the question — Podman has no such field —
+/// and an unanswered question is not evidence of a problem.
+fn server_os(program: &str) -> Option<String> {
+    let output = Command::new(program)
+        .args(["version", "--format", "{{.Server.Os}}"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let os = String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .to_ascii_lowercase();
+    if os.is_empty() || os.contains("<no value>") {
+        None
+    } else {
+        Some(os)
+    }
 }
 
 /// A host path in the form a container runtime will accept.
@@ -418,7 +465,9 @@ mod tests {
     #[test]
     fn detection_says_which_problem_it_is() {
         // Whatever this machine has, the error must distinguish "not installed"
-        // from "installed but not answering" — they need different advice.
+        // from "installed but not answering" — they need different advice, and
+        // "serving the wrong kind of container" is a third case that looks like
+        // success until a flag is rejected.
         match detect() {
             Ok(runtime) => assert!(RUNTIMES.contains(&runtime.program.as_str())),
             Err(ExecutorError::NoRuntime) => {}
@@ -429,5 +478,21 @@ mod tests {
             }
             Err(other) => panic!("detection cannot produce {other}"),
         }
+    }
+
+    #[test]
+    fn a_daemon_serving_the_wrong_kind_of_container_is_refused_not_partly_used() {
+        // A Windows-container daemon accepts `--volume` and rejects
+        // `--read-only`, so proceeding would give a boundary with the hardening
+        // silently missing. GitHub's windows-latest runner is exactly this.
+        let error = ExecutorError::RuntimeUnavailable {
+            runtime: "docker".into(),
+            reason: format!(
+                "it is serving windows containers, and the boundary needs {REQUIRED_OS} ones"
+            ),
+        };
+        let text = error.to_string();
+        assert!(text.contains("windows containers"), "{text}");
+        assert!(text.contains("without --sandbox"), "{text}");
     }
 }

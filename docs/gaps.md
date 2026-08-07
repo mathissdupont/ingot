@@ -55,6 +55,7 @@ to you*.
 | [GAP-017](#gap-017) | No conformance suite or backend author guide | Absent | M8 |
 | [GAP-018](#gap-018) | The IR has one consumer, so portability is undemonstrated | Unproven | M5 |
 | [GAP-019](#gap-019) | The name has had no trademark or registry clearance | Absent | legal review |
+| [GAP-020](#gap-020) | The boundary needs Linux containers | Refused | a second expression of the boundary |
 
 ---
 
@@ -246,6 +247,34 @@ Sampling — a server asking to use the agent's model — would be an effect not
 declared. Resources have no type in the language.
 
 *Recorded in.* [MCP binding 0.1 §1](../specs/tools/mcp-v0.1.md).
+
+### GAP-020
+
+**The boundary needs Linux containers.**
+
+`ingot run --sandbox` expresses a boundary as a read-only root filesystem,
+`--cap-drop ALL`, `--network none` and a POSIX working directory. Those are
+Linux-container features. A Windows-container daemon accepts `--volume` and
+rejects `--read-only`, so proceeding would produce a boundary with the hardening
+silently missing.
+
+*How it shows up.* On a machine whose Docker is in Windows-container mode —
+including GitHub's `windows-latest` runner — `--sandbox` refuses, naming the
+reason. Running without it still works, with the policy checked rather than
+enforced. A Windows host with Docker Desktop in Linux-container mode is fine,
+and is where this was developed.
+
+*Why not yet.* Expressing the same boundary a second way — Windows containers,
+or an OS-level mechanism such as Landlock or seccomp without containers at all —
+is a second implementation of the security-critical part, and a second one that
+is subtly weaker is worse than not having it.
+
+*What closing it needs.* A `Boundary` abstraction with more than one backing,
+and a conformance test per backing asserting the same properties the container
+tests assert today.
+
+*Recorded in.* [RFC-0004](../rfcs/0004-ingot-containers.md),
+`crates/ingot-sandbox/src/executor.rs`.
 
 ---
 
