@@ -18,8 +18,13 @@ another. Worse, nothing tells you *before it runs* that it needs a permission
 nobody granted. You find out in production, and the way you find out is that it
 did something.
 
-Neither gives the thing that matters most as agents get real work: **a statement
-of what an agent is allowed to do, that something actually checks.**
+Neither gives one coherent path from an idea to something a person can keep:
+source they can read, errors they can act on, a deterministic test, a safe place
+to run, and an artifact that is not married to the framework that created it.
+
+Permissions are a necessary part of that path, not the whole product. An agent
+that is safe but difficult to create will not be used; an agent that is easy to
+generate but impossible to inspect, test or constrain will not be trusted.
 
 ## The claim
 
@@ -41,6 +46,11 @@ An agent that compiles is an agent whose permissions have been stated and
 checked, whose types line up, whose budget is satisfiable, and whose loops
 terminate. Not an agent that is *correct* — no compiler promises that — but one
 whose reach is known.
+
+The user-facing claim is broader: **write an agent in a small, readable language;
+Ingot helps you understand it, test it, run it inside the boundary its own policy
+describes, and move the same artifact elsewhere.** Security is the trust layer
+under that workflow. It is not a separate destination.
 
 ## The four parts
 
@@ -87,10 +97,36 @@ artifacts, and a conformance suite backends can be tested against.
 
 ## Where it is going
 
-Three things beyond the toolchain, each following from the same idea: a
+Four directions beyond the toolchain, each following from the same idea: a
 declaration is only worth writing if something enforces it.
 
-### Ingot Containers: the agent's environment
+### One product loop around the language
+
+The compiler, cassette system, runtime, containers and backends exist today, but
+the user has to operate them as separate systems. The next product milestone is
+to join them without hiding the language:
+
+```text
+create or write .ing
+        ↓
+develop with immediate diagnostics and traces
+        ↓
+replay a deterministic test
+        ↓
+run inside a policy-derived boundary
+        ↓
+package the same checked artifact
+```
+
+`.ing` remains the source of truth at every step. Templates produce it, the
+editor understands it, a model may propose a diff to it, and build/test/run all
+consume what it compiles to. There is no hidden workflow representation behind
+the language.
+
+[RFC-0007](../rfcs/0007-the-ingot-product-loop.md) defines this product loop,
+the delivery order and the work packages that will become implementation issues.
+
+### Ingot Containers: the safe-run implementation
 
 Today an agent's `policy` block is a **checklist**. The runtime asks "does this
 call need an effect the policy grants?", answers yes, and calls the tool. The
@@ -128,11 +164,18 @@ egress proxy: [GAP-001](gaps.md#gap-001). One limitation is worth knowing —
 sub-agents cannot yet cross into their own boundary, so a program whose agents
 need different ones is refused: [GAP-023](gaps.md#gap-023).
 
-### Authoring with a model
+This system is not discarded as authoring becomes easier. It moves behind the
+safe-run step. A user should benefit from the policy-derived mounts, network and
+credential topology without reconstructing Docker build commands or
+understanding the supervisor protocol. An unavailable boundary still refuses;
+ease of use never means silently running with weaker isolation.
 
-Writing an agent should not require learning a language first. `ingot new
-"review pull requests for security problems"` should produce a working `.ing`
-file.
+### Authoring with a model, without replacing the language
+
+Writing a first agent should not require learning the whole language first.
+`ingot new "review pull requests for security problems"` should produce a
+working, ordinary `.ing` file. It must not produce a hidden graph that happens
+to export Ingot.
 
 What makes this more than a code-generation gimmick is that Ingot has a
 **verifier**: the generated source either passes `ingot check` or comes back
@@ -145,17 +188,27 @@ to make code compile.** If the agent it wrote needs `network`, it says so and
 asks. A generator that silences its own safety checks is worse than no
 generator.
 
+The language remains fully usable without a model. Templates, `ingot dev`, the
+editor, compiler, tests and contained runs cannot depend on an authoring API key.
+Model assistance accelerates the same workflow and leaves a project that still
+works when it is gone.
+
 ### More than one place to run
 
-Portability is the central claim, and it is
-[unproven](gaps.md#gap-018) while our own interpreter is the only thing that
-reads the IR. A second backend is the falsification test, not a feature.
+Portability is the central claim. It is now observed by running the same artifact
+and cassette through the reference interpreter and an independent generated
+Python program. [GAP-018](gaps.md#gap-018) records what that falsification test
+closed; the next step is packaging it as the conformance suite in GAP-017.
 
 ## How to tell whether it worked
 
 - An agent's `policy` block is a boundary, not a comment.
 - The same artifact runs in more than one place, and what a target cannot do is
   reported before deployment rather than discovered during it.
+- A clean machine can create, check, replay and safely run a useful template
+  without reconstructing repository-specific setup.
+- Direct `.ing` authors receive immediate compiler diagnostics and a useful run
+  trace instead of operating each toolchain phase by hand.
 - Someone who has never written Ingot ships a working agent.
 - Every limitation is in [the gap register](gaps.md) rather than in someone's
   head.

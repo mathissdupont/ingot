@@ -12,16 +12,18 @@ lower into the configuration a real runtime consumes.
 ingot init research-agent
 ingot check                       # types, effects, policy, budgets
 ingot build                       # -> target/ingot/ResearchAgent.ir.json
+ingot build --target python       # -> target/ingot/ResearchAgent.py
 ingot run --input topic=…         # execute it
 ```
 
-Status: **milestone M4**. The front end is complete — lexer, parser, type and
+Status: **milestone M5**. The front end is complete — lexer, parser, type and
 effect checker, lowering to Agent IR — and a reference interpreter executes that
 IR against a real model provider, re-enforcing every capability, budget and
 approval the artifact declares. Tools are served over MCP by whichever servers
 the operator configures. Runs can be recorded to a cassette and replayed
-offline, so agent tests work in CI with no API key. Additional runtime backends,
-OCI packaging and the language server are planned; see [the roadmap](#roadmap).
+offline, so agent tests work in CI with no API key. A second, independent backend
+emits self-contained Python 3 and reports unsupported constructs before build;
+OCI packaging and the language server are planned. See [the roadmap](#roadmap).
 
 ---
 
@@ -70,6 +72,11 @@ Ingot deliberately does **not** reimplement the layers that already exist:
 The differentiators are compile-time portability, typed effects and
 capabilities, a machine-readable target compatibility report, reproducible
 artifacts, and a conformance suite backends can be tested against.
+
+The language remains the product surface. Templates, editor support and future
+model assistance all create or edit ordinary `.ing`; the compiler, cassette
+tests, policy-derived containers and backends form one product loop around that
+source. See [RFC-0007](rfcs/0007-the-ingot-product-loop.md).
 
 The one place Ingot does build its own execution machinery is the last row, and
 the scope there is narrow on purpose: a **policy-enforcing runner**, not a
@@ -171,7 +178,7 @@ export CARGO_TARGET_DIR=/c/build/ingot
 | `ingot init <name>` | create a project |
 | `ingot check` | parse, type-check, validate policy and budgets |
 | `ingot fmt [--check]` | canonical formatting |
-| `ingot build [--out-dir]` | compile to Agent IR |
+| `ingot build [--target ir\|python] [--out-dir]` | compile to Agent IR or self-contained Python 3 |
 | `ingot ir [--agent]` | print the IR to stdout |
 | `ingot run [--input k=v]` | execute the agent |
 | `ingot run --sandbox` | execute it with each tool server inside a boundary |
@@ -454,10 +461,10 @@ See [RFC-0005](rfcs/0005-the-contained-run.md) and
            │
      ┌─────┴──────────┐
      ▼                ▼
-  interpreter     other backends               ingot-runtime; more planned (M5)
+  interpreter     Python backend               ingot-runtime, ingot-backend-python
      │                │
      ▼                ▼
-  execution      portability report            planned: M5
+  execution      portability report            implemented: M5
      │
      ▼
   MCP servers (stdio)                          ingot-mcp
@@ -479,6 +486,7 @@ With `--sandbox` the MCP servers move inside a policy-derived boundary
 | `ingot-ir` | the Agent IR model and its canonical encoding |
 | `ingot-compiler` | the driver and lowering |
 | `ingot-runtime` | the reference interpreter, providers and cassettes |
+| `ingot-backend-python` | self-contained Python 3 emission and portability reports |
 | `ingot-mcp` | the MCP tool host, and the `ingot-mcp-fs` reference server |
 | `ingot-sandbox` | a `policy` block turned into a container boundary |
 | `ingot-supervisor` | the channel between a contained run and the host serving it |
@@ -505,24 +513,26 @@ With `--sandbox` the MCP servers move inside a policy-derived boundary
 | M2 | types, effects, policy, budgets, Agent IR | done |
 | M3 | reference interpreter, `ingot run`, end-to-end execution | done |
 | M4 | cassette record and replay, `ingot test`, MCP tool host | done |
-| M5 | a second backend and the portability report | planned |
+| M5 | a second backend and the portability report | done |
 | M6 | OCI artifact, lockfile, reproducible digest | planned |
 | M7 | language server and editor support | planned |
 | M8 | conformance suite and backend author guide | planned |
 | M9 | Ingot Containers — the policy block as an enforced boundary | done |
 | M10 | `ingot new` — authoring with a model, verified by the compiler | planned |
+| M11 | integrated `.ing` product loop: templates, `dev`, trace, readiness and safe-run UX | planned |
 
 A number is an identity, not a position in a queue; things get referenced by it,
-so they keep it. The order we intend to work in is **M9 → M5 → M6 → M10 → M8 →
-M7**, and [`docs/vision.md`](docs/vision.md) says why each is there at all.
+so they keep it. The proposed order is **M11 → M7 → Language 0.2 reuse RFCs
+→ M10 → M6 → M8**. [RFC-0007](rfcs/0007-the-ingot-product-loop.md)
+explains why the usable language loop now comes before generation and packaging.
 
 M3 and M4 landed together: the interpreter needed cassettes to be testable, and
 cassettes needed the interpreter to be worth recording. M9 landed in two stages —
 tool servers contained ([RFC-0004](rfcs/0004-ingot-containers.md)), then the run
 itself ([RFC-0005](rfcs/0005-the-contained-run.md)) — with one piece still open,
-[GAP-023](docs/gaps.md#gap-023). M5 is next, and is where the central claim is
-actually proven: the same source, two independent runtimes, with every unsupported
-feature named in a report rather than discovered in production.
+[GAP-023](docs/gaps.md#gap-023). M5 closed [GAP-018](docs/gaps.md#gap-018): the
+same artifact and cassette now run through two independent backends, and every
+unsupported construct is named in a portability report before deployment.
 
 ## What is missing
 
@@ -531,14 +541,15 @@ Every known limitation has an identifier and an entry in the
 not done, and what closing it would take. Read it before relying on anything
 here.
 
-The four worth knowing before you write an agent:
+The five worth knowing before you write an agent:
 
 | | |
 |---|---|
-| [GAP-018](docs/gaps.md#gap-018) | The IR has one consumer, so *portability* is a design intention rather than an observed property. This is what M5 is for. |
 | [GAP-001](docs/gaps.md#gap-001) | `network allow ["arxiv.org"]` does not constrain which hosts a tool reaches. The decision is enforced; the list is not. |
 | [GAP-002](docs/gaps.md#gap-002) | `verify` evaluates its arguments and reports `passed: true` without a verifier existing to have checked anything. |
 | [GAP-006](docs/gaps.md#gap-006) | Cassettes record model exchanges only, so `ingot test` cannot test a tool-using agent. |
+| [GAP-017](docs/gaps.md#gap-017) | The differential tests are not yet a packaged conformance suite or backend author guide. |
+| [GAP-025](docs/gaps.md#gap-025) | Authoring, checking, tracing, testing and safe execution are separate manual workflows. |
 
 The first two of those are **unenforced**: they look like guarantees and are
 not. Everything else in the register either fails loudly or cannot be expressed

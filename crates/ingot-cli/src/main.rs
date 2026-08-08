@@ -136,6 +136,36 @@ struct BuildArgs {
     /// Override the output directory.
     #[arg(long, value_name = "DIR")]
     out_dir: Option<PathBuf>,
+
+    /// What to compile to.
+    ///
+    /// `ir` writes the target-neutral Agent IR, which is what every backend
+    /// consumes. `python` writes one self-contained Python 3 program per agent.
+    #[arg(long = "target", value_enum, default_value_t = BuildTarget::Ir)]
+    backend: BuildTarget,
+
+    /// Build anyway when the target does not implement something the agent uses.
+    ///
+    /// The report says what, and the resulting program will not do it. Refused by
+    /// default, because a silently dropped construct is worse than a failed build.
+    #[arg(long)]
+    allow_unimplemented: bool,
+
+    /// Print the portability report as JSON instead of prose.
+    ///
+    /// `ingot build --target python --json | jq -e '.unimplemented == []'` is a
+    /// deployment gate.
+    #[arg(long)]
+    json: bool,
+}
+
+/// What `ingot build` compiles to.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+enum BuildTarget {
+    /// The target-neutral Agent IR. The default, and what every backend reads.
+    Ir,
+    /// A self-contained Python 3 program per agent.
+    Python,
 }
 
 #[derive(Args, Debug)]
@@ -494,16 +524,29 @@ fn run_fmt(args: &FmtArgs, color: RenderColor) -> Result<u8> {
 // --- build -----------------------------------------------------------------
 
 fn run_build(args: &BuildArgs, color: RenderColor) -> Result<u8> {
+    if (args.json || args.allow_unimplemented) && args.backend == BuildTarget::Ir {
+        bail!(
+            "--json and --allow-unimplemented belong to a portability report, and the `ir` \
+             target has nothing to report: the IR is what every backend reads, so nothing can \
+             fail to express it\n  \
+             pass --target python"
+        );
+    }
+
     let mut target = resolve_target(args.target.path.as_deref())?;
     if let Some(out_dir) = &args.out_dir {
         target.out_dir = out_dir.clone();
     }
 
-    if let Some(manifest) = &target.manifest {
-        println!(
-            "building {} {}",
-            manifest.project.name, manifest.project.version
-        );
+    // Machine-readable output must contain exactly one JSON document. Progress
+    // remains useful for the ordinary terminal-oriented build.
+    if !args.json {
+        if let Some(manifest) = &target.manifest {
+            println!(
+                "building {} {}",
+                manifest.project.name, manifest.project.version
+            );
+        }
     }
 
     let compilation = compile(&target)?;
@@ -512,21 +555,97 @@ fn run_build(args: &BuildArgs, color: RenderColor) -> Result<u8> {
         return Ok(EXIT_DIAGNOSTICS);
     }
 
+    if compilation.agents.is_empty() {
+        println!("nothing to build: the program declares no agent");
+        return Ok(EXIT_OK);
+    }
+
     std::fs::create_dir_all(&target.out_dir)
         .with_context(|| format!("creating {}", target.out_dir.display()))?;
 
+    match args.backend {
+        BuildTarget::Ir => build_ir(&compilation, &target),
+        BuildTarget::Python => build_python(&compilation, &target, args),
+    }
+}
+
+fn build_ir(compilation: &Compilation, target: &Target) -> Result<u8> {
     for agent in &compilation.agents {
-        let short_name = agent.agent.rsplit('.').next().unwrap_or(&agent.agent);
-        let path = target.out_dir.join(format!("{short_name}.ir.json"));
+        let path = target
+            .out_dir
+            .join(format!("{}.ir.json", short_name(agent)));
         std::fs::write(&path, agent.to_canonical_json())
             .with_context(|| format!("writing {}", path.display()))?;
         println!("{} -> {}", agent.agent, path.display());
     }
+    Ok(EXIT_OK)
+}
 
-    if compilation.agents.is_empty() {
-        println!("nothing to build: the program declares no agent");
+/// Compile for a target that is not the IR.
+///
+/// The report comes first and always, because the useful moment to learn that a
+/// target cannot express something is before the artifact is deployed rather
+/// than when the agent reaches the node.
+fn build_python(compilation: &Compilation, target: &Target, args: &BuildArgs) -> Result<u8> {
+    use ingot_backend_python as python;
+
+    let report = python::analyse(python::TARGET, &compilation.agents);
+
+    if args.json {
+        // A deployment gate reads `.unimplemented`; the per-agent detail is
+        // there for whoever has to fix it.
+        let payload = serde_json::json!({
+            "target": report.target,
+            "buildable": report.buildable(),
+            "unimplemented": report.unimplemented(),
+            "agents": report.agents,
+        });
+        println!("{}", serde_json::to_string_pretty(&payload)?);
+    } else {
+        eprintln!("{}", report.render());
+        eprintln!();
+    }
+
+    if !report.buildable() && !args.allow_unimplemented {
+        let blocked: Vec<&str> = report
+            .blocked()
+            .iter()
+            .map(|agent| agent.agent.as_str())
+            .collect();
+        bail!(
+            "`{}` does not implement everything these agents use: {}\n  \
+             fix the agent, or pass --allow-unimplemented to build one that will not do it",
+            python::TARGET,
+            blocked.join(", ")
+        );
+    }
+
+    for agent in &compilation.agents {
+        let source = match python::emit(agent) {
+            Ok(source) => source,
+            // Reaching here with --allow-unimplemented is the operator getting
+            // what they asked for, and it still refuses rather than emitting a
+            // program with a hole in it.
+            Err(error) => bail!(
+                "{} cannot be built for `{}`: {error}",
+                agent.agent,
+                python::TARGET
+            ),
+        };
+        let path = target
+            .out_dir
+            .join(format!("{}.{}", short_name(agent), python::EXTENSION));
+        std::fs::write(&path, &source).with_context(|| format!("writing {}", path.display()))?;
+        if !args.json {
+            println!("{} -> {}", agent.agent, path.display());
+        }
     }
     Ok(EXIT_OK)
+}
+
+/// The last segment of a dotted agent name, which is what a file is named after.
+fn short_name(agent: &ingot_ir::AgentIr) -> &str {
+    agent.agent.rsplit('.').next().unwrap_or(&agent.agent)
 }
 
 // --- ir --------------------------------------------------------------------

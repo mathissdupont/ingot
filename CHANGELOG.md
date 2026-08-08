@@ -8,6 +8,32 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
 
 ## [Unreleased]
 
+**A second backend and the portability report**
+([RFC-0006](rfcs/0006-a-second-backend.md); closes
+[GAP-018](docs/gaps.md#gap-018))
+
+- `ingot build --target python` emits one self-contained, standard-library-only
+  Python 3 program per agent. The generated program independently enforces input
+  schemas, policy, step and token budgets, loops, approvals, state, emissions,
+  checkpoints and model cassette replay.
+- The Python backend depends on Agent IR, not `ingot-runtime`; its execution
+  semantics were implemented from the Runtime and IR specifications so agreement
+  is evidence rather than shared code.
+- A portability report names degraded and unimplemented constructs before any
+  program is written. Builds refuse unimplemented nodes by default;
+  `--allow-unimplemented` makes the report inspectable without silently emitting
+  a program with a hole in it.
+- `--json` emits the report as a single machine-readable document, including an
+  `unimplemented` list suitable for a deployment gate.
+- Differential tests run the same document-summarizer artifact and cassette
+  through the Rust interpreter and generated Python, comparing the artifact byte
+  for byte and the event kinds in order. CI requires Python on all three hosted
+  platforms, so those tests cannot silently skip.
+- The first portability report is deliberately honest: `tool.call`,
+  `agent.call`, and `verify` are not implemented; `parallel`, `approval`, and
+  `checkpoint` are reported as degraded. Supported agents build and run without
+  installing a Python package.
+
 **The agent runs inside the boundary too** ([RFC-0005](rfcs/0005-the-contained-run.md),
 [ADR-0007](docs/adr/0007-containing-the-run-is-not-blocked-on-a-second-backend.md);
 narrows [GAP-001](docs/gaps.md#gap-001))

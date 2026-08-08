@@ -434,11 +434,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "ingot-backend-python"
+version = "0.3.0"
+dependencies = [
+ "ingot-ir",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "ingot-cli"
 version = "0.3.0"
 dependencies = [
  "anyhow",
  "clap",
+ "ingot-backend-python",
  "ingot-compiler",
  "ingot-diagnostics",
  "ingot-ir",

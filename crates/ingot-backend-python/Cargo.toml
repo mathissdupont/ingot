@@ -1,0 +1,18 @@
+[package]
+name = "ingot-backend-python"
+description = "A second Agent IR backend: emits a self-contained Python 3 program."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+# Deliberately thin. This crate reads `ingot-ir` and writes text; it must not
+# depend on `ingot-runtime`, because a backend that could reach into the
+# reference interpreter would inherit the semantics it is supposed to be an
+# independent check on. See RFC-0006.
+[dependencies]
+ingot-ir.workspace = true
+serde = { workspace = true }
+serde_json = { workspace = true }

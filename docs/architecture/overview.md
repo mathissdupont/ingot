@@ -165,6 +165,7 @@ names do not produce nonsense suggestions.
 | Structural | `ingot-compiler/src/tests.rs` | lowering shape: hoisting, regions, approvals |
 | Golden | `tests/golden-ir/` | the IR of the reference examples, byte for byte |
 | End to end | `ingot-cli/tests/cli.rs` | commands, exit codes, stdout/stderr split |
+| Differential | `ingot-cli/tests/differential.rs` | one artifact and cassette through Rust and generated Python |
 | Consistency | `golden_ir.rs` | the published schema matches the Rust model |
 
 The golden and consistency layers are the ones that catch drift. Everything else
@@ -172,8 +173,13 @@ catches mistakes.
 
 ## What is not built yet
 
-A second backend and the portability report, OCI packaging, the lockfile, and
-the language server. The [roadmap](../../README.md#roadmap) has the sequence;
+The components above are not yet joined into the integrated authoring loop in
+[RFC-0007](../../rfcs/0007-the-ingot-product-loop.md): there is no watch-mode
+`ingot dev`, unified readiness report, human trace or zero-guesswork reference
+contained run. The language server, reusable source modules, OCI packaging,
+lockfile, and packaged backend conformance suite are also not built.
+
+The [roadmap](../../README.md#roadmap) has the sequence;
 [ADR-0002](../adr/0002-compiler-not-runtime.md) explains why execution is
 delegated rather than implemented, and why a reference interpreter exists
 anyway.

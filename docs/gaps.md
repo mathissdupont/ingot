@@ -53,12 +53,13 @@ to you*.
 | [GAP-015](#gap-015) | No OCI artifact, lockfile or digest addressing | Absent | M6 |
 | [GAP-016](#gap-016) | No language server | Absent | M7 |
 | [GAP-017](#gap-017) | No conformance suite or backend author guide | Absent | M8 |
-| [GAP-018](#gap-018) | The IR has one consumer, so portability is undemonstrated | Unproven | M5 |
 | [GAP-019](#gap-019) | The name has had no trademark or registry clearance | Absent | legal review |
 | [GAP-020](#gap-020) | The boundary needs Linux containers | Refused | a second expression of the boundary |
 | [GAP-022](#gap-022) | Nothing has been released; you build from source | Absent | one tag |
 | [GAP-023](#gap-023) | A contained run cannot cross a boundary to a sub-agent | Refused | a box per agent, over the supervisor |
 | [GAP-024](#gap-024) | A wedged contained run is not timed out | Degraded | a deadline on the supervisor channel |
+| [GAP-025](#gap-025) | The product loop is fragmented across commands and raw output | Degraded | M11 |
+| [GAP-026](#gap-026) | The reference contained run needs a manually prepared image | Refused | M11, then M6 |
 
 ---
 
@@ -317,6 +318,29 @@ caller's write mount.
 [ADR-0007](adr/0007-containing-the-run-is-not-blocked-on-a-second-backend.md),
 `crates/ingot-cli/src/contained.rs`.
 
+### GAP-026
+
+**The reference contained run needs a manually prepared image.**
+
+`ingot run --contained` correctly refuses without `[run] image` or `--image`.
+The reference path then asks the user to build `tools/ingot.Dockerfile`, choose a
+tag matching the binary, and separately configure images for tool servers. That
+is honest deployment control, but it makes the safe path a repository operation
+rather than a product operation.
+
+*How it shows up.* A user can create, check and run an agent on the host, then
+reach a setup error at the first contained run even though the repository carries
+the reference image definition.
+
+*What closing it needs.* The readiness report and version-matched reference
+image path in [RFC-0007](../rfcs/0007-the-ingot-product-loop.md). Until M6 defines
+signed, digest-addressed acquisition, the tool may build the reference image
+locally or require an explicit selection; it must never download an unverified
+image or fall back to an uncontained run.
+
+*Recorded in.* [README](../README.md#putting-the-agent-in-the-box-too),
+[RFC-0007](../rfcs/0007-the-ingot-product-loop.md).
+
 ---
 
 ## Degraded
@@ -360,6 +384,28 @@ differs.
 what a provider rate limit does to a fan-out.
 
 *Recorded in.* [Runtime 0.1 §5.1](../specs/runtime/v0.1.md).
+
+### GAP-025
+
+**The product loop is fragmented across commands and raw output.**
+
+The compiler, builder, cassette runner, event stream and policy-derived
+container all work, but authoring requires manually alternating between them.
+There is no watch mode, unified readiness report or human trace. The result is
+correct; reaching and understanding it takes more toolchain knowledge than the
+agent itself should require.
+
+*How it shows up.* A prompt edit requires a separate `check`, `build` and `run`;
+provider, MCP and image prerequisites are discovered at different stages; a
+multi-node failure is diagnosed from terminal status and raw JSON events.
+
+*What closing it needs.* M11 and the P1–P5/P8 work packages in
+[RFC-0007](../rfcs/0007-the-ingot-product-loop.md): templates whose instructions
+are tested, `ingot doctor`, `ingot dev`, a human trace and integrated tool/safe-run
+readiness.
+
+*Recorded in.* [Vision](vision.md#one-product-loop-around-the-language),
+[RFC-0007](../rfcs/0007-the-ingot-product-loop.md).
 
 ---
 
@@ -460,35 +506,9 @@ must do. There is no suite to run against it and no guide for writing one. The
 interpreter's own tests are the closest thing, and they are not packaged for
 anyone else.
 
-*Closes with.* M8, and it is partly blocked by [GAP-018]: a conformance suite
-written against one implementation tends to encode that implementation.
-
----
-
-## Unproven
-
-### GAP-018
-
-**The IR has one consumer, so the portability claim is undemonstrated.**
-
-The project's central claim is *write once, run on any compliant runtime*.
-Everything is built for it — a target-neutral IR, a byte-reproducible encoding,
-a written runtime specification, a conformance section. One thing is missing:
-a second implementation.
-
-Until an artifact runs somewhere that is not our own interpreter, "portable" is
-a design intention, not an observed property, and the IR's design is
-unfalsified — a representation nobody else has executed is a guess that
-type-checks.
-
-*How it shows up.* Nowhere, which is the problem. Everything passes.
-
-*What closing it needs.* M5: a second backend, plus the portability report —
-a machine-readable statement of what a given target does and does not support,
-so an artifact can be checked against a target before it is shipped there.
-
-*Recorded in.* [README roadmap](../README.md#roadmap),
-[RFC-0002](../rfcs/0002-runtime-execution-model.md).
+*Closes with.* M8. M5 closed [GAP-018] and supplied the first independent
+differential tests; packaging them for third-party backends and writing the guide
+remain.
 
 ---
 
@@ -512,6 +532,27 @@ name.
 When a gap closes it moves here with the release that closed it, and its section
 stays where a link can find it. Identifiers are never reused: a link to GAP-007
 must keep meaning what it meant.
+
+### GAP-018
+
+**The IR had one consumer, so the portability claim was undemonstrated.**
+*Closed in Unreleased (M5).*
+
+Closed by the independent Python backend in
+[RFC-0006](../rfcs/0006-a-second-backend.md). It shares no runtime code with the
+reference interpreter: one Agent IR artifact and one cassette run through both,
+and the differential test compares emitted artifact bytes and event order.
+
+The portability report separately names every degraded or unimplemented node
+kind before a build. That distinction matters: the test demonstrates the common
+subset (`llm.call`, control flow, state, emission, budgets, policy and replay);
+it does not claim Python implements `tool.call`, `agent.call`, or `verify`.
+
+This closes the unproven claim, not [GAP-017]: the tests are repository-local
+and are not yet a packaged conformance suite or backend author guide.
+
+*Recorded in.* [README roadmap](../README.md#roadmap),
+[CHANGELOG](../CHANGELOG.md), [RFC-0006](../rfcs/0006-a-second-backend.md).
 
 ### GAP-021
 

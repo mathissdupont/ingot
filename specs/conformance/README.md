@@ -1,6 +1,10 @@
 # Conformance suite
 
-Not started. Planned for milestone M8.
+Started in milestone M5. The first executable evidence is
+`crates/ingot-cli/tests/differential.rs`: it runs one Agent IR artifact and one
+cassette through the reference interpreter and an independently generated Python
+program, then compares their artifact bytes and event order. Milestone M8 still
+has to package these checks for third-party backends and write the backend guide.
 
 Will define the normative tests a backend must pass to claim conformance with a
 given Agent IR version, plus the portability levels a report is expressed in:
