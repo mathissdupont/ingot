@@ -444,8 +444,8 @@ turning a deliberately small agent language into a general-purpose one by guess.
 - [x] `doctor_names_every_missing_run_prerequisite_without_revealing_a_secret`
 - [x] `dev_never_runs_a_source_revision_that_failed_to_compile`
 - [x] `the_human_trace_preserves_the_json_event_order`
-- [ ] `a_reference_contained_run_needs_no_repository_specific_build_command`
-- [ ] `a_missing_boundary_never_falls_back_to_a_host_run`
+- [x] `a_reference_contained_run_needs_no_repository_specific_build_command`
+- [x] `a_missing_boundary_never_falls_back_to_a_host_run`
 - [ ] `editor_and_cli_diagnostics_are_identical`
 - [ ] `an_authoring_repair_cannot_accept_its_own_policy_widening`
 - [ ] `model_assistance_leaves_a_project_that_works_without_the_model`

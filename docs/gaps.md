@@ -59,7 +59,6 @@ to you*.
 | [GAP-023](#gap-023) | A contained run cannot cross a boundary to a sub-agent | Refused | a box per agent, over the supervisor |
 | [GAP-024](#gap-024) | A wedged contained run is not timed out | Degraded | a deadline on the supervisor channel |
 | [GAP-025](#gap-025) | The product loop is fragmented across commands and raw output | Degraded | M11 |
-| [GAP-026](#gap-026) | The reference contained run needs a manually prepared image | Refused | M11, then M6 |
 | [GAP-027](#gap-027) | Agent IR carries no portable source spans | Degraded | IR 0.2, issue #11 |
 
 ---
@@ -319,31 +318,6 @@ caller's write mount.
 [ADR-0007](adr/0007-containing-the-run-is-not-blocked-on-a-second-backend.md),
 `crates/ingot-cli/src/contained.rs`.
 
-### GAP-026
-
-**The reference contained run needs a manually prepared image.**
-
-`ingot run --contained` correctly refuses without `[run] image` or `--image`.
-The reference path then asks the user to build `tools/ingot.Dockerfile`, choose a
-tag matching the binary, and separately configure images for tool servers. That
-is honest deployment control, but it makes the safe path a repository operation
-rather than a product operation.
-
-*How it shows up.* A user can create, check and run an agent on the host, then
-reach a setup error at the first contained run even though the repository carries
-the reference image definition.
-
-*What closing it needs.* The readiness report and version-matched reference
-image path in [RFC-0007](../rfcs/0007-the-ingot-product-loop.md). Until M6 defines
-signed, digest-addressed acquisition, the tool may build the reference image
-locally or require an explicit selection; it must never download an unverified
-image or fall back to an uncontained run.
-
-*Recorded in.* [README](../README.md#putting-the-agent-in-the-box-too),
-[RFC-0007](../rfcs/0007-the-ingot-product-loop.md).
-
----
-
 ## Degraded
 
 ### GAP-024
@@ -553,6 +527,26 @@ name.
 When a gap closes it moves here with the release that closed it, and its section
 stays where a link can find it. Identifiers are never reused: a link to GAP-007
 must keep meaning what it meant.
+
+### GAP-026
+
+**The reference contained run needed a manually prepared image.**
+*Closed in Unreleased (M11).*
+
+`ingot image build` now finds the Ingot source checkout, verifies its workspace
+version against the running binary, and builds the shipped recipe under the
+exact `ingot/run:<cli-version>` tag. `ingot run --contained` selects that local
+image when no deliberate `[run] image` or `--image` override exists, and
+`ingot doctor` reports its readiness with the same command as the fix.
+
+The command does not weaken the supply-chain boundary: it never downloads an
+image, custom images remain explicit operator choices, and a missing runtime or
+image never falls back to a host run. Signed, digest-addressed remote acquisition
+remains part of M6 rather than being guessed here.
+
+*Recorded in.* [README](../README.md#putting-the-agent-in-the-box-too),
+[CHANGELOG](../CHANGELOG.md),
+[RFC-0007](../rfcs/0007-the-ingot-product-loop.md).
 
 ### GAP-018
 

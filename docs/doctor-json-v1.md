@@ -57,7 +57,9 @@ An environment location and summary contain only the variable name, for example
   model routing.
 - `tools.*` — MCP manifest validation, server process prerequisites and static
   routes. A `warn` route needs live publication verification with `ingot tools`.
-- `container.*` — Docker/Podman availability and local image presence.
+- `container.*` — Docker/Podman availability, the selected custom-or-reference
+  image, version mismatch, and local image presence. The report may recommend
+  `ingot image build`, but remains read-only and never builds or pulls itself.
 
 The human-readable command reports the same checks and uses the same exit-code
 contract.

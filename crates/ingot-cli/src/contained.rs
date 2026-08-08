@@ -285,21 +285,19 @@ fn reachable_from(compilation: &Compilation, entry: &str) -> BTreeSet<String> {
 
 /// `docker run …  <image> ingot exec`.
 fn contained_command(config: &RunConfig, plan: &SandboxPlan) -> Result<Command> {
-    let image = config.image.clone().ok_or_else(|| {
-        anyhow!(
-            "`--contained` needs an image with `ingot` in it, and none is configured\n  \
-             build one:  docker build -f tools/ingot.Dockerfile -t ingot/run:{} .\n  \
-             then either pass --image ingot/run:{}, or add to {}:\n\n    \
-             [run]\n    image = \"ingot/run:{}\"",
-            env!("CARGO_PKG_VERSION"),
-            env!("CARGO_PKG_VERSION"),
-            super::MANIFEST_NAME,
-            env!("CARGO_PKG_VERSION"),
-        )
-    })?;
+    let image = config
+        .image
+        .clone()
+        .unwrap_or_else(crate::image::reference_image);
 
     let runtime = ingot_sandbox::detect().map_err(|error| anyhow!("{error}"))?;
     eprintln!("runtime   {} {}", runtime.program, runtime.version);
+
+    match ingot_sandbox::image_exists(&runtime, &image) {
+        Ok(true) => {}
+        Ok(false) => bail!(crate::image::missing_image(&image)),
+        Err(error) => return Err(anyhow!("{error}")),
+    }
 
     // A write grant is how an artifact says "put the output here", so the
     // directory is created rather than the run failing on its absence.

@@ -230,7 +230,8 @@ command = "ingot-doctor-also-missing"
         ("tools.server.second.command", "fail"),
         ("tools.route.web.search", "fail"),
         ("container.runtime", "fail"),
-        ("container.configured-image", "fail"),
+        ("container.configured-image", "pass"),
+        ("container.reference-image", "warn"),
     ] {
         assert!(
             checks
@@ -240,6 +241,77 @@ command = "ingot-doctor-also-missing"
             stdout(&output)
         );
     }
+}
+
+#[test]
+fn doctor_reports_a_stale_reference_image_override() {
+    let scratch = TempDir::new("doctor-stale-image");
+    let project = scratch.path().join("project");
+    let init = run(&["init", &project.display().to_string()]);
+    assert_eq!(code(&init), EXIT_OK, "{}", stderr(&init));
+
+    let manifest_path = project.join("ingot.toml");
+    let mut manifest = std::fs::read_to_string(&manifest_path).unwrap();
+    manifest.push_str("\n[run]\nimage = \"ingot/run:0.0.1\"\n");
+    std::fs::write(&manifest_path, manifest).unwrap();
+
+    let output = Command::new(binary())
+        .args(["doctor", &project.display().to_string(), "--json"])
+        .arg("--color")
+        .arg("never")
+        .env("PATH", "")
+        .env_remove("ANTHROPIC_API_KEY")
+        .env_remove("OPENAI_API_KEY")
+        .output()
+        .expect("doctor must be runnable");
+
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let mismatch = report["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|check| check["id"] == "container.image-version")
+        .expect("doctor must name a stale reference tag");
+    assert_eq!(mismatch["status"], "fail");
+    assert!(
+        mismatch["summary"]
+            .as_str()
+            .unwrap()
+            .contains("ingot/run:0.0.1"),
+        "{}",
+        stdout(&output)
+    );
+    assert!(
+        mismatch["fix"]
+            .as_str()
+            .unwrap()
+            .contains("ingot image build"),
+        "{}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn image_build_refuses_a_checkout_for_another_binary_version() {
+    let source = TempDir::new("image-version-mismatch");
+    std::fs::create_dir_all(source.path().join("tools")).unwrap();
+    std::fs::write(
+        source.path().join("Cargo.toml"),
+        "[workspace]\n[workspace.package]\nversion = \"9.9.9\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        source.path().join("tools/ingot.Dockerfile"),
+        "FROM scratch\n",
+    )
+    .unwrap();
+
+    let output = run(&["image", "build", &source.path().display().to_string()]);
+    assert_eq!(code(&output), EXIT_FAILURE);
+    let log = stderr(&output);
+    assert!(log.contains("source version 9.9.9"), "{log}");
+    assert!(log.contains(env!("CARGO_PKG_VERSION")), "{log}");
+    assert!(log.contains("does not match"), "{log}");
 }
 
 #[test]

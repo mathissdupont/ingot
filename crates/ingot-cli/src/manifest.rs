@@ -79,9 +79,9 @@ pub struct Run {
     ///
     /// Unlike an `[[mcp.server]]` image, which contains somebody else's program
     /// and is therefore entirely the operator's choice, this one contains
-    /// `ingot` itself and is built from `tools/ingot.Dockerfile`. There is still
-    /// no default: guessing a name would produce "image not found" from the
-    /// runtime instead of the instruction for building one.
+    /// `ingot` itself. When absent, `ingot run --contained` selects the local,
+    /// version-matched reference image prepared by `ingot image build`. Setting
+    /// this remains the deliberate way to select a custom deployment image.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image: Option<String>,
 }

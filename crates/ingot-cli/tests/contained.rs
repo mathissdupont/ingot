@@ -280,12 +280,11 @@ fn a_program_whose_agents_want_different_boundaries_is_refused() {
 }
 
 #[test]
-fn a_contained_run_with_no_image_says_how_to_build_one() {
-    // No default image name: guessing one produces "not found" from the runtime
-    // instead of the instruction that actually helps.
+fn a_missing_boundary_never_falls_back_to_a_host_run() {
     let document = TempDir::new("contained-no-image");
-    let output = run_env(
-        &[
+    let out = TempDir::new("contained-no-boundary-out");
+    let output = std::process::Command::new(binary())
+        .args([
             "run",
             &example("document-summarizer"),
             "--contained",
@@ -297,13 +296,27 @@ fn a_contained_run_with_no_image_says_how_to_build_one() {
             "audience=engineering leads",
             "--input",
             &document_file(&document),
-        ],
-        &[],
-    );
+            "--out-dir",
+            &out.path().display().to_string(),
+            "--color",
+            "never",
+        ])
+        // Resolve the already-open binary first, then make runtime detection
+        // deterministic: neither Docker nor Podman can be found.
+        .env("PATH", "")
+        .env_remove("ANTHROPIC_API_KEY")
+        .env_remove("OPENAI_API_KEY")
+        .output()
+        .expect("the ingot binary must be runnable");
+
     assert_ne!(code(&output), EXIT_OK);
     let log = stderr(&output);
-    assert!(log.contains("tools/ingot.Dockerfile"), "{log}");
-    assert!(log.contains("[run]"), "{log}");
+    assert!(log.contains("no container runtime found"), "{log}");
+    assert!(!log.contains("nothing is enforced"), "{log}");
+    assert!(
+        !out.path().join("summary.md").exists(),
+        "a missing boundary must stop before the agent can produce an artifact"
+    );
 }
 
 #[test]
@@ -411,8 +424,7 @@ fn exec_is_not_offered_in_the_command_list() {
 
 /// The image the contained test needs.
 ///
-/// Tagged with the crate version, which is what the README tells an operator to
-/// build, so following the instructions makes this test run rather than skip.
+/// Tagged with the crate version, which is what `ingot image build` prepares.
 fn image() -> String {
     format!("ingot/run:{}", env!("CARGO_PKG_VERSION"))
 }
@@ -437,10 +449,8 @@ fn image_available() -> Option<String> {
         .unwrap_or(false);
 
     if !present {
-        let hint = format!(
-            "the image {image} is not built; run:\n  \
-             docker build -f tools/ingot.Dockerfile -t {image} ."
-        );
+        let hint =
+            format!("the image {image} is not built; run `ingot image build` from the repository");
         if std::env::var_os("INGOT_REQUIRE_CONTAINER").is_some() {
             panic!("INGOT_REQUIRE_CONTAINER is set but {hint}");
         }
@@ -451,7 +461,7 @@ fn image_available() -> Option<String> {
 }
 
 #[test]
-fn an_agent_runs_inside_a_real_boundary_and_still_gets_its_model_answer() {
+fn a_reference_contained_run_needs_no_repository_specific_build_command() {
     // The claim: an agent whose policy grants nothing at all — no mount, no
     // network — completes a model call. Nothing inside could have reached a
     // provider, so the answer came through the supervisor.
@@ -467,8 +477,6 @@ fn an_agent_runs_inside_a_real_boundary_and_still_gets_its_model_answer() {
             "run",
             &example("document-summarizer"),
             "--contained",
-            "--image",
-            &image(),
             "--provider",
             "replay",
             "--cassette",
@@ -551,8 +559,6 @@ fn a_contained_agent_reads_and_writes_only_through_its_policys_mounts() {
             "run",
             &dir.path().display().to_string(),
             "--contained",
-            "--image",
-            &image(),
             "--provider",
             "anthropic",
         ],

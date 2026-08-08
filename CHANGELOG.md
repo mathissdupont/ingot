@@ -8,6 +8,23 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
 
 ## [Unreleased]
 
+**A version-matched contained-run image path**
+([RFC-0007](rfcs/0007-the-ingot-product-loop.md),
+[#5](https://github.com/mathissdupont/ingot/issues/5); closes
+[GAP-026](docs/gaps.md#gap-026))
+
+- `ingot image build [SOURCE]` finds the Ingot checkout, refuses a source/binary
+  version mismatch, and builds the auditable reference Dockerfile as the exact
+  `ingot/run:<cli-version>` tag.
+- `ingot run --contained` selects that local reference image when no explicit
+  custom image is configured. Missing images are never pulled automatically and
+  a missing container boundary never falls back to a host run.
+- `ingot doctor` distinguishes the selected default from a custom image, reports
+  stale `ingot/run:<version>` overrides, and points an absent reference image to
+  the product command rather than a repository-specific Docker invocation.
+- CI builds the image through `ingot image build` and runs the real contained
+  acceptance tests without `--image`.
+
 **A diagnostic human run trace**
 ([RFC-0007](rfcs/0007-the-ingot-product-loop.md),
 [#4](https://github.com/mathissdupont/ingot/issues/4))
@@ -52,8 +69,8 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
   check identifiers and statuses are stable, and exit code `1` means at least
   one blocking prerequisite is missing.
 - Container image inspection is now a public read-only sandbox operation. The
-  doctor checks both a configured custom image and the version-matched
-  `ingot/run:<cli-version>` reference image without pulling either one.
+  doctor checks the configured custom image or, when none is configured, the
+  version-matched `ingot/run:<cli-version>` reference image without pulling it.
 
 **The first complete product-loop path**
 ([RFC-0007](rfcs/0007-the-ingot-product-loop.md),

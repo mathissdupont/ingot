@@ -67,16 +67,12 @@ jobs:
         run: cargo test -p ingot-sandbox --test container
         env:
           INGOT_REQUIRE_CONTAINER: "1"
-      # A contained run needs an image with `ingot` in it, and building it here is
-      # also the check that the Dockerfile still works. The tag carries the
-      # workspace version, which is what the test looks for and what the README
-      # tells an operator to build — read from Cargo.toml so a version bump does
-      # not need remembering in three places.
-      - name: Build the contained-run image
+      # Exercise the same product command operators use. It finds the shipped
+      # Dockerfile, verifies the source/binary versions match, and prepares the
+      # exact local tag `run --contained` selects by default.
+      - name: Build the version-matched contained-run image
         if: runner.os == 'Linux'
-        run: |
-          version=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
-          docker build -f tools/ingot.Dockerfile -t "ingot/run:$version" .
+        run: ./target/debug/ingot image build
       - name: An agent runs inside a real boundary
         if: runner.os == 'Linux'
         run: cargo test -p ingot-cli --test contained

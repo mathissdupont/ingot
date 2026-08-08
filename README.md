@@ -183,6 +183,7 @@ export CARGO_TARGET_DIR=/c/build/ingot
 | `ingot run [--input k=v]` | execute the agent |
 | `ingot run --sandbox` | execute it with each tool server inside a boundary |
 | `ingot run --contained` | execute the agent itself inside a boundary |
+| `ingot image build [SOURCE]` | build the version-matched local image used by contained runs |
 | `ingot test` | replay recorded cassettes |
 | `ingot doctor [--json]` | report source, provider, MCP and container readiness without starting them |
 | `ingot dev [--run]` | watch source, check and build good revisions, optionally run them |
@@ -466,10 +467,17 @@ the API key, renders the prompts and writes the artifacts — still runs on the
 host with the host's whole machine. `--contained` closes that:
 
 ```bash
-docker build -f tools/ingot.Dockerfile -t ingot/run:0.3.0 .
-ingot run examples/repo-digest --contained --image ingot/run:0.3.0 \
+ingot image build
+ingot run examples/repo-digest --contained \
   --input directory=. --input out=out/digest.md
 ```
+
+`ingot image build` finds the nearest Ingot source checkout, verifies that its
+workspace version matches the running binary, and builds `ingot/run:<version>`
+with the available Docker or Podman daemon. A contained run selects that exact
+local tag when neither `[run] image` nor `--image` deliberately names a custom
+deployment image. It never pulls an image automatically and a missing boundary
+never falls back to a host run. Verified remote acquisition remains part of M6.
 
 Everything is inside: the interpreter, its tool servers, and the mounts the policy
 named. Nothing else. The model call and the approval gate leave through a

@@ -579,7 +579,7 @@ fn command_available(command: &str, cwd: &Path) -> bool {
 }
 
 fn inspect_containment(target: &Target, checks: &mut Vec<Check>) {
-    let expected = format!("ingot/run:{}", env!("CARGO_PKG_VERSION"));
+    let expected = crate::image::reference_image();
     let location = manifest_location(target);
     let configured = target.image();
 
@@ -607,32 +607,46 @@ fn inspect_containment(target: &Target, checks: &mut Vec<Check>) {
     };
 
     match configured.as_deref() {
-        None => checks.push(Check::new(
-            "container.configured-image",
-            Status::Fail,
-            "no image is configured for `ingot run --contained`",
-            location.clone(),
-            Some(format!(
-                "build `docker build -f tools/ingot.Dockerfile -t {expected} .` and set `[run] image = \"{expected}\"`"
-            )),
-        )),
-        Some(image) => inspect_image(
-            "container.configured-image",
-            image,
-            runtime.as_ref(),
-            &location,
-            checks,
-        ),
-    }
-
-    if configured.as_deref() != Some(expected.as_str()) {
-        inspect_image(
-            "container.reference-image",
-            &expected,
-            runtime.as_ref(),
-            &location,
-            checks,
-        );
+        None => {
+            checks.push(Check::new(
+                "container.configured-image",
+                Status::Pass,
+                format!("no custom image is configured; contained runs select `{expected}`"),
+                location.clone(),
+                None,
+            ));
+            inspect_image(
+                "container.reference-image",
+                &expected,
+                runtime.as_ref(),
+                &location,
+                true,
+                checks,
+            );
+        }
+        Some(image) => {
+            if image.starts_with("ingot/run:") && image != expected {
+                checks.push(Check::new(
+                    "container.image-version",
+                    Status::Fail,
+                    format!(
+                        "configured reference image `{image}` does not match this binary's `{expected}`"
+                    ),
+                    location.clone(),
+                    Some(format!(
+                        "remove the override and run `ingot image build`, or set `[run] image = \"{expected}\"`"
+                    )),
+                ));
+            }
+            inspect_image(
+                "container.configured-image",
+                image,
+                runtime.as_ref(),
+                &location,
+                false,
+                checks,
+            );
+        }
     }
 }
 
@@ -641,6 +655,7 @@ fn inspect_image(
     image: &str,
     runtime: Option<&ingot_sandbox::Runtime>,
     location: &str,
+    reference: bool,
     checks: &mut Vec<Check>,
 ) {
     let Some(runtime) = runtime else {
@@ -667,10 +682,13 @@ fn inspect_image(
             Status::Fail,
             format!("image `{image}` is not present locally"),
             location,
-            Some(format!(
-                "build it with `{} build -f tools/ingot.Dockerfile -t {image} .`",
-                runtime.program
-            )),
+            Some(if reference {
+                "run `ingot image build`; verified remote acquisition is deferred until M6"
+                    .to_string()
+            } else {
+                "build or acquire the configured image explicitly; Ingot will not pull it automatically"
+                    .to_string()
+            }),
         )),
         Err(error) => checks.push(Check::new(
             id,

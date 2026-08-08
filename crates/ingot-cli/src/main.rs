@@ -20,6 +20,7 @@ use ingot_diagnostics::{codes, ColorChoice as RenderColor};
 mod contained;
 mod dev;
 mod doctor;
+mod image;
 mod manifest;
 mod run;
 mod sandbox;
@@ -97,6 +98,8 @@ enum Command {
     Test(TestArgs),
     /// Check everything a live or contained run needs without starting it.
     Doctor(DoctorArgs),
+    /// Prepare the version-matched local image used by contained runs.
+    Image(ImageArgs),
     /// Watch, check and build each source revision; optionally run good ones.
     Dev(DevArgs),
     /// Show which MCP server provides each tool the program declares.
@@ -123,6 +126,25 @@ struct InitArgs {
     /// Maintained starting point for the new project.
     #[arg(long, value_enum, default_value_t = StarterTemplate::Brief)]
     template: StarterTemplate,
+}
+
+#[derive(Args, Debug)]
+struct ImageArgs {
+    #[command(subcommand)]
+    command: ImageCommand,
+}
+
+#[derive(Subcommand, Debug)]
+enum ImageCommand {
+    /// Build the reference image without downloading an unverified image.
+    Build(ImageBuildArgs),
+}
+
+#[derive(Args, Debug)]
+struct ImageBuildArgs {
+    /// Ingot source checkout. Defaults to the nearest checkout.
+    #[arg(value_name = "SOURCE")]
+    source: Option<PathBuf>,
 }
 
 /// A small, maintained example of a language pattern rather than a vertical
@@ -268,7 +290,8 @@ struct RunArgs {
     /// Everything is inside: the interpreter, the tool servers, and nothing
     /// else. The model call and the approval gate cross out through a
     /// supervisor, so `network deny` holds and the API key never enters the box.
-    /// Needs a container runtime and `[run] image`.
+    /// Needs a container runtime. Uses the version-matched reference image
+    /// unless `[run] image` or `--image` deliberately selects another.
     #[arg(long)]
     contained: bool,
 
@@ -404,6 +427,7 @@ fn main() -> ExitCode {
         Command::Run(args) => run_run(args, color),
         Command::Test(args) => run_test(args, color),
         Command::Doctor(args) => run_doctor(args, color),
+        Command::Image(args) => run_image(args),
         Command::Dev(args) => run_dev(args, color),
         Command::Tools(args) => run_tools(args, color),
         Command::Sandbox(args) => run_sandbox(args, color),
@@ -471,6 +495,12 @@ fn run_init(args: &InitArgs) -> Result<u8> {
     println!("  ingot build");
     println!("  ingot test");
     Ok(EXIT_OK)
+}
+
+fn run_image(args: &ImageArgs) -> Result<u8> {
+    match &args.command {
+        ImageCommand::Build(args) => image::build(args.source.as_deref()),
+    }
 }
 
 fn write_new(path: &Path, contents: &str) -> Result<()> {
@@ -1007,7 +1037,11 @@ fn run_run(args: &RunArgs, color: RenderColor) -> Result<u8> {
             models: target.model(),
             contained: args.contained,
             supervised: args.supervised,
-            image: args.image.clone().or_else(|| target.image()),
+            image: args
+                .image
+                .clone()
+                .or_else(|| target.image())
+                .or_else(|| args.contained.then(image::reference_image)),
         },
     )
 }
