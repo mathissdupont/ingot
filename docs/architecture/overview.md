@@ -38,6 +38,13 @@ direction shown. `ingot-parser` cannot see types; `ingot-semantic` cannot see
 targets; `ingot-ir` cannot see syntax. Those are compile-time facts, not
 conventions — see [ADR-0001](../adr/0001-rust-monorepo.md).
 
+Editor tooling is an adapter on top of that front end rather than a second front
+end. `ingot-language-service` consumes `ingot-compiler` and projects compiler
+diagnostics and canonical formatting into editor-neutral data: stable diagnostic
+codes and byte spans are preserved, and ranges are also converted to zero-based
+UTF-16 positions for LSP adapters. See
+[Ingot Language Service](../language-service.md).
+
 The last two are the same discipline applied downwards. `ingot-runtime` knows
 about `ToolHost`, a three-method trait, and nothing about MCP; `ingot-mcp`
 depends on the runtime, never the reverse. A backend that hosts tools some other
@@ -146,7 +153,9 @@ container — ids record creation order, not execution order.
 
 Diagnostics are data, not strings: a stable code, a severity, a primary label,
 optional secondary labels, notes, and help. The terminal renderer and the future
-language server consume the same structure.
+language server consume the same structure. The first editor-facing adapter is
+`ingot-language-service`, which keeps the original byte span beside the
+LSP-style range so CLI/editor equality is testable rather than assumed.
 
 Codes are grouped by area (`ING1xxx` parsing through `ING6xxx` lowering) and are
 never reused for a different meaning. `ingot explain <CODE>` prints the long
@@ -164,6 +173,7 @@ names do not produce nonsense suggestions.
 | Behaviour | `ingot-semantic/src/tests.rs` | every diagnostic code has a test |
 | Structural | `ingot-compiler/src/tests.rs` | lowering shape: hoisting, regions, approvals |
 | Golden | `tests/golden-ir/` | the IR of the reference examples, byte for byte |
+| Language service | `ingot-language-service` | editor diagnostics and formatting use compiler data |
 | End to end | `ingot-cli/tests/cli.rs` | commands, exit codes, stdout/stderr split |
 | Differential | `ingot-cli/tests/differential.rs` | one artifact and cassette through Rust and generated Python |
 | Consistency | `golden_ir.rs` | the published schema matches the Rust model |
@@ -173,11 +183,12 @@ catches mistakes.
 
 ## What is not built yet
 
-The components above are not yet joined into the integrated authoring loop in
-[RFC-0007](../../rfcs/0007-the-ingot-product-loop.md): there is no watch-mode
-`ingot dev`, unified readiness report, human trace or zero-guesswork reference
-contained run. The language server, reusable source modules, OCI packaging,
-lockfile, and packaged backend conformance suite are also not built.
+The components above are not yet joined into every part of the integrated
+authoring loop in [RFC-0007](../../rfcs/0007-the-ingot-product-loop.md). The
+language-service foundation exists, but the full language server, syntax
+highlighting grammar, completion, hover, definition navigation, reusable source
+modules, OCI packaging, lockfile, and packaged backend conformance suite are
+still open work.
 
 The [roadmap](../../README.md#roadmap) has the sequence;
 [ADR-0002](../adr/0002-compiler-not-runtime.md) explains why execution is

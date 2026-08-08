@@ -8,6 +8,24 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
 
 ## [Unreleased]
 
+**Editor-neutral language service foundation**
+([RFC-0007](rfcs/0007-the-ingot-product-loop.md),
+[#6](https://github.com/mathissdupont/ingot/issues/6))
+
+- New crate `ingot-language-service` exposes compiler-backed diagnostics and
+  canonical formatting as editor-neutral structured data. Future LSP and editor
+  adapters consume this crate instead of reimplementing parser or semantic
+  logic.
+- Editor diagnostics preserve the compiler's stable code, message, primary and
+  secondary labels, notes, help text and original byte spans, while also
+  projecting ranges to zero-based UTF-16 positions for LSP-style consumers.
+- Formatting returns a full-document text edit from the same canonical printer
+  used by `ingot fmt`.
+- The required M7 test `editor_and_cli_diagnostics_are_identical` now pins code,
+  primary byte span and message equality between the language service and CLI
+  compiler path. Reference examples are also checked through the language
+  service surface.
+
 **Typed MCP discovery and preflight foundation**
 ([RFC-0007](rfcs/0007-the-ingot-product-loop.md),
 [#8](https://github.com/mathissdupont/ingot/issues/8))

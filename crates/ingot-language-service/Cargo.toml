@@ -1,0 +1,15 @@
+[package]
+name = "ingot-language-service"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+[dependencies]
+ingot-compiler.workspace = true
+ingot-diagnostics.workspace = true
+ingot-source.workspace = true
+serde.workspace = true

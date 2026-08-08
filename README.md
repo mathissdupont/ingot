@@ -22,8 +22,9 @@ IR against a real model provider, re-enforcing every capability, budget and
 approval the artifact declares. Tools are served over MCP by whichever servers
 the operator configures. Runs can be recorded to a cassette and replayed
 offline, so agent tests work in CI with no API key. A second, independent backend
-emits self-contained Python 3 and reports unsupported constructs before build;
-OCI packaging and the language server are planned. See [the roadmap](#roadmap).
+emits self-contained Python 3 and reports unsupported constructs before build.
+The editor-facing language-service foundation has started; full LSP/editor
+support and OCI packaging are planned. See [the roadmap](#roadmap).
 
 ---
 
@@ -583,6 +584,7 @@ With `--sandbox` the MCP servers move inside a policy-derived boundary
 | `ingot-compiler` | the driver and lowering |
 | `ingot-runtime` | the reference interpreter, providers and cassettes |
 | `ingot-backend-python` | self-contained Python 3 emission and portability reports |
+| `ingot-language-service` | editor-neutral diagnostics and formatting over the compiler |
 | `ingot-mcp` | the MCP tool host, and the `ingot-mcp-fs` reference server |
 | `ingot-sandbox` | a `policy` block turned into a container boundary |
 | `ingot-supervisor` | the channel between a contained run and the host serving it |
@@ -597,6 +599,7 @@ With `--sandbox` the MCP servers move inside a policy-derived boundary
 * [`agent-ir.schema.json`](specs/ir/agent-ir.schema.json) — machine-readable schema
 * [Vision](docs/vision.md) — what the project is for, and where it is going
 * [Architecture](docs/architecture/overview.md) — how the phases fit together
+* [Language service](docs/language-service.md) — editor-facing diagnostics and formatting
 * [Decision records](docs/adr/) — why the load-bearing choices were made
 * [Gap register](docs/gaps.md) — every known limitation, with an identifier
 
@@ -611,7 +614,7 @@ With `--sandbox` the MCP servers move inside a policy-derived boundary
 | M4 | cassette record and replay, `ingot test`, MCP tool host | done |
 | M5 | a second backend and the portability report | done |
 | M6 | OCI artifact, lockfile, reproducible digest | planned |
-| M7 | language server and editor support | planned |
+| M7 | language server and editor support | in progress |
 | M8 | conformance suite and backend author guide | planned |
 | M9 | Ingot Containers — the policy block as an enforced boundary | done |
 | M10 | `ingot new` — authoring with a model, verified by the compiler | planned |

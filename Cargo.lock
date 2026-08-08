@@ -509,6 +509,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ingot-language-service"
+version = "0.3.0"
+dependencies = [
+ "ingot-compiler",
+ "ingot-diagnostics",
+ "ingot-source",
+ "serde",
+]
+
+[[package]]
 name = "ingot-lexer"
 version = "0.3.0"
 dependencies = [
