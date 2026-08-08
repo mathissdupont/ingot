@@ -497,3 +497,88 @@ fn an_agent_runs_inside_a_real_boundary_and_still_gets_its_model_answer() {
         .expect("the host writes the artifacts, from outside the boundary");
     assert!(summary.contains("Compiler Design"), "{summary}");
 }
+
+#[test]
+fn a_contained_agent_reads_and_writes_only_through_its_policys_mounts() {
+    // The whole feature in one test. The agent runs in a box with `--network
+    // none`; its tool server runs inside that box; the mounts come from its own
+    // `policy` block; the model answer comes from a stub on the host that nothing
+    // inside could have reached. What lands on the host afterwards arrived through
+    // the one write mount the policy named.
+    let Some(_runtime) = image_available() else {
+        return;
+    };
+
+    let dir = TempDir::new("contained-tools");
+    std::fs::create_dir_all(dir.path().join("data")).unwrap();
+    std::fs::write(
+        dir.path().join("data").join("note.txt"),
+        "boxed and filed\n",
+    )
+    .unwrap();
+    // Named by no policy rule, so it must not exist inside at all.
+    std::fs::write(dir.path().join("secret.txt"), "not mounted\n").unwrap();
+
+    project(
+        dir.path(),
+        "language 0.1\n\
+         tool fs.read_file(path: string) -> text !filesystem_read\n\
+         tool fs.write_file(path: string, content: text) -> file !filesystem_write\n\
+         agent Boxed() -> digest<markdown> {\n\
+         \x20 model requires { structured_output }\n\
+         \x20 tools { mcp fs.read_file\n    mcp fs.write_file }\n\
+         \x20 budget { steps <= 6 tokens <= 2000 }\n\
+         \x20 policy { network deny\n    \
+                       filesystem_read allow [\"data\"]\n    \
+                       filesystem_write allow [\"out\"]\n    \
+                       secrets deny export }\n\
+         \x20 flow {\n\
+         \x20   note = call fs.read_file(\"data/note.txt\")\n\
+         \x20   summary = ask<markdown>(\"Repeat this exactly: ${note}\")\n\
+         \x20   _filed = call fs.write_file(\"out/digest.md\", summary)\n\
+         \x20   emit digest = summary\n\
+         \x20 }\n\
+         }\n",
+        // `ingot-mcp-fs`, not a host path: inside the boundary the server comes
+        // from the image, which is what `tools/ingot.Dockerfile` puts there.
+        "\n[[mcp.server]]\nname = \"files\"\ncommand = \"ingot-mcp-fs\"\n\
+         args = [\"--root\", \".\", \"--allow-write\"]\n",
+    );
+
+    let stub = stub_provider(vec![text_reply("# Digest\n\nboxed and filed")]);
+    let output = run_env(
+        &[
+            "run",
+            &dir.path().display().to_string(),
+            "--contained",
+            "--image",
+            &image(),
+            "--provider",
+            "anthropic",
+        ],
+        &[
+            ("ANTHROPIC_API_KEY", "stub-key"),
+            ("INGOT_ANTHROPIC_BASE_URL", &stub.url),
+        ],
+    );
+
+    assert_eq!(code(&output), EXIT_OK, "{}", stderr(&output));
+
+    let log = stderr(&output);
+    assert!(log.contains("/workspace/data"), "{log}");
+    assert!(log.contains("/workspace/out"), "{log}");
+    assert!(log.contains("network  none"), "{log}");
+    assert!(
+        !log.contains("secret.txt"),
+        "an unnamed path is not part of the boundary:\n{log}"
+    );
+
+    // The model call was served here, from a socket the box has no route to.
+    assert_eq!(stub.served.load(Ordering::SeqCst), 1);
+
+    // And the tool server, inside the box, wrote through the write mount onto
+    // this machine.
+    let filed = std::fs::read_to_string(dir.path().join("out").join("digest.md"))
+        .expect("the write mount reaches the host");
+    assert!(filed.contains("boxed and filed"), "{filed}");
+}
