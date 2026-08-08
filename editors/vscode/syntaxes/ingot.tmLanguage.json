@@ -1,0 +1,178 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Ingot",
+  "scopeName": "source.ingot",
+  "fileTypes": [
+    "ing"
+  ],
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#declarations"
+    },
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#types"
+    },
+    {
+      "include": "#effects"
+    },
+    {
+      "include": "#numbers"
+    },
+    {
+      "include": "#operators"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.documentation.ingot",
+          "match": "^\\s*///.*$"
+        },
+        {
+          "name": "comment.line.double-slash.ingot",
+          "match": "//.*$"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.ingot",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.ingot",
+              "match": "\\\\(?:[nrt\"\\\\]|\\$)"
+            },
+            {
+              "name": "meta.interpolation.ingot",
+              "begin": "\\$\\{",
+              "end": "\\}",
+              "patterns": [
+                {
+                  "name": "variable.other.interpolation.ingot",
+                  "match": "\\b[a-zA-Z_][a-zA-Z0-9_]*(?:\\.[a-zA-Z_][a-zA-Z0-9_]*)*\\b"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "declarations": {
+      "patterns": [
+        {
+          "name": "meta.declaration.type.ingot",
+          "match": "\\b(type)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "storage.type.ingot"
+            },
+            "2": {
+              "name": "entity.name.type.ingot"
+            }
+          }
+        },
+        {
+          "name": "meta.declaration.tool.ingot",
+          "match": "\\b(tool)\\s+([A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*)",
+          "captures": {
+            "1": {
+              "name": "storage.type.tool.ingot"
+            },
+            "2": {
+              "name": "entity.name.function.tool.ingot"
+            }
+          }
+        },
+        {
+          "name": "meta.declaration.verifier.ingot",
+          "match": "\\b(verifier)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "storage.type.verifier.ingot"
+            },
+            "2": {
+              "name": "entity.name.function.verifier.ingot"
+            }
+          }
+        },
+        {
+          "name": "meta.declaration.agent.ingot",
+          "match": "\\b(agent)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "storage.type.agent.ingot"
+            },
+            "2": {
+              "name": "entity.name.function.agent.ingot"
+            }
+          }
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.ingot",
+          "match": "\\b(if|else|loop|while|parallel|map|as)\\b"
+        },
+        {
+          "name": "keyword.other.ingot",
+          "match": "\\b(language|package|model|requires|exact|tools|mcp|memory|working|ephemeral|budget|policy|allow|deny|require|approval|flow|ask|call|verify|emit|max|checkpoint|state)\\b"
+        },
+        {
+          "name": "constant.language.boolean.ingot",
+          "match": "\\b(true|false)\\b"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "support.type.primitive.ingot",
+          "match": "\\b(string|int|float|bool|json|bytes|text|markdown|file)\\b"
+        }
+      ]
+    },
+    "effects": {
+      "patterns": [
+        {
+          "name": "support.constant.effect.ingot",
+          "match": "![A-Za-z_][A-Za-z0-9_]*"
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.float.ingot",
+          "match": "\\b\\d+\\.\\d+\\b"
+        },
+        {
+          "name": "constant.numeric.integer.ingot",
+          "match": "\\b\\d+(?:k|m|kb|mb)?\\b"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.ingot",
+          "match": "->|<=|>=|==|!=|&&|\\|\\||[=<>+\\-!]"
+        }
+      ]
+    }
+  }
+}

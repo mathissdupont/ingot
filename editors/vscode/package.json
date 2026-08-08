@@ -1,0 +1,63 @@
+{
+  "name": "ingot-language",
+  "displayName": "Ingot Language",
+  "description": "Reference VS Code integration for .ing agent source: syntax highlighting plus the ingot-lsp language server.",
+  "version": "0.3.0",
+  "publisher": "heptapus",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mathissdupont/ingot"
+  },
+  "engines": {
+    "vscode": "^1.86.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onLanguage:ingot"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "ingot",
+        "aliases": [
+          "Ingot",
+          "ingot"
+        ],
+        "extensions": [
+          ".ing"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "ingot",
+        "scopeName": "source.ingot",
+        "path": "./syntaxes/ingot.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "title": "Ingot",
+      "properties": {
+        "ingot.lsp.path": {
+          "type": "string",
+          "default": "ingot-lsp",
+          "description": "Command or absolute path used to start the Ingot language server."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "check": "node --check extension.js"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.86.0"
+  }
+}

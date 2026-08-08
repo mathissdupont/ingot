@@ -23,9 +23,11 @@ approval the artifact declares. Tools are served over MCP by whichever servers
 the operator configures. Runs can be recorded to a cassette and replayed
 offline, so agent tests work in CI with no API key. A second, independent backend
 emits self-contained Python 3 and reports unsupported constructs before build.
-The editor-facing language-service foundation and first diagnostics/formatting
-LSP server have started; completion, hover, navigation, reference extensions
-and OCI packaging are planned. See [the roadmap](#roadmap).
+The editor-facing authoring stack is usable: the shared language service powers
+diagnostics, formatting, completion, hover and go-to-definition through
+`ingot-lsp`, and a reference VS Code extension contributes `.ing` syntax
+highlighting plus LSP startup. OCI packaging remains planned. See
+[the roadmap](#roadmap).
 
 ---
 
@@ -585,8 +587,8 @@ With `--sandbox` the MCP servers move inside a policy-derived boundary
 | `ingot-compiler` | the driver and lowering |
 | `ingot-runtime` | the reference interpreter, providers and cassettes |
 | `ingot-backend-python` | self-contained Python 3 emission and portability reports |
-| `ingot-language-service` | editor-neutral diagnostics and formatting over the compiler |
-| `ingot-lsp` | stdio language server adapter for editor diagnostics and formatting |
+| `ingot-language-service` | editor-neutral diagnostics, formatting, completion, hover and definition over the compiler |
+| `ingot-lsp` | stdio language server adapter for editor diagnostics, formatting and navigation |
 | `ingot-mcp` | the MCP tool host, and the `ingot-mcp-fs` reference server |
 | `ingot-sandbox` | a `policy` block turned into a container boundary |
 | `ingot-supervisor` | the channel between a contained run and the host serving it |
@@ -601,7 +603,7 @@ With `--sandbox` the MCP servers move inside a policy-derived boundary
 * [`agent-ir.schema.json`](specs/ir/agent-ir.schema.json) — machine-readable schema
 * [Vision](docs/vision.md) — what the project is for, and where it is going
 * [Architecture](docs/architecture/overview.md) — how the phases fit together
-* [Language service](docs/language-service.md) — editor-facing diagnostics and formatting
+* [Language service](docs/language-service.md) — editor-facing diagnostics, formatting, completion and navigation
 * [Decision records](docs/adr/) — why the load-bearing choices were made
 * [Gap register](docs/gaps.md) — every known limitation, with an identifier
 
@@ -616,15 +618,15 @@ With `--sandbox` the MCP servers move inside a policy-derived boundary
 | M4 | cassette record and replay, `ingot test`, MCP tool host | done |
 | M5 | a second backend and the portability report | done |
 | M6 | OCI artifact, lockfile, reproducible digest | planned |
-| M7 | language server and editor support | in progress |
+| M7 | language server and editor support | done |
 | M8 | conformance suite and backend author guide | planned |
 | M9 | Ingot Containers — the policy block as an enforced boundary | done |
 | M10 | `ingot new` — authoring with a model, verified by the compiler | planned |
 | M11 | integrated `.ing` product loop: templates, `dev`, trace, readiness and safe-run UX | planned |
 
 A number is an identity, not a position in a queue; things get referenced by it,
-so they keep it. The proposed order is **M11 → M7 → Language 0.2 reuse RFCs
-→ M10 → M6 → M8**. [RFC-0007](rfcs/0007-the-ingot-product-loop.md)
+so they keep it. The remaining proposed order is **M11 → Language 0.2 reuse
+RFCs → M10 → M6 → M8**. [RFC-0007](rfcs/0007-the-ingot-product-loop.md)
 explains why the usable language loop now comes before generation and packaging.
 
 M3 and M4 landed together: the interpreter needed cassettes to be testable, and

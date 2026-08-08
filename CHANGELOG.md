@@ -32,6 +32,16 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
 - LSP diagnostics carry stable Ingot codes in the standard diagnostic `code`
   field and preserve byte-span data in `Diagnostic.data`, so editor display can
   be compared back to compiler spans.
+- The language service now exposes completion, hover and definition data from
+  the parsed program: keywords, built-in types and functions, policy/model
+  vocabulary, top-level declarations, local flow bindings and doc comments.
+- `ingot-lsp` advertises and serves `textDocument/completion`,
+  `textDocument/hover` and `textDocument/definition` from that shared service,
+  with tests covering declared symbols and reference examples through the LSP
+  surface.
+- A reference VS Code extension under `editors/vscode` contributes `.ing`
+  language detection, TextMate syntax highlighting, bracket/comment rules and
+  an LSP launcher configurable through `ingot.lsp.path`.
 
 **Typed MCP discovery and preflight foundation**
 ([RFC-0007](rfcs/0007-the-ingot-product-loop.md),

@@ -51,7 +51,6 @@ to you*.
 | [GAP-013](#gap-013) | A capability cannot be scoped to an endpoint or a path | Absent | a policy subject for resources (RFC) |
 | [GAP-014](#gap-014) | No persistent memory or state migration | Absent | a memory model (RFC) |
 | [GAP-015](#gap-015) | No OCI artifact, lockfile or digest addressing | Absent | M6 |
-| [GAP-016](#gap-016) | No language server | Absent | M7 |
 | [GAP-017](#gap-017) | No conformance suite or backend author guide | Absent | M8 |
 | [GAP-019](#gap-019) | The name has had no trademark or registry clearance | Absent | legal review |
 | [GAP-020](#gap-020) | The boundary needs Linux containers | Refused | a second expression of the boundary |
@@ -482,15 +481,6 @@ binary before shipping it; and publishes one `SHA256SUMS` covering all of them.
 *Not closed yet on purpose.* Publishing is outward-facing and
 [GAP-019](#gap-019) — no trademark or registry clearance for the name — is still
 open. That is a decision for the maintainer, not a build step.
-
-### GAP-016
-
-**No language server.**
-
-No completion, no hover, no inline diagnostics. `ingot check` in a terminal is
-the whole editor story.
-
-*Closes with.* M7.
 
 ### GAP-017
 

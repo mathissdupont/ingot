@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use anyhow::{anyhow, Context};
 use ingot_diagnostics::Severity;
 use ingot_language_service::{
-    EditorDiagnostic, EditorPosition, EditorRange, LanguageService, SourceRange,
+    CompletionKind, EditorDiagnostic, EditorPosition, EditorRange, LanguageService, SourceRange,
 };
 use lsp_server::{
     Connection, ErrorCode, Message, Notification as ServerNotification, Request as ServerRequest,
@@ -18,9 +18,12 @@ use lsp_server::{
 use lsp_types::{notification::Notification as _, request::Request as _};
 use lsp_types::{
     notification::{DidChangeTextDocument, DidOpenTextDocument, PublishDiagnostics},
-    request::Formatting,
-    Diagnostic, DiagnosticSeverity, DidChangeTextDocumentParams, DidOpenTextDocumentParams,
-    DocumentFormattingParams, NumberOrString, OneOf, Position, PositionEncodingKind,
+    request::{Completion, Formatting, GotoDefinition, HoverRequest},
+    CompletionItem as LspCompletionItem, CompletionItemKind, CompletionOptions, CompletionParams,
+    CompletionResponse, Diagnostic, DiagnosticSeverity, DidChangeTextDocumentParams,
+    DidOpenTextDocumentParams, DocumentFormattingParams, Documentation, GotoDefinitionParams,
+    GotoDefinitionResponse, Hover, HoverContents, HoverParams, HoverProviderCapability, Location,
+    MarkupContent, MarkupKind, NumberOrString, OneOf, Position, PositionEncodingKind,
     PublishDiagnosticsParams, Range, ServerCapabilities, TextDocumentSyncKind, TextEdit, Uri,
 };
 
@@ -43,6 +46,13 @@ pub fn server_capabilities() -> ServerCapabilities {
         position_encoding: Some(PositionEncodingKind::UTF16),
         text_document_sync: Some(TextDocumentSyncKind::FULL.into()),
         document_formatting_provider: Some(OneOf::Left(true)),
+        completion_provider: Some(CompletionOptions {
+            resolve_provider: Some(false),
+            trigger_characters: Some(vec![".".to_string(), "<".to_string(), "!".to_string()]),
+            ..Default::default()
+        }),
+        hover_provider: Some(HoverProviderCapability::Simple(true)),
+        definition_provider: Some(OneOf::Left(true)),
         ..Default::default()
     }
 }
@@ -83,6 +93,62 @@ pub fn format_text_document(name: &str, text: &str) -> Option<Vec<TextEdit>> {
             })
             .collect(),
     )
+}
+
+pub fn complete_text_document(
+    name: &str,
+    text: &str,
+    position: EditorPosition,
+) -> CompletionResponse {
+    let service = LanguageService::new();
+    let result = service.completion_items(name, text, position);
+    CompletionResponse::Array(
+        result
+            .items
+            .into_iter()
+            .map(|item| LspCompletionItem {
+                label: item.label,
+                kind: Some(lsp_completion_kind(item.kind)),
+                detail: item.detail,
+                documentation: item.documentation.map(Documentation::String),
+                insert_text: item.insert_text,
+                ..Default::default()
+            })
+            .collect(),
+    )
+}
+
+pub fn hover_text_document(name: &str, text: &str, position: EditorPosition) -> Option<Hover> {
+    let service = LanguageService::new();
+    service
+        .hover(name, text, position)
+        .hover
+        .map(|hover| Hover {
+            contents: HoverContents::Markup(MarkupContent {
+                kind: MarkupKind::Markdown,
+                value: hover.contents,
+            }),
+            range: Some(lsp_range(hover.range.range)),
+        })
+}
+
+pub fn definition_text_document(
+    uri: &Uri,
+    name: &str,
+    text: &str,
+    position: EditorPosition,
+) -> Option<GotoDefinitionResponse> {
+    let service = LanguageService::new();
+    let definition = service.definition(name, text, position).definition?;
+    let target_uri = definition
+        .target
+        .file
+        .parse()
+        .unwrap_or_else(|_| uri.clone());
+    Some(GotoDefinitionResponse::Scalar(Location {
+        uri: target_uri,
+        range: lsp_range(definition.target.range),
+    }))
 }
 
 fn main_loop(connection: Connection) -> anyhow::Result<()> {
@@ -169,6 +235,49 @@ impl ServerState {
             .ok_or_else(|| anyhow!("document is not open: {}", uri.as_str()))?;
         Ok(format_text_document(&document.name, &document.text))
     }
+
+    fn complete(&self, params: CompletionParams) -> anyhow::Result<CompletionResponse> {
+        let uri = params.text_document_position.text_document.uri;
+        let document = self
+            .documents
+            .get(&uri)
+            .ok_or_else(|| anyhow!("document is not open: {}", uri.as_str()))?;
+        Ok(complete_text_document(
+            &document.name,
+            &document.text,
+            editor_position(params.text_document_position.position),
+        ))
+    }
+
+    fn hover(&self, params: HoverParams) -> anyhow::Result<Option<Hover>> {
+        let uri = params.text_document_position_params.text_document.uri;
+        let document = self
+            .documents
+            .get(&uri)
+            .ok_or_else(|| anyhow!("document is not open: {}", uri.as_str()))?;
+        Ok(hover_text_document(
+            &document.name,
+            &document.text,
+            editor_position(params.text_document_position_params.position),
+        ))
+    }
+
+    fn definition(
+        &self,
+        params: GotoDefinitionParams,
+    ) -> anyhow::Result<Option<GotoDefinitionResponse>> {
+        let uri = params.text_document_position_params.text_document.uri;
+        let document = self
+            .documents
+            .get(&uri)
+            .ok_or_else(|| anyhow!("document is not open: {}", uri.as_str()))?;
+        Ok(definition_text_document(
+            &uri,
+            &document.name,
+            &document.text,
+            editor_position(params.text_document_position_params.position),
+        ))
+    }
 }
 
 fn handle_notification(
@@ -206,6 +315,27 @@ fn handle_request(
                 serde_json::from_value(request.params).context("decoding formatting params")?;
             let edits = state.format(params)?;
             send_ok(connection, id, &edits)?;
+        }
+        Completion::METHOD => {
+            let id = request.id;
+            let params: CompletionParams =
+                serde_json::from_value(request.params).context("decoding completion params")?;
+            let items = state.complete(params)?;
+            send_ok(connection, id, &Some(items))?;
+        }
+        HoverRequest::METHOD => {
+            let id = request.id;
+            let params: HoverParams =
+                serde_json::from_value(request.params).context("decoding hover params")?;
+            let hover = state.hover(params)?;
+            send_ok(connection, id, &hover)?;
+        }
+        GotoDefinition::METHOD => {
+            let id = request.id;
+            let params: GotoDefinitionParams =
+                serde_json::from_value(request.params).context("decoding definition params")?;
+            let definition = state.definition(params)?;
+            send_ok(connection, id, &definition)?;
         }
         _ => send_err(
             connection,
@@ -326,6 +456,28 @@ fn lsp_position(position: EditorPosition) -> Position {
     Position::new(position.line, position.character)
 }
 
+fn editor_position(position: Position) -> EditorPosition {
+    EditorPosition {
+        line: position.line,
+        character: position.character,
+    }
+}
+
+fn lsp_completion_kind(kind: CompletionKind) -> CompletionItemKind {
+    match kind {
+        CompletionKind::Keyword | CompletionKind::Section | CompletionKind::Value => {
+            CompletionItemKind::KEYWORD
+        }
+        CompletionKind::Type => CompletionItemKind::STRUCT,
+        CompletionKind::Tool | CompletionKind::Verifier | CompletionKind::Agent => {
+            CompletionItemKind::FUNCTION
+        }
+        CompletionKind::Field | CompletionKind::Output => CompletionItemKind::FIELD,
+        CompletionKind::Binding => CompletionItemKind::VARIABLE,
+        CompletionKind::Builtin => CompletionItemKind::FUNCTION,
+    }
+}
+
 fn span_data(range: &SourceRange) -> serde_json::Value {
     serde_json::json!({
         "file": range.file,
@@ -356,6 +508,26 @@ agent Brief(topic: string) -> report<markdown> {
 }
 "#;
 
+    const AUTHORING_SOURCE: &str = r#"language 0.1
+package demo
+
+/// Search result returned by the web tool.
+type search_result { title: string url: string }
+
+/// Search the web.
+tool web.search(query: string) -> search_result[] !network
+
+agent Research(topic: string) -> report<markdown> {
+  tools { mcp web.search }
+  policy { network allow }
+  flow {
+
+    hits = call web.search(topic)
+    emit report = ask<markdown>("Report ${topic}")
+  }
+}
+"#;
+
     fn repo_root() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
@@ -366,6 +538,20 @@ agent Brief(topic: string) -> report<markdown> {
 
     fn uri(value: &str) -> Uri {
         Uri::from_str(value).expect("test URI must parse")
+    }
+
+    fn position_for(text: &str, needle: &str) -> EditorPosition {
+        let offset = text
+            .find(needle)
+            .unwrap_or_else(|| panic!("test source must contain {needle:?}"));
+        let prefix = &text[..offset];
+        let line = prefix.chars().filter(|ch| *ch == '\n').count() as u32;
+        let line_start = prefix.rfind('\n').map(|index| index + 1).unwrap_or(0);
+        let character = prefix[line_start..]
+            .chars()
+            .map(|ch| ch.len_utf16() as u32)
+            .sum();
+        EditorPosition { line, character }
     }
 
     #[test]
@@ -380,6 +566,12 @@ agent Brief(topic: string) -> report<markdown> {
             capabilities.document_formatting_provider,
             Some(OneOf::Left(true))
         );
+        assert!(capabilities.completion_provider.is_some());
+        assert_eq!(
+            capabilities.hover_provider,
+            Some(HoverProviderCapability::Simple(true))
+        );
+        assert_eq!(capabilities.definition_provider, Some(OneOf::Left(true)));
     }
 
     #[test]
@@ -440,6 +632,53 @@ agent Brief(topic:string)->report<markdown>{flow{emit report=ask<markdown>("ok")
     #[test]
     fn syntax_errors_return_no_format_edit() {
         assert!(format_text_document("file:///broken.ing", "language 0.1\nagent\n").is_none());
+    }
+
+    #[test]
+    fn completion_hover_and_definition_use_language_service_data() {
+        let document_uri = uri("file:///main.ing");
+
+        let completions = complete_text_document(
+            document_uri.as_str(),
+            AUTHORING_SOURCE,
+            position_for(AUTHORING_SOURCE, "\n    hits = call"),
+        );
+        let CompletionResponse::Array(items) = completions else {
+            panic!("completion should return an item array");
+        };
+        assert!(items.iter().any(|item| item.label == "web.search"));
+        assert!(items.iter().any(|item| item.label == "agent"));
+
+        let hover = hover_text_document(
+            document_uri.as_str(),
+            AUTHORING_SOURCE,
+            position_for(AUTHORING_SOURCE, "search_result {"),
+        )
+        .expect("hover should be available");
+        let HoverContents::Markup(markup) = hover.contents else {
+            panic!("hover should be markdown");
+        };
+        assert!(markup.value.contains("type search_result"));
+        assert_eq!(
+            hover.range,
+            Some(Range::new(Position::new(4, 5), Position::new(4, 18)))
+        );
+
+        let definition = definition_text_document(
+            &document_uri,
+            document_uri.as_str(),
+            AUTHORING_SOURCE,
+            position_for(AUTHORING_SOURCE, "web.search(topic)"),
+        )
+        .expect("definition should be available");
+        let GotoDefinitionResponse::Scalar(location) = definition else {
+            panic!("definition should return one location");
+        };
+        assert_eq!(location.uri, document_uri);
+        assert_eq!(
+            location.range,
+            Range::new(Position::new(7, 5), Position::new(7, 15))
+        );
     }
 
     #[test]

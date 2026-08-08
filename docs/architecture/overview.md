@@ -40,9 +40,9 @@ conventions — see [ADR-0001](../adr/0001-rust-monorepo.md).
 
 Editor tooling is an adapter on top of that front end rather than a second front
 end. `ingot-language-service` consumes `ingot-compiler` and projects compiler
-diagnostics and canonical formatting into editor-neutral data: stable diagnostic
-codes and byte spans are preserved, and ranges are also converted to zero-based
-UTF-16 positions for LSP adapters. See
+diagnostics, canonical formatting, completion, hover and definition data into an
+editor-neutral shape: stable diagnostic codes and byte spans are preserved, and
+ranges are also converted to zero-based UTF-16 positions for LSP adapters. See
 [Ingot Language Service](../language-service.md). `ingot-lsp` is the first
 stdio protocol adapter over that crate.
 
@@ -156,9 +156,12 @@ Diagnostics are data, not strings: a stable code, a severity, a primary label,
 optional secondary labels, notes, and help. The terminal renderer and the future
 language server consume the same structure. The first editor-facing adapter is
 `ingot-language-service`, which keeps the original byte span beside the
-LSP-style range so CLI/editor equality is testable rather than assumed.
-`ingot-lsp` publishes those diagnostics with the stable code in the LSP
-diagnostic `code` field and the byte-span data in `Diagnostic.data`.
+LSP-style range so CLI/editor equality is testable rather than assumed. It also
+projects compiler/parser facts into completion, hover and definition data so
+editors do not maintain their own Ingot parser. `ingot-lsp` publishes those
+diagnostics with the stable code in the LSP diagnostic `code` field and the
+byte-span data in `Diagnostic.data`, then adapts the same service data for
+formatting, completion, hover and go-to-definition.
 
 Codes are grouped by area (`ING1xxx` parsing through `ING6xxx` lowering) and are
 never reused for a different meaning. `ingot explain <CODE>` prints the long
@@ -176,8 +179,8 @@ names do not produce nonsense suggestions.
 | Behaviour | `ingot-semantic/src/tests.rs` | every diagnostic code has a test |
 | Structural | `ingot-compiler/src/tests.rs` | lowering shape: hoisting, regions, approvals |
 | Golden | `tests/golden-ir/` | the IR of the reference examples, byte for byte |
-| Language service | `ingot-language-service` | editor diagnostics and formatting use compiler data |
-| LSP | `ingot-lsp` | protocol diagnostics and formatting preserve compiler data |
+| Language service | `ingot-language-service` | editor diagnostics, formatting and authoring features use compiler data |
+| LSP | `ingot-lsp` | protocol diagnostics, formatting, completion, hover and navigation preserve compiler data |
 | End to end | `ingot-cli/tests/cli.rs` | commands, exit codes, stdout/stderr split |
 | Differential | `ingot-cli/tests/differential.rs` | one artifact and cassette through Rust and generated Python |
 | Consistency | `golden_ir.rs` | the published schema matches the Rust model |
@@ -189,10 +192,9 @@ catches mistakes.
 
 The components above are not yet joined into every part of the integrated
 authoring loop in [RFC-0007](../../rfcs/0007-the-ingot-product-loop.md). The
-language-service foundation and the diagnostics/formatting LSP adapter exist,
-but syntax highlighting grammar, completion, hover, definition navigation, a
-reference editor extension, reusable source modules, OCI packaging, lockfile,
-and packaged backend conformance suite are still open work.
+language-service foundation, LSP adapter and reference VS Code extension exist.
+Reusable source modules, OCI packaging, lockfile and the packaged backend
+conformance suite are still open work.
 
 The [roadmap](../../README.md#roadmap) has the sequence;
 [ADR-0002](../adr/0002-compiler-not-runtime.md) explains why execution is

@@ -545,6 +545,8 @@ dependencies = [
  "ingot-compiler",
  "ingot-diagnostics",
  "ingot-source",
+ "ingot-syntax",
+ "ingot-types",
  "serde",
 ]
 
