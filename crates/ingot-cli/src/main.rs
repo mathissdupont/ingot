@@ -18,6 +18,7 @@ use ingot_compiler::{compile_path, format_source, Compilation};
 use ingot_diagnostics::{codes, ColorChoice as RenderColor};
 
 mod contained;
+mod doctor;
 mod manifest;
 mod run;
 mod sandbox;
@@ -92,6 +93,8 @@ enum Command {
     Run(RunArgs),
     /// Replay recorded cassettes and check every one still runs.
     Test(TestArgs),
+    /// Check everything a live or contained run needs without starting it.
+    Doctor(DoctorArgs),
     /// Show which MCP server provides each tool the program declares.
     Tools(PathArgs),
     /// Show the boundary each tool server would run inside, derived from the
@@ -308,6 +311,16 @@ struct TestArgs {
 }
 
 #[derive(Args, Debug)]
+struct DoctorArgs {
+    #[command(flatten)]
+    target: PathArgs,
+
+    /// Print one stable JSON report for editors and CI.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args, Debug)]
 struct SandboxArgs {
     #[command(flatten)]
     target: PathArgs,
@@ -342,6 +355,7 @@ fn main() -> ExitCode {
         Command::Ir(args) => run_ir(args, color),
         Command::Run(args) => run_run(args, color),
         Command::Test(args) => run_test(args, color),
+        Command::Doctor(args) => run_doctor(args, color),
         Command::Tools(args) => run_tools(args, color),
         Command::Sandbox(args) => run_sandbox(args, color),
         Command::Explain(args) => run_explain(args),
@@ -989,6 +1003,17 @@ fn run_test(args: &TestArgs, color: RenderColor) -> Result<u8> {
             filter: args.filter.clone(),
         },
     )
+}
+
+// --- doctor ---------------------------------------------------------------
+
+fn run_doctor(args: &DoctorArgs, color: RenderColor) -> Result<u8> {
+    let target = resolve_target(args.target.path.as_deref())?;
+    let compilation = compile(&target)?;
+    if !args.json {
+        report(&compilation, color);
+    }
+    doctor::inspect(&target, &compilation, args.json)
 }
 
 // --- sandbox ---------------------------------------------------------------

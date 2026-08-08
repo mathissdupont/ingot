@@ -184,6 +184,7 @@ export CARGO_TARGET_DIR=/c/build/ingot
 | `ingot run --sandbox` | execute it with each tool server inside a boundary |
 | `ingot run --contained` | execute the agent itself inside a boundary |
 | `ingot test` | replay recorded cassettes |
+| `ingot doctor [--json]` | report source, provider, MCP and container readiness without starting them |
 | `ingot tools` | show which MCP server provides each declared tool |
 | `ingot sandbox` | show the boundary each tool server would run inside |
 | `ingot explain <CODE>` | explain a diagnostic in full |
@@ -192,6 +193,26 @@ Exit codes: `0` success, `1` the program has blocking diagnostics, `2` the
 command itself failed. Diagnostics, progress events and status lines go to
 stderr; `ingot ir` and `ingot run` write only their payload to stdout, so both
 are safe to pipe.
+
+### Check readiness before a run
+
+`ingot doctor` gathers the setup failures that would otherwise appear at
+different stages of a live or contained run. It compiles the source, checks
+provider selection and credential presence, checks static MCP routes and server
+commands, then detects Docker or Podman and the version-matched reference image.
+It starts no provider, MCP server or container, and prints environment-variable
+names but never their values.
+
+```bash
+ingot doctor
+ingot doctor --json | jq -e '.ready'
+```
+
+Exit code `1` means at least one check failed. Warnings identify facts that a
+read-only check cannot prove, such as an MCP server's dynamically published tool
+inventory; `ingot tools` performs that live verification. The versioned JSON
+contract is documented in
+[`docs/doctor-json-v1.md`](docs/doctor-json-v1.md).
 
 ### Choosing a model
 

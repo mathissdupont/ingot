@@ -441,7 +441,7 @@ turning a deliberately small agent language into a general-purpose one by guess.
 ## Conformance and acceptance tests
 
 - [x] `a_template_project_checks_builds_and_replays_without_a_key`
-- [ ] `doctor_names_every_missing_run_prerequisite_without_revealing_a_secret`
+- [x] `doctor_names_every_missing_run_prerequisite_without_revealing_a_secret`
 - [ ] `dev_never_runs_a_source_revision_that_failed_to_compile`
 - [ ] `the_human_trace_preserves_the_json_event_order`
 - [ ] `a_reference_contained_run_needs_no_repository_specific_build_command`

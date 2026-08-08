@@ -322,7 +322,7 @@ impl ApprovalHandler for TerminalApprovals {
 /// A superset of what one run needs: which sub-agents a flow reaches is decided
 /// at run time, so narrowing this would mean starting a server halfway through
 /// a run. Starting one server too many is the cheaper mistake.
-fn required_tools(compilation: &Compilation) -> BTreeSet<String> {
+pub(crate) fn required_tools(compilation: &Compilation) -> BTreeSet<String> {
     compilation
         .agents
         .iter()

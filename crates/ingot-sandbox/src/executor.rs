@@ -135,6 +135,45 @@ pub fn detect() -> Result<Runtime, ExecutorError> {
     Err(last.unwrap_or(ExecutorError::NoRuntime))
 }
 
+/// Whether an image is present in a runtime's local store, without starting it.
+///
+/// The daemon has already answered [`detect`]; an unexpected inspection error
+/// therefore means it stopped being usable rather than that the image is
+/// absent. Keeping those cases separate gives `ingot doctor` an actionable
+/// answer without turning a read-only preflight into a pull or a build.
+pub fn image_exists(runtime: &Runtime, image: &str) -> Result<bool, ExecutorError> {
+    let output = Command::new(&runtime.program)
+        .args(["image", "inspect", image, "--format", "{{.Id}}"])
+        .output()
+        .map_err(|error| ExecutorError::RuntimeUnavailable {
+            runtime: runtime.program.clone(),
+            reason: error.to_string(),
+        })?;
+
+    if output.status.success() {
+        return Ok(true);
+    }
+
+    let reason = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let normalised = reason.to_ascii_lowercase();
+    if normalised.contains("no such image")
+        || normalised.contains("not found")
+        || normalised.contains("no such object")
+        || normalised.contains("image not known")
+    {
+        return Ok(false);
+    }
+
+    Err(ExecutorError::RuntimeUnavailable {
+        runtime: runtime.program.clone(),
+        reason: if reason.is_empty() {
+            format!("could not inspect image `{image}`")
+        } else {
+            reason
+        },
+    })
+}
+
 /// The arguments that ask a runtime for this plan.
 ///
 /// Returns everything after the runtime's own name, so the caller spawns

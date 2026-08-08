@@ -8,6 +8,22 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
 
 ## [Unreleased]
 
+**One readiness report before execution**
+([RFC-0007](rfcs/0007-the-ingot-product-loop.md),
+[#2](https://github.com/mathissdupont/ingot/issues/2))
+
+- `ingot doctor [PATH]` reports compilation, provider routing and credential
+  presence, static MCP routing and executable availability, and contained-run
+  runtime/image readiness without starting a provider, server or container.
+- Every failed check names its source or manifest location and an actionable
+  fix. Credential values are never read into or printed by the report.
+- `ingot doctor --json` emits the documented schema v1 shape for editors and CI;
+  check identifiers and statuses are stable, and exit code `1` means at least
+  one blocking prerequisite is missing.
+- Container image inspection is now a public read-only sandbox operation. The
+  doctor checks both a configured custom image and the version-matched
+  `ingot/run:<cli-version>` reference image without pulling either one.
+
 **The first complete product-loop path**
 ([RFC-0007](rfcs/0007-the-ingot-product-loop.md),
 [#1](https://github.com/mathissdupont/ingot/issues/1))

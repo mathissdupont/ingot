@@ -137,6 +137,112 @@ fn a_missing_path_is_a_command_failure_not_a_diagnostic() {
 }
 
 #[test]
+fn doctor_names_every_missing_run_prerequisite_without_revealing_a_secret() {
+    let dir = TempDir::new("doctor-missing");
+    std::fs::write(
+        dir.path().join("main.ing"),
+        r#"language 0.1
+
+tool web.search(query: string) -> text !network
+
+agent Research(topic: string) -> brief<markdown> {
+  model exact "ghost/model"
+
+  tools {
+    mcp web.search
+  }
+
+  budget {
+    steps <= 4
+    tokens <= 20000
+  }
+
+  policy {
+    network allow ["example.com"]
+  }
+
+  flow {
+    source = call web.search(topic)
+    emit brief = ask<markdown>("Summarise ${source}.")
+  }
+}
+"#,
+    )
+    .expect("writing doctor source");
+    std::fs::write(
+        dir.path().join("ingot.toml"),
+        r#"[project]
+name = "doctor-missing"
+
+[[model.provider]]
+name = "secure"
+kind = "openai"
+base-url = "https://example.invalid/v1/chat/completions"
+api-key-env = "DOCTOR_SECRET_TOKEN"
+
+[[mcp.server]]
+name = "first"
+command = "ingot-doctor-no-such-server"
+pass-env = ["DOCTOR_SECRET_TOKEN"]
+
+[mcp.server.tools]
+"web.search" = "first.search"
+
+[[mcp.server]]
+name = "second"
+command = "ingot-doctor-also-missing"
+
+[mcp.server.tools]
+"web.search" = "second.search"
+"#,
+    )
+    .expect("writing doctor manifest");
+
+    let secret = "never-print-this-doctor-secret";
+    let output = Command::new(binary())
+        .args(["doctor", &dir.path().display().to_string(), "--json"])
+        // Makes runtime and fake MCP command detection deterministic without
+        // affecting the already-resolved path to the `ingot` test binary.
+        .env("PATH", "")
+        .env("DOCTOR_SECRET_TOKEN", secret)
+        .env_remove("ANTHROPIC_API_KEY")
+        .env_remove("OPENAI_API_KEY")
+        .output()
+        .expect("doctor must be runnable");
+
+    assert_eq!(code(&output), EXIT_DIAGNOSTICS, "{}", stderr(&output));
+    let printed = format!("{}{}", stdout(&output), stderr(&output));
+    assert!(!printed.contains(secret), "secret value leaked:\n{printed}");
+    assert!(
+        printed.contains("DOCTOR_SECRET_TOKEN"),
+        "the variable name is actionable:\n{printed}"
+    );
+
+    let report: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("doctor stdout must be one JSON document");
+    assert_eq!(report["schemaVersion"], 1);
+    assert_eq!(report["ready"], false);
+    let checks = report["checks"].as_array().expect("checks array");
+    for (id, status) in [
+        ("source.compile", "pass"),
+        ("provider.route.ghost", "fail"),
+        ("tools.server.first.command", "fail"),
+        ("tools.server.second.command", "fail"),
+        ("tools.route.web.search", "fail"),
+        ("container.runtime", "fail"),
+        ("container.configured-image", "fail"),
+    ] {
+        assert!(
+            checks
+                .iter()
+                .any(|check| check["id"] == id && check["status"] == status),
+            "missing {status} check `{id}`:\n{}",
+            stdout(&output)
+        );
+    }
+}
+
+#[test]
 fn init_creates_a_project_that_checks_and_builds() {
     let dir = TempDir::new("init");
     let project = dir.path().join("my-agent");
