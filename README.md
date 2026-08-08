@@ -185,6 +185,7 @@ export CARGO_TARGET_DIR=/c/build/ingot
 | `ingot run --contained` | execute the agent itself inside a boundary |
 | `ingot test` | replay recorded cassettes |
 | `ingot doctor [--json]` | report source, provider, MCP and container readiness without starting them |
+| `ingot dev [--run]` | watch source, check and build good revisions, optionally run them |
 | `ingot tools` | show which MCP server provides each declared tool |
 | `ingot sandbox` | show the boundary each tool server would run inside |
 | `ingot explain <CODE>` | explain a diagnostic in full |
@@ -213,6 +214,31 @@ read-only check cannot prove, such as an MCP server's dynamically published tool
 inventory; `ingot tools` performs that live verification. The versioned JSON
 contract is documented in
 [`docs/doctor-json-v1.md`](docs/doctor-json-v1.md).
+
+### Develop without command juggling
+
+`ingot dev` immediately checks and builds the project, then watches the entry
+source and manifest through the operating system's filesystem events. A bad
+revision prints the compiler's normal diagnostics, is never built or run, and
+leaves the last successful IR in place.
+
+```bash
+ingot dev
+```
+
+Model execution is deliberately opt-in. Example inputs use the same syntax as
+`ingot run`; runs are serialized, so a slow completion can never overlap the
+next one:
+
+```bash
+ingot dev --run --input topic="compiler design"
+ingot dev --run --provider replay --cassette tests/cassettes/example.json \
+  --input topic="compiler design"
+```
+
+The compact status identifies each source revision and says when an older good
+artifact was kept. Run `ingot doctor` first when a live provider or configured
+tool is not ready.
 
 ### Choosing a model
 

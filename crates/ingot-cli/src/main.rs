@@ -18,6 +18,7 @@ use ingot_compiler::{compile_path, format_source, Compilation};
 use ingot_diagnostics::{codes, ColorChoice as RenderColor};
 
 mod contained;
+mod dev;
 mod doctor;
 mod manifest;
 mod run;
@@ -95,6 +96,8 @@ enum Command {
     Test(TestArgs),
     /// Check everything a live or contained run needs without starting it.
     Doctor(DoctorArgs),
+    /// Watch, check and build each source revision; optionally run good ones.
+    Dev(DevArgs),
     /// Show which MCP server provides each tool the program declares.
     Tools(PathArgs),
     /// Show the boundary each tool server would run inside, derived from the
@@ -321,6 +324,50 @@ struct DoctorArgs {
 }
 
 #[derive(Args, Debug)]
+struct DevArgs {
+    #[command(flatten)]
+    target: PathArgs,
+
+    /// Run every successfully built revision. Off by default: saving a prompt
+    /// must not silently make a model call.
+    #[arg(long)]
+    run: bool,
+
+    /// An example input as `name=value`; repeat for each input.
+    #[arg(
+        long = "input",
+        short = 'i',
+        value_name = "NAME=VALUE",
+        requires = "run"
+    )]
+    inputs: Vec<String>,
+
+    /// Where opt-in runs get completions.
+    #[arg(long, value_enum, default_value_t = ProviderChoice::Auto)]
+    provider: ProviderChoice,
+
+    /// Cassette used when `--provider replay` is selected.
+    #[arg(long, value_name = "FILE", requires = "run")]
+    cassette: Option<PathBuf>,
+
+    /// Agent to run when the source declares several.
+    #[arg(long, value_name = "NAME", requires = "run")]
+    agent: Option<String>,
+
+    /// Progress detail for opt-in runs.
+    #[arg(long, value_enum, default_value_t = EventFormat::Quiet)]
+    events: EventFormat,
+
+    /// Approve every gate during opt-in runs without prompting.
+    #[arg(long, requires = "run")]
+    yes: bool,
+
+    /// Stop an opt-in run after this many steps.
+    #[arg(long, default_value_t = 1000, value_name = "N")]
+    max_steps: u32,
+}
+
+#[derive(Args, Debug)]
 struct SandboxArgs {
     #[command(flatten)]
     target: PathArgs,
@@ -356,6 +403,7 @@ fn main() -> ExitCode {
         Command::Run(args) => run_run(args, color),
         Command::Test(args) => run_test(args, color),
         Command::Doctor(args) => run_doctor(args, color),
+        Command::Dev(args) => run_dev(args, color),
         Command::Tools(args) => run_tools(args, color),
         Command::Sandbox(args) => run_sandbox(args, color),
         Command::Explain(args) => run_explain(args),
@@ -576,6 +624,7 @@ fn starter_readme(name: &str, template: StarterTemplate) -> String {
             "ingot run --provider replay --cassette tests/cassettes/example.json --input document=@examples/document.txt --input audience=\"project leads\""
         }
     };
+    let dev_replay = replay.replacen("ingot run", "ingot dev --run", 1);
     format!(
         r#"# {name}
 
@@ -597,6 +646,21 @@ ingot test
 `ingot test` replays the reviewed fixture in `tests/cassettes/`. The final
 command runs that same fixture and prints the artifact. Change `main.ing`, then
 record a new cassette against a configured provider before accepting its diff.
+
+## Develop
+
+Keep `check` and the canonical IR build current while editing:
+
+```bash
+ingot dev
+```
+
+Running is opt-in, so a save does not silently call a model. This command runs
+each successful revision against the checked-in cassette and example inputs:
+
+```bash
+{dev_replay}
+```
 
 `ingot build` writes `target/ingot/{}.ir.json`. Agent IR is the canonical,
 target-neutral artifact consumed by every backend.
@@ -774,7 +838,7 @@ fn run_build(args: &BuildArgs, color: RenderColor) -> Result<u8> {
     }
 }
 
-fn build_ir(compilation: &Compilation, target: &Target) -> Result<u8> {
+pub(crate) fn build_ir(compilation: &Compilation, target: &Target) -> Result<u8> {
     for agent in &compilation.agents {
         let path = target
             .out_dir
@@ -949,7 +1013,7 @@ fn run_run(args: &RunArgs, color: RenderColor) -> Result<u8> {
 
 /// The root policy paths are relative to: the flag, then the manifest, then the
 /// project directory.
-fn workspace(flag: Option<&Path>, target: &Target) -> Result<PathBuf> {
+pub(crate) fn workspace(flag: Option<&Path>, target: &Target) -> Result<PathBuf> {
     let chosen = flag
         .map(Path::to_path_buf)
         .unwrap_or_else(|| target.workspace());
@@ -1016,6 +1080,27 @@ fn run_doctor(args: &DoctorArgs, color: RenderColor) -> Result<u8> {
     doctor::inspect(&target, &compilation, args.json)
 }
 
+// --- dev ------------------------------------------------------------------
+
+fn run_dev(args: &DevArgs, color: RenderColor) -> Result<u8> {
+    let initial = resolve_target(args.target.path.as_deref())?;
+    dev::watch(
+        args.target.path.as_deref(),
+        initial,
+        &dev::DevConfig {
+            run: args.run,
+            inputs: args.inputs.clone(),
+            provider: args.provider,
+            cassette: args.cassette.clone(),
+            agent: args.agent.clone(),
+            events: args.events,
+            yes: args.yes,
+            max_steps: args.max_steps,
+            color,
+        },
+    )
+}
+
 // --- sandbox ---------------------------------------------------------------
 
 fn run_sandbox(args: &SandboxArgs, color: RenderColor) -> Result<u8> {
@@ -1056,7 +1141,7 @@ fn run_explain(args: &ExplainArgs) -> Result<u8> {
 
 // --- shared ----------------------------------------------------------------
 
-fn compile(target: &Target) -> Result<Compilation> {
+pub(crate) fn compile(target: &Target) -> Result<Compilation> {
     compile_path(&target.entry).with_context(|| format!("compiling {}", target.entry.display()))
 }
 
@@ -1065,7 +1150,7 @@ fn compile(target: &Target) -> Result<Compilation> {
 /// Everything here goes to stderr, including the success line: stdout carries
 /// machine-readable output such as `ingot ir`, and a status message must never
 /// end up in a pipe someone is parsing.
-fn report(compilation: &Compilation, color: RenderColor) {
+pub(crate) fn report(compilation: &Compilation, color: RenderColor) {
     if !compilation.diagnostics.is_empty() {
         eprint!("{}", compilation.render_diagnostics(color));
     }

@@ -311,6 +311,14 @@ fn a_template_project_checks_builds_and_replays_without_a_key() {
                 "template `{template}` does not print `{command}` as an executable README line:\n{readme}"
             );
         }
+        assert!(
+            readme.lines().any(|line| line == "ingot dev"),
+            "template `{template}` does not expose the integrated edit loop:\n{readme}"
+        );
+        assert!(
+            readme.contains("ingot dev --run --provider replay"),
+            "template `{template}` does not expose the opt-in offline run:\n{readme}"
+        );
         if let Some(path) = extra_file {
             assert!(project.join(path).is_file(), "{template}: missing {path}");
         }

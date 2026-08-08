@@ -390,14 +390,15 @@ what a provider rate limit does to a fan-out.
 **The product loop is fragmented across commands and raw output.**
 
 The compiler, builder, cassette runner, event stream and policy-derived
-container all work, but authoring requires manually alternating between them.
-There is no watch mode, unified readiness report or human trace. The result is
-correct; reaching and understanding it takes more toolchain knowledge than the
+container all work. Maintained templates, `ingot doctor` and `ingot dev` now
+cover creation, readiness and the check-build-run edit loop; a human trace and
+integrated tool/safe-run guidance are still missing. The result is correct, but
+understanding a multi-node run still takes more toolchain knowledge than the
 agent itself should require.
 
-*How it shows up.* A prompt edit requires a separate `check`, `build` and `run`;
-provider, MCP and image prerequisites are discovered at different stages; a
-multi-node failure is diagnosed from terminal status and raw JSON events.
+*How it shows up.* A multi-node failure is still diagnosed from terminal status
+and raw JSON events, and safe-run/tool onboarding remains separate from the edit
+loop.
 
 *What closing it needs.* M11 and the P1–P5/P8 work packages in
 [RFC-0007](../rfcs/0007-the-ingot-product-loop.md): templates whose instructions

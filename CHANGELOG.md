@@ -8,6 +8,21 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
 
 ## [Unreleased]
 
+**An integrated edit loop**
+([RFC-0007](rfcs/0007-the-ingot-product-loop.md),
+[#3](https://github.com/mathissdupont/ingot/issues/3))
+
+- `ingot dev [PATH]` immediately checks and writes canonical Agent IR, then uses
+  native filesystem events to repeat that cycle when the entry source or
+  manifest changes. Event bursts are debounced without polling the filesystem.
+- Failed revisions retain the compiler's authoritative diagnostics, never reach
+  build or execution, and leave the last successful artifacts untouched.
+- `--run` opts into running each good revision with ordinary `--input`, provider,
+  cassette and agent selection. It is off by default and runs synchronously, so
+  saving a prompt neither silently calls a model nor creates overlapping runs.
+- Generated starter READMEs show both the model-free edit loop and an opt-in
+  offline replay loop using their checked-in cassette and example inputs.
+
 **One readiness report before execution**
 ([RFC-0007](rfcs/0007-the-ingot-product-loop.md),
 [#2](https://github.com/mathissdupont/ingot/issues/2))
