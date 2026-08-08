@@ -29,7 +29,7 @@
 //! supposed to be an independent check on. `Cargo.toml` is the enforcement:
 //! `ingot-ir` and `serde` are the whole dependency list.
 //!
-//! **The emitted semantics come from the specification.** [`emit`] lowers to
+//! **The emitted semantics come from the specification.** [`emit()`] lowers to
 //! Python, and the runtime the output carries was written from
 //! [Runtime 0.1] and [Agent IR 0.1] rather than from reading the Rust. A Python
 //! file transliterated from `ingot-runtime` would agree with it by construction

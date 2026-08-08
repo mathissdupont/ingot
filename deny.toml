@@ -35,7 +35,12 @@ allow = [
     "CDLA-Permissive-2.0",
 ]
 confidence-threshold = 0.9
-exceptions = []
+exceptions = [
+    # notify is used by the local `ingot dev` watch loop. CC0-1.0 is a
+    # permissive public-domain dedication; keep the allowance scoped to this
+    # dependency rather than broadening the workspace-wide allowlist.
+    { allow = ["CC0-1.0"], crate = "notify" },
+]
 
 [bans]
 # Duplicate major versions bloat the binary and make audits harder to reason
