@@ -172,6 +172,10 @@ struct ToolsArgs {
     /// Print one stable discovery and preflight report for editors and CI.
     #[arg(long)]
     json: bool,
+
+    /// Show editable source and manifest proposals; never write them.
+    #[arg(long)]
+    propose: bool,
 }
 
 #[derive(Args, Debug)]
@@ -1083,6 +1087,7 @@ fn run_tools(args: &ToolsArgs, color: RenderColor) -> Result<u8> {
             root: target.root.clone(),
         },
         args.json,
+        args.propose,
     )
 }
 

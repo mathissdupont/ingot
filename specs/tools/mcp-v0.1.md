@@ -72,6 +72,11 @@ Unknown keys are an error. There is no key that takes a literal environment
 value: a manifest is committed, and a secret in a committed file is a published
 secret.
 
+`ingot tools --propose` may render an explicit tool alias for an unresolved
+declaration only when one live server tool has the same final name component and
+a matching checked input shape. The proposal is advisory text: the command does
+not edit this configuration, start an installer, or treat discovery as consent.
+
 A server starts with `env_clear()`, then a fixed set of platform-essential
 variables, then whatever `pass-env` names and the operator's environment
 actually has. Naming a variable the operator does not have is not an error.

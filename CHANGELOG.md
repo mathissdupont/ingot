@@ -21,6 +21,10 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
   remain explicitly unverified.
 - Human `ingot tools` output reports the same schema status and issue codes, so
   CI, editors and operators share one readiness decision.
+- `ingot tools --propose` renders editable typed declarations for undeclared
+  published tools and manifest aliases for uniquely matching unresolved tools.
+  Proposals never write files or guess effects: source snippets retain a
+  blocking `!TODO_EFFECT` until the operator reviews the tool.
 
 **A version-matched contained-run image path**
 ([RFC-0007](rfcs/0007-the-ingot-product-loop.md),

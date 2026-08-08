@@ -187,7 +187,7 @@ export CARGO_TARGET_DIR=/c/build/ingot
 | `ingot test` | replay recorded cassettes |
 | `ingot doctor [--json]` | report source, provider, MCP and container readiness without starting them |
 | `ingot dev [--run]` | watch source, check and build good revisions, optionally run them |
-| `ingot tools [--json]` | discover MCP schemas and preflight each declared tool |
+| `ingot tools [--json] [--propose]` | discover, preflight and propose MCP tool declarations/routes |
 | `ingot sandbox` | show the boundary each tool server would run inside |
 | `ingot explain <CODE>` | explain a diagnostic in full |
 
@@ -366,6 +366,7 @@ args = ["--root", "workspace", "--allow-write"]
 ```bash
 ingot tools           # live routes plus source/schema compatibility
 ingot tools --json    # stable discovery data for editors and CI
+ingot tools --propose # editable source/manifest proposals; writes nothing
 ingot run --input …   # servers start, the agent calls them, they stop
 ```
 
@@ -377,6 +378,15 @@ as compatible. The JSON report also carries each server's input/output schemas
 and required environment-variable **names**, never their values. Its versioned
 contract is documented in
 [`docs/tools-json-v1.md`](docs/tools-json-v1.md).
+
+For a published tool not yet declared in the program, `--propose` renders a
+typed declaration from the required input fields and output schema. MCP cannot
+prove which Ingot effects a tool can cause, so every source proposal contains
+`!TODO_EFFECT` and cannot pass `ingot check` until the operator replaces it.
+Optional parameters and schema features Language 0.1 cannot express are named
+beside the snippet. When a declared but unresolved name has the same suffix and
+input shape as exactly one published tool, the command also proposes the
+specific `[mcp.server.tools]` mapping. It never edits either file.
 
 Tools are served over [MCP](https://modelcontextprotocol.io) by a child process
 on stdio. Three independent gates stand between an agent and a file: the

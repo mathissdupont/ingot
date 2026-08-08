@@ -16,6 +16,7 @@ use support::{
 };
 
 const DIGEST_SOURCE: &str = include_str!("../../../examples/repo-digest/main.ing");
+const NO_TOOLS_SOURCE: &str = include_str!("../../../examples/document-summarizer/main.ing");
 
 /// A throwaway project with a workspace for the server to serve.
 struct Project {
@@ -305,6 +306,54 @@ fn ingot_tools_preflight_rejects_source_schema_drift() {
         .unwrap()
         .iter()
         .any(|problem| problem["code"] == "MCP_SCHEMA_TYPE_MISMATCH"));
+}
+
+#[test]
+fn ingot_tools_proposes_typed_source_without_writing_project_files() {
+    let project = Project::new("tools-source-proposal", NO_TOOLS_SOURCE, true);
+    let source_path = project.workspace().join("main.ing");
+    let manifest_path = project.workspace().join("ingot.toml");
+    let source_before = std::fs::read(&source_path).unwrap();
+    let manifest_before = std::fs::read(&manifest_path).unwrap();
+
+    let output = run(&["tools", "--propose", &project.path()], None);
+
+    assert_eq!(code(&output), EXIT_OK, "{}", stderr(&output));
+    let listing = stdout(&output);
+    assert!(
+        listing.contains("authoring proposals (nothing was written)"),
+        "{listing}"
+    );
+    assert!(
+        listing.contains("tool fs.list_dir(path: string) -> string[] !TODO_EFFECT"),
+        "{listing}"
+    );
+    assert!(listing.contains("replace `TODO_EFFECT`"), "{listing}");
+    assert_eq!(std::fs::read(source_path).unwrap(), source_before);
+    assert_eq!(std::fs::read(manifest_path).unwrap(), manifest_before);
+}
+
+#[test]
+fn ingot_tools_proposes_an_unambiguous_manifest_alias() {
+    let source = DIGEST_SOURCE.replace("fs.read_file", "repo.read_file");
+    let project = Project::new("tools-manifest-proposal", &source, true);
+    let output = run(&["tools", "--json", &project.path()], None);
+
+    assert_eq!(code(&output), EXIT_DIAGNOSTICS, "{}", stderr(&output));
+    let report: serde_json::Value =
+        serde_json::from_str(&stdout(&output)).expect("valid JSON report");
+    let proposals = report["proposals"]["manifest"]
+        .as_array()
+        .expect("manifest proposals");
+    assert_eq!(proposals.len(), 1, "{report:#}");
+    assert_eq!(proposals[0]["tool"], "repo.read_file");
+    assert_eq!(proposals[0]["server"], "workspace");
+    assert_eq!(proposals[0]["remote"], "fs.read_file");
+    assert!(proposals[0]["stanza"]
+        .as_str()
+        .unwrap()
+        .contains("\"repo.read_file\" = \"fs.read_file\""));
+    assert!(report["proposals"]["source"].as_array().unwrap().is_empty());
 }
 
 #[test]

@@ -14,6 +14,7 @@ The top-level shape is:
   "requiredEnvironment": ["SEARCH_API_KEY"],
   "servers": [],
   "declaredTools": [],
+  "proposals": {"source": [], "manifest": []},
   "diagnostics": []
 }
 ```
@@ -93,3 +94,32 @@ does not yet compare result types or recursively compare record fields.
 one declaration, currently `MCP_NO_SERVERS` and `MCP_DISCOVERY_FAILED`. Tool-
 specific route and schema issues remain beside the affected declaration so an
 editor does not have to reconstruct that relationship from prose.
+
+## Authoring proposals
+
+The `proposals` object is present in JSON output whether or not the human-only
+`--propose` flag was supplied. `--propose` merely renders the same proposals in
+the terminal. Neither mode writes project files.
+
+`proposals.source` contains published tools that are not already represented by
+a checked declaration or a proposed alias. Each entry names the server and
+remote tool, carries a `needs_review` or `blocked` status, and includes an
+editable `snippet` when the required input shape can be represented. Version 1:
+
+- emits only required MCP parameters because Language 0.1 has no optional type;
+- maps JSON strings, integers, numbers, booleans and arrays to Ingot types;
+- uses `json` with an explanatory note for untyped, union or object shapes;
+- uses the conventional output `value` wrapper when present, otherwise keeps an
+  unverified result as `json`;
+- always emits `!TODO_EFFECT`, because an MCP schema cannot prove filesystem,
+  network, secret or external-write effects.
+
+That placeholder is deliberately an unknown effect: pasting the proposal cannot
+silently understate policy and pass `ingot check`. Invalid tool or required
+parameter names make the proposal `blocked` instead of inventing a rename.
+
+`proposals.manifest` contains an alias only when an unresolved checked tool and
+exactly one published tool share the same final name component and their input
+schemas match. The entry names the target server, explains the match and provides
+an editable `[mcp.server.tools]` stanza. Ambiguous or merely `unverified` matches
+produce no manifest proposal.
