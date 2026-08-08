@@ -311,7 +311,10 @@ fn a_missing_boundary_never_falls_back_to_a_host_run() {
 
     assert_ne!(code(&output), EXIT_OK);
     let log = stderr(&output);
-    assert!(log.contains("no container runtime found"), "{log}");
+    assert!(
+        log.contains("no container runtime found") || log.contains("installed but not usable"),
+        "the command must refuse because no usable boundary exists:\n{log}"
+    );
     assert!(!log.contains("nothing is enforced"), "{log}");
     assert!(
         !out.path().join("summary.md").exists(),
