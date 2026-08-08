@@ -60,6 +60,7 @@ to you*.
 | [GAP-024](#gap-024) | A wedged contained run is not timed out | Degraded | a deadline on the supervisor channel |
 | [GAP-025](#gap-025) | The product loop is fragmented across commands and raw output | Degraded | M11 |
 | [GAP-026](#gap-026) | The reference contained run needs a manually prepared image | Refused | M11, then M6 |
+| [GAP-027](#gap-027) | Agent IR carries no portable source spans | Degraded | IR 0.2, issue #11 |
 
 ---
 
@@ -390,14 +391,11 @@ what a provider rate limit does to a fan-out.
 **The product loop is fragmented across commands and raw output.**
 
 The compiler, builder, cassette runner, event stream and policy-derived
-container all work. Maintained templates, `ingot doctor` and `ingot dev` now
-cover creation, readiness and the check-build-run edit loop; a human trace and
-integrated tool/safe-run guidance are still missing. The result is correct, but
-understanding a multi-node run still takes more toolchain knowledge than the
-agent itself should require.
+container all work. Maintained templates, `ingot doctor`, `ingot dev` and the
+human trace now cover creation, readiness, the edit loop and run diagnosis;
+integrated tool/safe-run guidance is still missing.
 
-*How it shows up.* A multi-node failure is still diagnosed from terminal status
-and raw JSON events, and safe-run/tool onboarding remains separate from the edit
+*How it shows up.* Safe-run and tool onboarding remain separate from the edit
 loop.
 
 *What closing it needs.* M11 and the P1–P5/P8 work packages in
@@ -407,6 +405,28 @@ readiness.
 
 *Recorded in.* [Vision](vision.md#one-product-loop-around-the-language),
 [RFC-0007](../rfcs/0007-the-ingot-product-loop.md).
+
+### GAP-027
+
+**Agent IR carries no portable source spans.**
+
+The human trace identifies every event by fully qualified agent and stable node
+id, and Agent IR preserves the static prompt structure. IR 0.1 does not retain
+the `.ing` byte range from which a node was lowered, so a backend cannot turn
+`review.Agent:n7` into a clickable source range without compiler-private state.
+
+*How it shows up.* The trace names the exact runtime node and failure provenance
+but prints `source span unavailable in Agent IR 0.1` instead of a file range.
+Dynamic prompt substitutions and context values are redacted because IR 0.1 has
+no classification that could prove which runtime values are safe to disclose.
+
+*What closing it needs.* [Issue #11](https://github.com/mathissdupont/ingot/issues/11)
+proposes the minimum IR 0.2 addition: an optional `sourceSpan` per node with a
+project-relative source id and UTF-8 byte offsets. It must never serialize an
+absolute build-machine path or change execution and digest semantics.
+
+*Recorded in.* [RFC-0007](../rfcs/0007-the-ingot-product-loop.md),
+`crates/ingot-cli/src/trace.rs`.
 
 ---
 

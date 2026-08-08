@@ -139,8 +139,8 @@ pub fn execute(compilation: &Compilation, config: &RunConfig) -> Result<u8> {
     let mut tools = tool_host(compilation, config)?;
 
     let mut provider = build_provider(config, &ir.agent, &inputs)?;
-    let format = config.events;
-    let mut sink = TeeSink::new(move |event: &RunEvent| print_event(format, event));
+    let mut printer = EventPrinter::new(config.events, compilation);
+    let mut sink = TeeSink::new(move |event: &RunEvent| printer.print(event));
 
     let result = run_agent(
         &ir,
@@ -185,11 +185,25 @@ pub fn execute(compilation: &Compilation, config: &RunConfig) -> Result<u8> {
 /// Shared with a supervised run, whose events arrive over a channel rather than
 /// from a sink — the operator should not be able to tell from the output which
 /// arrangement produced it.
-pub(crate) fn print_event(format: EventFormat, event: &RunEvent) {
-    match format {
-        EventFormat::Text => eprintln!("{}", event.to_line()),
-        EventFormat::Json => eprintln!("{}", event.to_json_line()),
-        EventFormat::Quiet => {}
+pub(crate) struct EventPrinter {
+    format: EventFormat,
+    trace: crate::trace::HumanTrace,
+}
+
+impl EventPrinter {
+    pub(crate) fn new(format: EventFormat, compilation: &Compilation) -> Self {
+        Self {
+            format,
+            trace: crate::trace::HumanTrace::new(&compilation.agents),
+        }
+    }
+
+    pub(crate) fn print(&mut self, event: &RunEvent) {
+        match self.format {
+            EventFormat::Text => eprintln!("{}", self.trace.render(event)),
+            EventFormat::Json => eprintln!("{}", event.to_json_line()),
+            EventFormat::Quiet => {}
+        }
     }
 }
 

@@ -289,6 +289,73 @@ fn run_executes_an_agent_against_a_provider_and_prints_the_artifact() {
 }
 
 #[test]
+fn a_failed_multi_node_run_names_its_provenance_without_raw_json() {
+    let stub = stub_provider(vec![text_reply("A draft")]);
+    let project = TempDir::new("human-trace-failure");
+    std::fs::write(
+        project.path().join("main.ing"),
+        r#"language 0.1
+
+tool repo.read_file(path: string) -> text !filesystem_read
+
+agent Trace(topic: string) -> brief<markdown> {
+  model exact "anthropic/claude-test"
+
+  tools {
+    mcp repo.read_file
+  }
+
+  budget {
+    steps <= 4
+    tokens <= 20000
+  }
+
+  policy {
+    filesystem_read allow ["."]
+    network deny
+  }
+
+  flow {
+    draft = ask<markdown>("Draft a brief about ${topic}.")
+    note = call repo.read_file("note.txt")
+    emit brief = ask<markdown>("Revise ${draft} using ${note}.")
+  }
+}
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        project.path().join("ingot.toml"),
+        "[project]\nname = \"trace\"\n",
+    )
+    .unwrap();
+
+    let output = run(
+        &[
+            "run",
+            &project.path().display().to_string(),
+            "--input",
+            "topic=compilers",
+        ],
+        Some(&stub.url),
+    );
+    assert_eq!(code(&output), EXIT_DIAGNOSTICS, "{}", stderr(&output));
+    let trace = stderr(&output);
+    assert!(trace.contains("model.call"), "{trace}");
+    assert!(
+        trace.contains("node.started Trace:n1  tool.call"),
+        "{trace}"
+    );
+    assert!(trace.contains("run.failed   Trace:n1"), "{trace}");
+    assert!(trace.contains("repo.read_file"), "{trace}");
+    assert!(trace.contains("<redacted input.topic:string>"), "{trace}");
+    assert!(
+        !trace.contains(r#"\"event\":"#),
+        "raw JSON leaked:\n{trace}"
+    );
+}
+
+#[test]
 fn run_writes_artifacts_with_the_right_extension() {
     let dir = TempDir::new("out");
     let stub = stub_provider(vec![text_reply("# Written to disk")]);

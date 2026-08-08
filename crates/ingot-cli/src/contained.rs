@@ -102,14 +102,14 @@ pub fn execute(
         provider: provider.name().to_string(),
     };
 
-    let format = config.events;
+    let mut printer = crate::run::EventPrinter::new(config.events, compilation);
     let mut supervisor = Supervisor {
         config: wire,
         provider,
         approval,
     };
     let outcome = supervise(&mut command, &mut supervisor, &mut |event| {
-        crate::run::print_event(format, event)
+        printer.print(event)
     })
     .map_err(|error| anyhow!("{error}"))?;
 

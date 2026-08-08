@@ -8,6 +8,22 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
 
 ## [Unreleased]
 
+**A diagnostic human run trace**
+([RFC-0007](rfcs/0007-the-ingot-product-loop.md),
+[#4](https://github.com/mathissdupont/ingot/issues/4))
+
+- Default text events now form a deterministic numbered trace with qualified
+  agent/node provenance, provider/model and tool/sub-agent boundaries, artifact
+  origins, failure location, and observed/final step and token budgets.
+- Static prompt text is visible, while every dynamic substitution and named
+  context value is explicitly redacted. JSON Lines output is byte-compatible in
+  shape and order; quiet output remains quiet.
+- The same renderer handles local, supervised and contained runs without TTY
+  control sequences and preserves existing text landmarks used by scripts.
+- Agent IR 0.1 cannot map node ids to source ranges. This is recorded as
+  [GAP-027](docs/gaps.md#gap-027), with the minimum privacy-safe IR 0.2 change
+  tracked in [#11](https://github.com/mathissdupont/ingot/issues/11).
+
 **An integrated edit loop**
 ([RFC-0007](rfcs/0007-the-ingot-product-loop.md),
 [#3](https://github.com/mathissdupont/ingot/issues/3))

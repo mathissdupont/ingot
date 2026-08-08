@@ -23,6 +23,7 @@ mod doctor;
 mod manifest;
 mod run;
 mod sandbox;
+mod trace;
 
 use manifest::{resolve_target, Manifest, Target, MANIFEST_NAME};
 use run::{EventFormat, ProviderChoice, RunConfig, TestConfig, ToolsConfig};

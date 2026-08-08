@@ -323,6 +323,27 @@ tools: a tool-using agent fails there rather than passing by luck. To get
 determinism on the model side *and* real tools, replay a cassette from
 `ingot run`, which does host them.
 
+The default event output is a deterministic human trace. Every block retains
+the portable event order and adds agent/node provenance, model and tool
+boundaries, artifact origins, and observed/final budget progress. Static prompt
+text is shown, while dynamic substitutions and named context values are always
+marked `<redacted>`; the trace has no secret classification with which to expose
+them safely. Use `--events json` for the original unchanged JSON Lines stream or
+`--events quiet` for no event output.
+
+```text
+trace[0002] node.started demo.Brief:n0  llm.call
+             prompt "Write about <redacted input.topic:string>."
+             source span unavailable in Agent IR 0.1 (GAP-027)
+trace[0003] model.call   demo.Brief:n0  cassette/model -> markdown  (120 in, 60 out)
+             observed steps 1/4; tokens 180/20000
+```
+
+Portable source spans require the minimal IR addition tracked in
+[GAP-027](docs/gaps.md#gap-027) and
+[issue #11](https://github.com/mathissdupont/ingot/issues/11); absolute build
+machine paths will not be embedded as a shortcut.
+
 ### Tools
 
 An `.ing` file declares what a tool is — its parameter types, its result type,
