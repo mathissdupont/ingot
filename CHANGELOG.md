@@ -25,6 +25,13 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
   primary byte span and message equality between the language service and CLI
   compiler path. Reference examples are also checked through the language
   service surface.
+- New binary crate `ingot-lsp` adds the first stdio language server. It
+  advertises full document sync, UTF-16 positions and document formatting,
+  publishes diagnostics on `didOpen` and `didChange`, and answers
+  `textDocument/formatting` from the language service.
+- LSP diagnostics carry stable Ingot codes in the standard diagnostic `code`
+  field and preserve byte-span data in `Diagnostic.data`, so editor display can
+  be compared back to compiler spans.
 
 **Typed MCP discovery and preflight foundation**
 ([RFC-0007](rfcs/0007-the-ingot-product-loop.md),

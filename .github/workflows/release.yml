@@ -68,13 +68,13 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
-      # Both binaries ship: `ingot` is the toolchain, `ingot-mcp-fs` is the
-      # reference tool server, and an agent that uses tools needs one to point
-      # at before it can do anything.
+      # The archive carries the toolchain, the reference tool server and the
+      # editor-facing language server.
       - name: Build
         run: |
           cargo build --release --locked --target ${{ matrix.target }} -p ingot-cli --bin ingot
           cargo build --release --locked --target ${{ matrix.target }} -p ingot-mcp --bin ingot-mcp-fs
+          cargo build --release --locked --target ${{ matrix.target }} -p ingot-lsp --bin ingot-lsp
 
       - name: Archive (unix)
         if: runner.os != 'Windows'
@@ -83,6 +83,7 @@ jobs:
           mkdir -p "dist/$name"
           cp target/${{ matrix.target }}/release/ingot "dist/$name/"
           cp target/${{ matrix.target }}/release/ingot-mcp-fs "dist/$name/"
+          cp target/${{ matrix.target }}/release/ingot-lsp "dist/$name/"
           cp README.md LICENSE NOTICE CHANGELOG.md "dist/$name/"
           tar -czf "dist/$name.tar.gz" -C dist "$name"
           shasum -a 256 "dist/$name.tar.gz" | sed "s| dist/| |" > "dist/$name.tar.gz.sha256"
@@ -95,6 +96,7 @@ jobs:
           mkdir -p "dist/$name"
           cp target/${{ matrix.target }}/release/ingot.exe "dist/$name/"
           cp target/${{ matrix.target }}/release/ingot-mcp-fs.exe "dist/$name/"
+          cp target/${{ matrix.target }}/release/ingot-lsp.exe "dist/$name/"
           cp README.md LICENSE NOTICE CHANGELOG.md "dist/$name/"
           7z a -tzip "dist/$name.zip" "./dist/$name/*"
           certutil -hashfile "dist/$name.zip" SHA256 | sed -n 2p | tr -d ' \r' > "dist/$name.zip.sha256.raw"
@@ -108,6 +110,7 @@ jobs:
         run: |
           name="ingot-${{ needs.check-version.outputs.version }}-${{ matrix.target }}"
           "dist/$name/ingot${{ runner.os == 'Windows' && '.exe' || '' }}" --version
+          "dist/$name/ingot-lsp${{ runner.os == 'Windows' && '.exe' || '' }}" --version
           "dist/$name/ingot${{ runner.os == 'Windows' && '.exe' || '' }}" \
             check --color never examples/document-summarizer
 
@@ -155,6 +158,6 @@ jobs:
           sha256sum -c SHA256SUMS --ignore-missing
           \`\`\`
 
-          Each archive carries \`ingot\` and \`ingot-mcp-fs\`. Pre-1.0: the language, the Agent IR and the artifact format may change between releases." \
+          Each archive carries \`ingot\`, \`ingot-mcp-fs\` and \`ingot-lsp\`. Pre-1.0: the language, the Agent IR and the artifact format may change between releases." \
             --prerelease \
             dist/*

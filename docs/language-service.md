@@ -28,6 +28,24 @@ The byte spans make exact CLI/editor equality testable. The UTF-16 positions are
 ready for LSP `Position` values, while keeping LSP dependencies out of compiler
 crates.
 
+## LSP Adapter
+
+`ingot-lsp` is the first protocol adapter on top of this crate. It is a stdio
+language server with:
+
+- full-document text synchronisation;
+- UTF-16 position encoding;
+- `textDocument/publishDiagnostics` after `didOpen` and `didChange`;
+- `textDocument/formatting` backed by the canonical printer.
+
+It deliberately advertises only the features it implements. Completion, hover
+and definition navigation remain future M7 work rather than placeholder methods
+that return empty answers.
+
+Editor integrations should start the `ingot-lsp` binary on stdio and send full
+document changes. `ingot-lsp --version` is available for installation checks;
+without arguments the process speaks only LSP on stdin/stdout.
+
 ## Architecture
 
 ```text
@@ -42,7 +60,7 @@ ingot-compiler
    v
 ingot-language-service
    |
-   +-- future LSP server
+   +-- ingot-lsp stdio server
    +-- future editor extensions
    +-- future model-assisted authoring repair loop
 ```
@@ -62,3 +80,6 @@ source.
 maintained example through the editor-facing surface. This is not the complete
 M7 issue yet: grammar publishing, a real LSP server, completion, hover,
 definition navigation and a reference extension remain tracked in issue #6.
+`ingot-lsp` adds a second check,
+`reference_examples_are_clean_through_the_lsp_surface`, so the maintained
+examples pass through the actual protocol projection without LSP errors.

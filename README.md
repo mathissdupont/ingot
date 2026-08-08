@@ -23,8 +23,9 @@ approval the artifact declares. Tools are served over MCP by whichever servers
 the operator configures. Runs can be recorded to a cassette and replayed
 offline, so agent tests work in CI with no API key. A second, independent backend
 emits self-contained Python 3 and reports unsupported constructs before build.
-The editor-facing language-service foundation has started; full LSP/editor
-support and OCI packaging are planned. See [the roadmap](#roadmap).
+The editor-facing language-service foundation and first diagnostics/formatting
+LSP server have started; completion, hover, navigation, reference extensions
+and OCI packaging are planned. See [the roadmap](#roadmap).
 
 ---
 
@@ -141,8 +142,8 @@ Four complete examples live in [`examples/`](examples/).
 
 ## Install
 
-Each release carries `ingot` and `ingot-mcp-fs` for Linux, macOS (Intel and
-Apple silicon) and Windows. Download the archive for your platform from
+Each release carries `ingot`, `ingot-mcp-fs` and `ingot-lsp` for Linux, macOS
+(Intel and Apple silicon) and Windows. Download the archive for your platform from
 [Releases](https://github.com/mathissdupont/ingot/releases), verify it, and put
 the binaries on your `PATH`:
 
@@ -585,6 +586,7 @@ With `--sandbox` the MCP servers move inside a policy-derived boundary
 | `ingot-runtime` | the reference interpreter, providers and cassettes |
 | `ingot-backend-python` | self-contained Python 3 emission and portability reports |
 | `ingot-language-service` | editor-neutral diagnostics and formatting over the compiler |
+| `ingot-lsp` | stdio language server adapter for editor diagnostics and formatting |
 | `ingot-mcp` | the MCP tool host, and the `ingot-mcp-fs` reference server |
 | `ingot-sandbox` | a `policy` block turned into a container boundary |
 | `ingot-supervisor` | the channel between a contained run and the host serving it |

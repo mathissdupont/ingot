@@ -43,7 +43,8 @@ end. `ingot-language-service` consumes `ingot-compiler` and projects compiler
 diagnostics and canonical formatting into editor-neutral data: stable diagnostic
 codes and byte spans are preserved, and ranges are also converted to zero-based
 UTF-16 positions for LSP adapters. See
-[Ingot Language Service](../language-service.md).
+[Ingot Language Service](../language-service.md). `ingot-lsp` is the first
+stdio protocol adapter over that crate.
 
 The last two are the same discipline applied downwards. `ingot-runtime` knows
 about `ToolHost`, a three-method trait, and nothing about MCP; `ingot-mcp`
@@ -156,6 +157,8 @@ optional secondary labels, notes, and help. The terminal renderer and the future
 language server consume the same structure. The first editor-facing adapter is
 `ingot-language-service`, which keeps the original byte span beside the
 LSP-style range so CLI/editor equality is testable rather than assumed.
+`ingot-lsp` publishes those diagnostics with the stable code in the LSP
+diagnostic `code` field and the byte-span data in `Diagnostic.data`.
 
 Codes are grouped by area (`ING1xxx` parsing through `ING6xxx` lowering) and are
 never reused for a different meaning. `ingot explain <CODE>` prints the long
@@ -174,6 +177,7 @@ names do not produce nonsense suggestions.
 | Structural | `ingot-compiler/src/tests.rs` | lowering shape: hoisting, regions, approvals |
 | Golden | `tests/golden-ir/` | the IR of the reference examples, byte for byte |
 | Language service | `ingot-language-service` | editor diagnostics and formatting use compiler data |
+| LSP | `ingot-lsp` | protocol diagnostics and formatting preserve compiler data |
 | End to end | `ingot-cli/tests/cli.rs` | commands, exit codes, stdout/stderr split |
 | Differential | `ingot-cli/tests/differential.rs` | one artifact and cassette through Rust and generated Python |
 | Consistency | `golden_ir.rs` | the published schema matches the Rust model |
@@ -185,10 +189,10 @@ catches mistakes.
 
 The components above are not yet joined into every part of the integrated
 authoring loop in [RFC-0007](../../rfcs/0007-the-ingot-product-loop.md). The
-language-service foundation exists, but the full language server, syntax
-highlighting grammar, completion, hover, definition navigation, reusable source
-modules, OCI packaging, lockfile, and packaged backend conformance suite are
-still open work.
+language-service foundation and the diagnostics/formatting LSP adapter exist,
+but syntax highlighting grammar, completion, hover, definition navigation, a
+reference editor extension, reusable source modules, OCI packaging, lockfile,
+and packaged backend conformance suite are still open work.
 
 The [roadmap](../../README.md#roadmap) has the sequence;
 [ADR-0002](../adr/0002-compiler-not-runtime.md) explains why execution is
