@@ -187,7 +187,7 @@ export CARGO_TARGET_DIR=/c/build/ingot
 | `ingot test` | replay recorded cassettes |
 | `ingot doctor [--json]` | report source, provider, MCP and container readiness without starting them |
 | `ingot dev [--run]` | watch source, check and build good revisions, optionally run them |
-| `ingot tools` | show which MCP server provides each declared tool |
+| `ingot tools [--json]` | discover MCP schemas and preflight each declared tool |
 | `ingot sandbox` | show the boundary each tool server would run inside |
 | `ingot explain <CODE>` | explain a diagnostic in full |
 
@@ -364,9 +364,19 @@ args = ["--root", "workspace", "--allow-write"]
 ```
 
 ```bash
-ingot tools           # what each server publishes, and what routes where
+ingot tools           # live routes plus source/schema compatibility
+ingot tools --json    # stable discovery data for editors and CI
 ingot run --input …   # servers start, the agent calls them, they stop
 ```
+
+The preflight compares each checked `.ing` parameter with the live MCP
+`inputSchema`. Missing required parameters, rejected source parameters and
+incompatible primitive/list types make the command exit `1`; schema constructs
+Language 0.1 cannot prove are reported as `unverified`, never silently treated
+as compatible. The JSON report also carries each server's input/output schemas
+and required environment-variable **names**, never their values. Its versioned
+contract is documented in
+[`docs/tools-json-v1.md`](docs/tools-json-v1.md).
 
 Tools are served over [MCP](https://modelcontextprotocol.io) by a child process
 on stdio. Three independent gates stand between an agent and a file: the

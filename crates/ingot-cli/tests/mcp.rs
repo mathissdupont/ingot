@@ -11,8 +11,8 @@ mod support;
 use std::path::Path;
 
 use support::{
-    code, fs_server, repo_root, run, stderr, stdout, stub_provider, text_reply, toml_string,
-    TempDir, EXIT_DIAGNOSTICS, EXIT_OK,
+    code, fs_server, repo_root, run, run_env, stderr, stdout, stub_provider, text_reply,
+    toml_string, TempDir, EXIT_DIAGNOSTICS, EXIT_OK,
 };
 
 const DIGEST_SOURCE: &str = include_str!("../../../examples/repo-digest/main.ing");
@@ -40,7 +40,7 @@ impl Project {
         );
         if configure_tools {
             manifest.push_str(&format!(
-                "\n[mcp]\ntimeout-seconds = 10\n\n[[mcp.server]]\nname = \"workspace\"\ncommand = {}\nargs = [\"--root\", \"data\", \"--allow-write\"]\n",
+                "\n[mcp]\ntimeout-seconds = 10\n\n[[mcp.server]]\nname = \"workspace\"\ncommand = {}\nargs = [\"--root\", \"data\", \"--allow-write\"]\npass-env = [\"MCP_TEST_SECRET\"]\n",
                 toml_string(&fs_server().display().to_string())
             ));
         }
@@ -241,6 +241,70 @@ fn ingot_tools_lists_the_servers_and_the_routing() {
     assert!(listing.contains("ingot-mcp-fs"), "{listing}");
     assert!(listing.contains("fs.write_file"), "{listing}");
     assert!(listing.contains("-> workspace:fs.list_dir"), "{listing}");
+}
+
+#[test]
+fn ingot_tools_json_is_typed_machine_readable_and_never_contains_env_values() {
+    let project = Project::new("tools-json", DIGEST_SOURCE, true);
+    let output = run_env(
+        &["tools", "--json", &project.path()],
+        &[("MCP_TEST_SECRET", "do-not-print-this-value")],
+    );
+
+    assert_eq!(code(&output), EXIT_OK, "{}", stderr(&output));
+    let listing = stdout(&output);
+    assert!(!listing.contains("do-not-print-this-value"), "{listing}");
+    let report: serde_json::Value = serde_json::from_str(&listing).expect("valid JSON report");
+    assert_eq!(report["schemaVersion"], 1);
+    assert_eq!(report["ready"], true);
+    assert_eq!(
+        report["requiredEnvironment"],
+        serde_json::json!(["MCP_TEST_SECRET"])
+    );
+    assert_eq!(report["servers"][0]["manifestName"], "workspace");
+    assert_eq!(
+        report["servers"][0]["tools"][0]["inputSchema"]["type"],
+        "object"
+    );
+    assert!(report["servers"][0]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|tool| tool.get("outputSchema").is_some()));
+    assert!(report["declaredTools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|tool| tool["schemaCompatibility"]["status"] == "match"));
+}
+
+#[test]
+fn ingot_tools_preflight_rejects_source_schema_drift() {
+    let source = DIGEST_SOURCE
+        .replace("content: text", "content: int")
+        .replace(
+            "call fs.write_file(out, summary)",
+            "call fs.write_file(out, 1)",
+        );
+    let project = Project::new("tools-drift", &source, true);
+    let output = run(&["tools", "--json", &project.path()], None);
+
+    assert_eq!(code(&output), EXIT_DIAGNOSTICS, "{}", stderr(&output));
+    let report: serde_json::Value =
+        serde_json::from_str(&stdout(&output)).expect("valid JSON report");
+    assert_eq!(report["ready"], false);
+    let write = report["declaredTools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == "fs.write_file")
+        .expect("write tool");
+    assert_eq!(write["schemaCompatibility"]["status"], "drift");
+    assert!(write["schemaCompatibility"]["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|problem| problem["code"] == "MCP_SCHEMA_TYPE_MISMATCH"));
 }
 
 #[test]

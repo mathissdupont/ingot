@@ -8,6 +8,7 @@
 use std::fmt;
 use std::time::{Duration, Instant};
 
+use serde::Serialize;
 use serde_json::{json, Value};
 
 use crate::jsonrpc::{self, Incoming};
@@ -111,7 +112,8 @@ fn indent(text: &str) -> String {
 }
 
 /// What a server said about itself during the handshake.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ServerInfo {
     pub name: String,
     pub version: String,
@@ -121,11 +123,15 @@ pub struct ServerInfo {
 }
 
 /// One tool a server publishes.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ToolDescriptor {
     pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     pub input_schema: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_schema: Option<Value>,
 }
 
 /// A block of a tool result.
@@ -286,6 +292,7 @@ impl McpClient {
                         .and_then(Value::as_str)
                         .map(str::to_string),
                     input_schema: entry.get("inputSchema").cloned().unwrap_or(Value::Null),
+                    output_schema: entry.get("outputSchema").cloned(),
                 });
             }
 
@@ -571,6 +578,28 @@ mod tests {
                 .map(|tool| tool.name.as_str())
                 .collect::<Vec<_>>(),
             vec!["a", "b"]
+        );
+    }
+
+    #[test]
+    fn discovery_keeps_output_schemas_for_authoring_clients() {
+        let mut client = client(|line| {
+            vec![jsonrpc::result_line(
+                &id_of(line),
+                json!({
+                    "tools": [{
+                        "name": "count",
+                        "inputSchema": {"type": "object"},
+                        "outputSchema": {"type": "object", "properties": {"value": {"type": "integer"}}},
+                    }],
+                }),
+            )]
+        });
+
+        let tools = client.list_tools().unwrap();
+        assert_eq!(
+            tools[0].output_schema,
+            Some(json!({"type": "object", "properties": {"value": {"type": "integer"}}}))
         );
     }
 

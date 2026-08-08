@@ -24,10 +24,11 @@ mod image;
 mod manifest;
 mod run;
 mod sandbox;
+mod tools;
 mod trace;
 
 use manifest::{resolve_target, Manifest, Target, MANIFEST_NAME};
-use run::{EventFormat, ProviderChoice, RunConfig, TestConfig, ToolsConfig};
+use run::{EventFormat, ProviderChoice, RunConfig, TestConfig};
 use sandbox::SandboxConfig;
 
 pub(crate) const EXIT_OK: u8 = 0;
@@ -102,8 +103,8 @@ enum Command {
     Image(ImageArgs),
     /// Watch, check and build each source revision; optionally run good ones.
     Dev(DevArgs),
-    /// Show which MCP server provides each tool the program declares.
-    Tools(PathArgs),
+    /// Discover MCP schemas and preflight each tool the program declares.
+    Tools(ToolsArgs),
     /// Show the boundary each tool server would run inside, derived from the
     /// agent's own policy.
     Sandbox(SandboxArgs),
@@ -161,6 +162,16 @@ enum StarterTemplate {
 struct PathArgs {
     /// A `.ing` file or a project directory. Defaults to the nearest project.
     path: Option<PathBuf>,
+}
+
+#[derive(Args, Debug)]
+struct ToolsArgs {
+    #[command(flatten)]
+    target: PathArgs,
+
+    /// Print one stable discovery and preflight report for editors and CI.
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Args, Debug)]
@@ -1057,20 +1068,21 @@ pub(crate) fn workspace(flag: Option<&Path>, target: &Target) -> Result<PathBuf>
         .with_context(|| format!("resolving the workspace {}", chosen.display()))
 }
 
-fn run_tools(args: &PathArgs, color: RenderColor) -> Result<u8> {
-    let target = resolve_target(args.path.as_deref())?;
+fn run_tools(args: &ToolsArgs, color: RenderColor) -> Result<u8> {
+    let target = resolve_target(args.target.path.as_deref())?;
     let compilation = compile(&target)?;
     report(&compilation, color);
     if compilation.has_errors() {
         return Ok(EXIT_DIAGNOSTICS);
     }
 
-    run::tools(
+    tools::inspect(
         &compilation,
-        &ToolsConfig {
+        &tools::ToolsConfig {
             mcp: target.mcp(),
             root: target.root.clone(),
         },
+        args.json,
     )
 }
 

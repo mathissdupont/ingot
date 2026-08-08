@@ -446,6 +446,8 @@ turning a deliberately small agent language into a general-purpose one by guess.
 - [x] `the_human_trace_preserves_the_json_event_order`
 - [x] `a_reference_contained_run_needs_no_repository_specific_build_command`
 - [x] `a_missing_boundary_never_falls_back_to_a_host_run`
+- [x] `ingot_tools_json_is_typed_machine_readable_and_never_contains_env_values`
+- [x] `ingot_tools_preflight_rejects_source_schema_drift`
 - [ ] `editor_and_cli_diagnostics_are_identical`
 - [ ] `an_authoring_repair_cannot_accept_its_own_policy_widening`
 - [ ] `model_assistance_leaves_a_project_that_works_without_the_model`

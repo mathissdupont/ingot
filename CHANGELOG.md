@@ -8,6 +8,20 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
 
 ## [Unreleased]
 
+**Typed MCP discovery and preflight foundation**
+([RFC-0007](rfcs/0007-the-ingot-product-loop.md),
+[#8](https://github.com/mathissdupont/ingot/issues/8))
+
+- `ingot tools --json` now exposes a versioned, machine-readable inventory of
+  server identity, routes, input/output schemas, source signatures and required
+  environment-variable names without exposing their values.
+- Live preflight compares checked `.ing` parameters with MCP input schemas.
+  Missing required parameters, rejected parameters and incompatible basic
+  types are blocking drift; unsupported unions, references and untyped schemas
+  remain explicitly unverified.
+- Human `ingot tools` output reports the same schema status and issue codes, so
+  CI, editors and operators share one readiness decision.
+
 **A version-matched contained-run image path**
 ([RFC-0007](rfcs/0007-the-ingot-product-loop.md),
 [#5](https://github.com/mathissdupont/ingot/issues/5); closes

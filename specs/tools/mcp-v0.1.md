@@ -98,9 +98,11 @@ way to know what it has.
 an object of the call's arguments, keyed by the parameter names in the Ingot
 declaration.
 
-The artifact's declaration is authoritative. A server's `inputSchema` is
-informational: `ingot check` must work with nothing running, so compile-time
-checking never depends on what happened to be installed.
+The artifact's declaration is authoritative. A server's `inputSchema` is not a
+compile-time dependency: `ingot check` must work with nothing running, so
+compilation never depends on what happened to be installed. `ingot tools`
+performs a separate live preflight that compares the checked declaration with
+the discovered schema and reports drift before execution.
 
 ## 7. Results
 
