@@ -539,14 +539,12 @@ fn ingot_test_replays_the_checked_in_cassettes() {
 
 #[test]
 fn ingot_test_reports_no_cassettes_rather_than_failing() {
-    let dir = TempDir::new("no-cassettes");
-    let project = dir.path().join("agent");
-    assert_eq!(
-        code(&run(&["init", &project.display().to_string()], None)),
-        EXIT_OK
-    );
+    // `ingot init` now deliberately includes an offline starter cassette. Use
+    // a hand-written project to preserve the separate contract that projects
+    // with no fixture still report an empty suite rather than failing.
+    let project = project_with("no-cassettes", "anthropic/claude-opus-5", "");
 
-    let output = run(&["test", &project.display().to_string()], None);
+    let output = run(&["test", &project.path().display().to_string()], None);
     assert_eq!(code(&output), EXIT_OK);
     assert!(
         stderr(&output).contains("nothing to test"),

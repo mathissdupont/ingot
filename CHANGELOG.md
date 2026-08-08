@@ -8,6 +8,20 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
 
 ## [Unreleased]
 
+**The first complete product-loop path**
+([RFC-0007](rfcs/0007-the-ingot-product-loop.md),
+[#1](https://github.com/mathissdupont/ingot/issues/1))
+
+- `ingot init --template brief|document-workflow` creates maintained horizontal
+  examples rather than an untested skeleton. Both expose ordinary `.ing` source,
+  checked-in example inputs and a reviewed cassette.
+- A fresh project now checks, builds, replays its suite and runs its example
+  artifact with no provider credential. The generated README prints those exact
+  commands, and an end-to-end test executes them from the project directory.
+- `brief` remains the default, so existing `ingot init <name>` usage is
+  compatible; it now leaves the user with a deterministic first run as well as
+  compilable source.
+
 **A second backend and the portability report**
 ([RFC-0006](rfcs/0006-a-second-backend.md); closes
 [GAP-018](docs/gaps.md#gap-018))

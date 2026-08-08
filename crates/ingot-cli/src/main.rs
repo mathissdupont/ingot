@@ -112,6 +112,20 @@ enum Command {
 struct InitArgs {
     /// Directory to create. Use `.` to initialise the current directory.
     name: PathBuf,
+
+    /// Maintained starting point for the new project.
+    #[arg(long, value_enum, default_value_t = StarterTemplate::Brief)]
+    template: StarterTemplate,
+}
+
+/// A small, maintained example of a language pattern rather than a vertical
+/// product. Every template checks, builds and replays without a model key.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+enum StarterTemplate {
+    /// One typed input, one model call, one markdown artifact.
+    Brief,
+    /// Two inputs and a checked-in document transformed for an audience.
+    DocumentWorkflow,
 }
 
 #[derive(Args, Debug)]
@@ -363,13 +377,28 @@ fn run_init(args: &InitArgs) -> Result<u8> {
     }
     std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
 
-    let manifest = Manifest::new(&name);
+    let mut manifest = Manifest::new(&name);
+    manifest.project.description = Some(args.template.description().to_string());
     write_new(&dir.join(MANIFEST_NAME), &manifest.to_toml())?;
-    write_new(&dir.join("main.ing"), &starter_source(&name))?;
+    write_new(&dir.join("main.ing"), &starter_source(&name, args.template))?;
     write_new(&dir.join(".gitignore"), "/target\n")?;
-    write_new(&dir.join("README.md"), &starter_readme(&name))?;
+    write_new(
+        &dir.join("README.md"),
+        &starter_readme(&name, args.template),
+    )?;
+    write_new(
+        &dir.join("tests/cassettes/example.json"),
+        &starter_cassette(&name, args.template).to_canonical_json(),
+    )?;
+    if let Some((path, contents)) = args.template.example_file() {
+        write_new(&dir.join(path), contents)?;
+    }
 
-    println!("Created agent project `{name}` in {}", dir.display());
+    println!(
+        "Created agent project `{name}` from template `{}` in {}",
+        args.template.as_str(),
+        dir.display()
+    );
     println!();
     println!("Next steps:");
     if dir != Path::new(".") {
@@ -377,6 +406,7 @@ fn run_init(args: &InitArgs) -> Result<u8> {
     }
     println!("  ingot check");
     println!("  ingot build");
+    println!("  ingot test");
     Ok(EXIT_OK)
 }
 
@@ -384,7 +414,47 @@ fn write_new(path: &Path, contents: &str) -> Result<()> {
     if path.exists() {
         bail!("{} already exists", path.display());
     }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating {}", parent.display()))?;
+    }
     std::fs::write(path, contents).with_context(|| format!("writing {}", path.display()))
+}
+
+const EXAMPLE_DOCUMENT: &str = "Ingot compiles a typed agent language to portable Agent IR. \
+The same checked artifact can run through independent backends. Policies and \
+budgets travel with the artifact so each backend can enforce them.\n";
+
+impl StarterTemplate {
+    fn as_str(self) -> &'static str {
+        match self {
+            StarterTemplate::Brief => "brief",
+            StarterTemplate::DocumentWorkflow => "document-workflow",
+        }
+    }
+
+    fn description(self) -> &'static str {
+        match self {
+            StarterTemplate::Brief => "A small typed agent that turns a topic into a brief.",
+            StarterTemplate::DocumentWorkflow => {
+                "A document transformation workflow with two typed inputs."
+            }
+        }
+    }
+
+    fn agent(self) -> &'static str {
+        match self {
+            StarterTemplate::Brief => "Brief",
+            StarterTemplate::DocumentWorkflow => "DocumentWorkflow",
+        }
+    }
+
+    fn example_file(self) -> Option<(&'static str, &'static str)> {
+        match self {
+            StarterTemplate::Brief => None,
+            StarterTemplate::DocumentWorkflow => Some(("examples/document.txt", EXAMPLE_DOCUMENT)),
+        }
+    }
 }
 
 /// A package identifier derived from a project name, if one can be.
@@ -419,7 +489,7 @@ fn package_name(name: &str) -> Option<String> {
     Some(sanitised)
 }
 
-fn starter_source(name: &str) -> String {
+fn starter_source(name: &str, template: StarterTemplate) -> String {
     let package = match package_name(name) {
         Some(package) => format!(
             "package {package}
@@ -427,8 +497,9 @@ fn starter_source(name: &str) -> String {
         ),
         None => String::new(),
     };
-    format!(
-        r#"language 0.1
+    match template {
+        StarterTemplate::Brief => format!(
+            r#"language 0.1
 {package}
 /// Summarises a topic into a short markdown brief.
 agent Brief(topic: string) -> brief<markdown> {{
@@ -452,23 +523,143 @@ agent Brief(topic: string) -> brief<markdown> {{
   }}
 }}
 "#
+        ),
+        StarterTemplate::DocumentWorkflow => format!(
+            r#"language 0.1
+{package}
+/// Rewrites a document for a named audience without changing its facts.
+agent DocumentWorkflow(document: text, audience: string) -> summary<markdown> {{
+  model requires {{
+    structured_output
+  }}
+
+  budget {{
+    steps <= 4
+    tokens <= 20000
+  }}
+
+  policy {{
+    network deny
+  }}
+
+  flow {{
+    emit summary = ask<markdown>(
+      "Summarise the following document for ${{audience}}. Preserve the important facts.\n\n${{document}}"
+    )
+  }}
+}}
+"#
+        ),
+    }
+}
+
+fn starter_readme(name: &str, template: StarterTemplate) -> String {
+    let replay = match template {
+        StarterTemplate::Brief => {
+            "ingot run --provider replay --cassette tests/cassettes/example.json --input topic=\"compiler design\""
+        }
+        StarterTemplate::DocumentWorkflow => {
+            "ingot run --provider replay --cassette tests/cassettes/example.json --input document=@examples/document.txt --input audience=\"project leads\""
+        }
+    };
+    format!(
+        r#"# {name}
+
+An agent written in Ingot from the `{}` template. `main.ing` is the source of
+truth: the template, compiler, test and runtime do not hide another workflow
+representation behind it.
+
+## First run
+
+These commands work without a model API key:
+
+```bash
+ingot check
+ingot build
+ingot test
+{replay}
+```
+
+`ingot test` replays the reviewed fixture in `tests/cassettes/`. The final
+command runs that same fixture and prints the artifact. Change `main.ing`, then
+record a new cassette against a configured provider before accepting its diff.
+
+`ingot build` writes `target/ingot/{}.ir.json`. Agent IR is the canonical,
+target-neutral artifact consumed by every backend.
+"#,
+        template.as_str(),
+        template.agent()
     )
 }
 
-fn starter_readme(name: &str) -> String {
-    format!(
-        "# {name}\n\n\
-         An agent written in Ingot.\n\n\
-         ## Commands\n\n\
-         ```\n\
-         ingot check     # types, effects, policy and budgets\n\
-         ingot fmt       # canonical formatting\n\
-         ingot build     # compile to Agent IR\n\
-         ingot ir        # print the IR\n\
-         ```\n\n\
-         `ingot build` writes `target/ingot/<agent>.ir.json`. The IR is the\n\
-         target-neutral form a backend compiles into a runtime configuration.\n"
-    )
+fn starter_cassette(name: &str, template: StarterTemplate) -> ingot_runtime::Cassette {
+    use std::collections::BTreeMap;
+
+    use ingot_runtime::{
+        schema::ResponseShape, CompletionRequest, Interaction, ModelSelection, Usage,
+    };
+    use serde_json::json;
+
+    let (inputs, prompt, value) = match template {
+        StarterTemplate::Brief => {
+            let inputs: BTreeMap<String, serde_json::Value> =
+                [("topic".to_string(), json!("compiler design"))].into();
+            (
+                inputs,
+                "Write a short, factual brief about compiler design. Use headings and bullet points."
+                    .to_string(),
+                json!("# Compiler design\n\n- A front end understands source.\n- An intermediate representation connects analysis to execution.\n- Backends let one checked program reach more than one target."),
+            )
+        }
+        StarterTemplate::DocumentWorkflow => {
+            let inputs: BTreeMap<String, serde_json::Value> = [
+                ("audience".to_string(), json!("project leads")),
+                ("document".to_string(), json!(EXAMPLE_DOCUMENT)),
+            ]
+            .into();
+            (
+                inputs,
+                format!(
+                    "Summarise the following document for project leads. Preserve the important facts.\n\n{EXAMPLE_DOCUMENT}"
+                ),
+                json!("# Project brief\n\nIngot turns typed agent source into portable Agent IR. Independent backends consume the same checked artifact, including its policy and budget declarations."),
+            )
+        }
+    };
+
+    let request = CompletionRequest {
+        node: "n0".to_string(),
+        model: ModelSelection::Capabilities {
+            capabilities: vec!["structured_output".to_string()],
+            min_context_tokens: None,
+        },
+        system: None,
+        prompt,
+        context: Vec::new(),
+        response_type: "markdown".to_string(),
+        shape: ResponseShape::Prose,
+        max_tokens: 20_000,
+    };
+    let qualified_agent = match package_name(name) {
+        Some(package) => format!("{package}.{}", template.agent()),
+        None => template.agent().to_string(),
+    };
+    let mut cassette = ingot_runtime::Cassette::new(qualified_agent);
+    cassette.inputs = inputs;
+    cassette.interactions.push(Interaction {
+        index: 0,
+        node: request.node.clone(),
+        request_digest: request.digest(),
+        response_type: request.response_type,
+        value,
+        usage: Usage {
+            input_tokens: 120,
+            output_tokens: 60,
+            cache_read_tokens: 0,
+        },
+        model: Some("template/replay".to_string()),
+    });
+    cassette
 }
 
 // --- check -----------------------------------------------------------------
@@ -903,7 +1094,7 @@ mod tests {
 
     #[test]
     fn the_generated_source_omits_an_unusable_package_line() {
-        let source = starter_source("agent");
+        let source = starter_source("agent", StarterTemplate::Brief);
         assert!(!source.contains("package"), "{source}");
         assert!(
             source.starts_with(
@@ -916,7 +1107,7 @@ mod tests {
 
     #[test]
     fn the_generated_source_keeps_a_usable_package_line() {
-        let source = starter_source("research-agent");
+        let source = starter_source("research-agent", StarterTemplate::Brief);
         assert!(source.contains("package research_agent"), "{source}");
     }
 }

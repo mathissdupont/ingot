@@ -56,6 +56,26 @@ fn run(args: &[&str]) -> Output {
         .expect("the ingot binary must be runnable")
 }
 
+/// Run commands exactly as the generated README presents them: from the
+/// project directory and with no provider credential inherited from the shell.
+fn run_in(dir: &Path, args: &[&str]) -> Output {
+    let mut command = Command::new(binary());
+    command
+        .current_dir(dir)
+        .args(args)
+        .arg("--color")
+        .arg("never");
+    for name in [
+        "ANTHROPIC_API_KEY",
+        "INGOT_ANTHROPIC_BASE_URL",
+        "OPENAI_API_KEY",
+        "INGOT_OPENAI_BASE_URL",
+    ] {
+        command.env_remove(name);
+    }
+    command.output().expect("the ingot binary must be runnable")
+}
+
 fn stdout(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
@@ -127,6 +147,7 @@ fn init_creates_a_project_that_checks_and_builds() {
     assert!(project.join("main.ing").is_file());
     assert!(project.join("README.md").is_file());
     assert!(project.join(".gitignore").is_file());
+    assert!(project.join("tests/cassettes/example.json").is_file());
 
     let output = run(&["check", &project.display().to_string()]);
     assert_eq!(
@@ -142,6 +163,90 @@ fn init_creates_a_project_that_checks_and_builds() {
         project.join("target/ingot/Brief.ir.json").is_file(),
         "build must write the IR to the manifest's out-dir"
     );
+}
+
+#[test]
+fn a_template_project_checks_builds_and_replays_without_a_key() {
+    for (template, agent, extra_file, replay_command, replay_args) in [
+        (
+            "brief",
+            "Brief",
+            None,
+            "ingot run --provider replay --cassette tests/cassettes/example.json --input topic=\"compiler design\"",
+            &["--input", "topic=compiler design"][..],
+        ),
+        (
+            "document-workflow",
+            "DocumentWorkflow",
+            Some("examples/document.txt"),
+            "ingot run --provider replay --cassette tests/cassettes/example.json --input document=@examples/document.txt --input audience=\"project leads\"",
+            &[
+                "--input",
+                "document=@examples/document.txt",
+                "--input",
+                "audience=project leads",
+            ][..],
+        ),
+    ] {
+        let dir = TempDir::new(&format!("init-{template}"));
+        let project = dir.path().join(format!("{template}-agent"));
+        let output = run(&[
+            "init",
+            &project.display().to_string(),
+            "--template",
+            template,
+        ]);
+        assert_eq!(code(&output), EXIT_OK, "{}", stderr(&output));
+        assert!(project.join("tests/cassettes/example.json").is_file());
+        let readme = std::fs::read_to_string(project.join("README.md")).expect("starter README");
+        for command in ["ingot check", "ingot build", "ingot test", replay_command] {
+            assert!(
+                readme.lines().any(|line| line == command),
+                "template `{template}` does not print `{command}` as an executable README line:\n{readme}"
+            );
+        }
+        if let Some(path) = extra_file {
+            assert!(project.join(path).is_file(), "{template}: missing {path}");
+        }
+
+        // These are the first three commands printed in the generated README.
+        for args in [&["check"][..], &["build"][..], &["test"][..]] {
+            let output = run_in(&project, args);
+            assert_eq!(
+                code(&output),
+                EXIT_OK,
+                "template `{template}`, command `{}`:\n{}",
+                args.join(" "),
+                stderr(&output)
+            );
+        }
+
+        assert!(
+            project
+                .join(format!("target/ingot/{agent}.ir.json"))
+                .is_file(),
+            "template `{template}` did not build its declared agent"
+        );
+        let mut direct = vec![
+            "run",
+            "--provider",
+            "replay",
+            "--cassette",
+            "tests/cassettes/example.json",
+        ];
+        direct.extend_from_slice(replay_args);
+        let replay = run_in(&project, &direct);
+        assert_eq!(
+            code(&replay),
+            EXIT_OK,
+            "the direct replay printed in `{template}` README must work:\n{}",
+            stderr(&replay)
+        );
+        assert!(
+            !stdout(&replay).trim().is_empty(),
+            "{template}: no artifact"
+        );
+    }
 }
 
 #[test]

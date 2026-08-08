@@ -175,7 +175,7 @@ export CARGO_TARGET_DIR=/c/build/ingot
 
 | Command | Purpose |
 |---------|---------|
-| `ingot init <name>` | create a project |
+| `ingot init <name> [--template brief\|document-workflow]` | create a tested starter project |
 | `ingot check` | parse, type-check, validate policy and budgets |
 | `ingot fmt [--check]` | canonical formatting |
 | `ingot build [--target ir\|python] [--out-dir]` | compile to Agent IR or self-contained Python 3 |
