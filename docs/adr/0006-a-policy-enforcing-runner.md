@@ -1,8 +1,12 @@
 # ADR-0006: A policy-enforcing runner is in scope; a general runtime is not
 
-- Status: Accepted
+- Status: Accepted, amended
 - Date: 2026-08-07
 - Amends: [ADR-0002](0002-compiler-not-runtime.md)
+- Amended by: [ADR-0007](0007-containing-the-run-is-not-blocked-on-a-second-backend.md),
+  which corrects the "Conditions for going further" section below. Stage 2 was
+  blocked on a second backend for a reason that does not hold; the rest of this
+  ADR stands.
 
 ## Context
 
@@ -57,6 +61,12 @@ is deliberately built so that it *cannot* bias the IR:
   makes the runner an IR consumer, and that must not happen while ours is the
   only one.
 
+  > **Amended.** This is wrong, and
+  > [ADR-0007](0007-containing-the-run-is-not-blocked-on-a-second-backend.md)
+  > says why: the interpreter has been an IR consumer since M3, so containing it
+  > adds no consumer. Stage 2 is unblocked and delivered in
+  > [RFC-0005](../../rfcs/0005-the-contained-run.md).
+
 ## Consequences
 
 **Good.** `network allow ["arxiv.org"]` and `filesystem_read allow ["src"]` stop
@@ -85,6 +95,10 @@ are unchanged. This ADR moves one line of its table — sandboxing — from "the
 runtime's, initially" to ours, and nothing else.
 
 ## Conditions for going further
+
+> **Amended by [ADR-0007](0007-containing-the-run-is-not-blocked-on-a-second-backend.md).**
+> The paragraph below applies to making the runner a general execution engine. It
+> does **not** apply to stage 2, which was gated here by mistake.
 
 Stage 2, and anything that would make the runner a general execution engine,
 still needs ADR-0002 condition 1: **a second, independent backend, working end

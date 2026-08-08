@@ -13,6 +13,7 @@ members = [
     "crates/ingot-runtime",
     "crates/ingot-mcp",
     "crates/ingot-sandbox",
+    "crates/ingot-supervisor",
     "crates/ingot-cli",
 ]
 
@@ -38,6 +39,7 @@ ingot-compiler = { path = "crates/ingot-compiler", version = "0.3.0" }
 ingot-runtime = { path = "crates/ingot-runtime", version = "0.3.0" }
 ingot-mcp = { path = "crates/ingot-mcp", version = "0.3.0" }
 ingot-sandbox = { path = "crates/ingot-sandbox", version = "0.3.0" }
+ingot-supervisor = { path = "crates/ingot-supervisor", version = "0.3.0" }
 
 anyhow = "1.0"
 clap = { version = "4.5", features = ["derive"] }

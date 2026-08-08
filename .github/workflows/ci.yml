@@ -46,6 +46,11 @@ jobs:
       # the dependency stays confined to the optional `anthropic` feature.
       - name: Runtime builds without the provider feature
         run: cargo test -p ingot-runtime --no-default-features
+      # And so must the CLI: `tools/ingot.Dockerfile` builds it this way, so that
+      # there is no code inside a boundary that could use a credential even if
+      # one arrived. This was broken once, and only the Docker build noticed.
+      - name: The CLI builds without the provider features
+        run: cargo build -p ingot-cli --bin ingot --no-default-features
       # The IR must be byte-identical on every platform, not just on Linux.
       # Golden files are checked in; a platform-dependent encoding fails here.
       - name: Golden IR is platform independent
@@ -56,6 +61,21 @@ jobs:
       - name: The boundary holds against a real container runtime
         if: runner.os == 'Linux'
         run: cargo test -p ingot-sandbox --test container
+        env:
+          INGOT_REQUIRE_CONTAINER: "1"
+      # A contained run needs an image with `ingot` in it, and building it here is
+      # also the check that the Dockerfile still works. The tag carries the
+      # workspace version, which is what the test looks for and what the README
+      # tells an operator to build — read from Cargo.toml so a version bump does
+      # not need remembering in three places.
+      - name: Build the contained-run image
+        if: runner.os == 'Linux'
+        run: |
+          version=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
+          docker build -f tools/ingot.Dockerfile -t "ingot/run:$version" .
+      - name: An agent runs inside a real boundary
+        if: runner.os == 'Linux'
+        run: cargo test -p ingot-cli --test contained
         env:
           INGOT_REQUIRE_CONTAINER: "1"
 

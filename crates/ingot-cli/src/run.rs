@@ -18,6 +18,8 @@ use ingot_runtime::{
 };
 use serde_json::Value;
 
+use crate::contained::Containment;
+
 /// The transport an artifact declares for an MCP tool. The only one in
 /// language 0.1, and the only one `ingot-mcp` serves.
 const MCP_TRANSPORT: &str = "mcp";
@@ -52,7 +54,10 @@ pub struct RunConfig {
     pub provider: ProviderChoice,
     pub cassette: Option<PathBuf>,
     pub record: Option<PathBuf>,
+    /// Read only by the HTTP providers, so unused in a build without them.
+    #[cfg_attr(not(any(feature = "anthropic", feature = "openai")), allow(dead_code))]
     pub model: Option<String>,
+    #[cfg_attr(not(any(feature = "anthropic", feature = "openai")), allow(dead_code))]
     pub effort: Option<String>,
     pub agent: Option<String>,
     pub out_dir: Option<PathBuf>,
@@ -74,6 +79,25 @@ pub struct RunConfig {
     pub workspace: PathBuf,
     /// Model services declared in the manifest, beyond the built-in two.
     pub models: ModelConfig,
+    /// Run the agent itself inside a boundary derived from its policy, with the
+    /// model call and the approval gate crossing out through a supervisor.
+    pub contained: bool,
+    /// Run the agent over the same supervisor channel with no boundary at all.
+    /// Hidden, and it says what it is not.
+    pub supervised: bool,
+    /// The image a contained run happens inside.
+    pub image: Option<String>,
+}
+
+impl RunConfig {
+    /// Whether this run happens over the supervisor channel, and with what.
+    pub fn containment(&self) -> Option<Containment> {
+        match (self.contained, self.supervised) {
+            (true, _) => Some(Containment::Bounded),
+            (false, true) => Some(Containment::Unbounded),
+            (false, false) => None,
+        }
+    }
 }
 
 /// Compile, execute, and write the artifacts.
@@ -81,16 +105,42 @@ pub fn execute(compilation: &Compilation, config: &RunConfig) -> Result<u8> {
     let (ir, registry) = select_agent(compilation, config.agent.as_deref())?;
 
     let inputs = parse_inputs(&config.inputs)?;
-    let approval = approval_mode(config);
+    let mut approval = approval_mode(config);
+
+    // A supervised run is a different arrangement, not a different flag on this
+    // one: there is no local tool host, the interpreter is somewhere else, and
+    // this process's job is to answer it.
+    if let Some(mode) = config.containment() {
+        if config.record.is_some() {
+            bail!(
+                "`--record` cannot be combined with a supervised run\n  \
+                 the cassette would record the model exchanges, which happen out here, and omit \
+                 the tool results, which happen in there — a recording that claims to be of a \
+                 contained run and is not\n  \
+                 record without --contained, or replay into one with --provider replay"
+            );
+        }
+        // The boundary is settled from the artifact, before the environment gets
+        // a say: a program that cannot be contained must say so whether or not a
+        // key happens to be exported.
+        let command = crate::contained::prepare(compilation, config, mode, &ir)?;
+        let mut provider = build_provider(config, &ir.agent, &inputs)?;
+        return crate::contained::execute(
+            command,
+            compilation,
+            config,
+            &ir,
+            inputs,
+            provider.as_mut(),
+            &mut approval,
+        );
+    }
+
     let mut tools = tool_host(compilation, config)?;
 
     let mut provider = build_provider(config, &ir.agent, &inputs)?;
     let format = config.events;
-    let mut sink = TeeSink::new(move |event: &RunEvent| match format {
-        EventFormat::Text => eprintln!("{}", event.to_line()),
-        EventFormat::Json => eprintln!("{}", event.to_json_line()),
-        EventFormat::Quiet => {}
-    });
+    let mut sink = TeeSink::new(move |event: &RunEvent| print_event(format, event));
 
     let result = run_agent(
         &ir,
@@ -128,6 +178,19 @@ pub fn execute(compilation: &Compilation, config: &RunConfig) -> Result<u8> {
 
     write_outputs(&report, config)?;
     Ok(super::EXIT_OK)
+}
+
+/// One event, in whichever form the operator asked for.
+///
+/// Shared with a supervised run, whose events arrive over a channel rather than
+/// from a sink — the operator should not be able to tell from the output which
+/// arrangement produced it.
+pub(crate) fn print_event(format: EventFormat, event: &RunEvent) {
+    match format {
+        EventFormat::Text => eprintln!("{}", event.to_line()),
+        EventFormat::Json => eprintln!("{}", event.to_json_line()),
+        EventFormat::Quiet => {}
+    }
 }
 
 fn report_failure(error: &RunError) {
@@ -450,6 +513,11 @@ fn available(config: &RunConfig) -> Result<Vec<(String, Box<dyn ModelProvider>)>
         .iter()
         .map(|provider| provider.name.as_str())
         .collect();
+    // `mut` is unused in a build with no HTTP provider, which is what
+    // `tools/ingot.Dockerfile` produces. Worth keeping that configuration
+    // warning-free: a Docker build log full of noise is a Docker build log
+    // nobody reads.
+    #[allow(unused_mut)]
     let mut providers: Vec<(String, Box<dyn ModelProvider>)> = Vec::new();
 
     #[cfg(feature = "anthropic")]
@@ -482,6 +550,7 @@ fn available(config: &RunConfig) -> Result<Vec<(String, Box<dyn ModelProvider>)>
 
     // A declared provider is a stated intention, so a missing key for one is an
     // error rather than a quiet absence.
+    #[cfg(any(feature = "anthropic", feature = "openai"))]
     for declaration in &config.models.providers {
         let provider = ingot_runtime::catalogue::build(
             declaration,
@@ -490,6 +559,21 @@ fn available(config: &RunConfig) -> Result<Vec<(String, Box<dyn ModelProvider>)>
         )
         .map_err(|error| anyhow::anyhow!("{error}"))?;
         providers.push((declaration.name.clone(), provider));
+    }
+
+    // A build with no HTTP provider cannot serve a declaration, and saying so is
+    // better than ignoring the manifest. This is the shape the image built by
+    // `tools/ingot.Dockerfile` has: the contained half asks its supervisor for
+    // completions, so it carries no provider and no TLS stack at all.
+    #[cfg(not(any(feature = "anthropic", feature = "openai")))]
+    if let Some(declaration) = config.models.providers.first() {
+        bail!(
+            "the manifest declares the model provider `{}`, and this build has no HTTP provider \
+             to reach it with\n  \
+             rebuild with `--features openai` (or `anthropic`), or use \
+             `--provider replay --cassette <FILE>`",
+            declaration.name
+        );
     }
 
     let _ = declared;
@@ -579,7 +663,7 @@ fn openai(config: &RunConfig) -> Result<Box<dyn ModelProvider>> {
     }
 }
 
-fn write_outputs(report: &RunReport, config: &RunConfig) -> Result<()> {
+pub(crate) fn write_outputs(report: &RunReport, config: &RunConfig) -> Result<()> {
     let Some(dir) = &config.out_dir else {
         // No directory given: the artifacts go to stdout, so the command
         // composes with a pipe.

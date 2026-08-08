@@ -1,0 +1,16 @@
+[package]
+name = "ingot-supervisor"
+description = "The channel between a contained Ingot run and the host that supervises it."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+ingot-ir.workspace = true
+ingot-runtime.workspace = true
+ingot-mcp.workspace = true
+serde = { workspace = true }
+serde_json = { workspace = true }

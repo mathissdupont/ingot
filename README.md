@@ -174,6 +174,8 @@ export CARGO_TARGET_DIR=/c/build/ingot
 | `ingot build [--out-dir]` | compile to Agent IR |
 | `ingot ir [--agent]` | print the IR to stdout |
 | `ingot run [--input k=v]` | execute the agent |
+| `ingot run --sandbox` | execute it with each tool server inside a boundary |
+| `ingot run --contained` | execute the agent itself inside a boundary |
 | `ingot test` | replay recorded cassettes |
 | `ingot tools` | show which MCP server provides each declared tool |
 | `ingot sandbox` | show the boundary each tool server would run inside |
@@ -382,6 +384,57 @@ actually grants is asserted against a real runtime in
 a read mount refuses a write, an unnamed path does not exist inside, and
 `network deny` leaves no interface at all.
 
+### Putting the agent in the box too
+
+`--sandbox` contains an agent's *tools*. The agent itself — the process that holds
+the API key, renders the prompts and writes the artifacts — still runs on the
+host with the host's whole machine. `--contained` closes that:
+
+```bash
+docker build -f tools/ingot.Dockerfile -t ingot/run:0.3.0 .
+ingot run examples/repo-digest --contained --image ingot/run:0.3.0 \
+  --input directory=. --input out=out/digest.md
+```
+
+Everything is inside: the interpreter, its tool servers, and the mounts the policy
+named. Nothing else. The model call and the approval gate leave through a
+supervisor on the standard streams:
+
+```text
+host                                  inside the boundary
+────                                  ───────────────────
+ingot run --contained                   the interpreter
+  holds the credential                  the MCP tool servers
+  holds the terminal                    network deny, and it holds
+  writes --out-dir
+
+  ├── the IR, the inputs ───────────►
+  │◄─ a completion ──────────────────┤   fetched from outside
+  │◄─ an approval question ──────────┤   asked inside, decided outside
+  │◄─ progress, then the outputs ────┤
+```
+
+Two things follow from the shape rather than from care:
+
+* **`network deny` now applies to the agent**, not only to its tools. It gets
+  `--network none` and still completes a model call, because that call does not
+  use a socket.
+* **The credential is never inside.** The provider lives out here; the box has no
+  environment for a key to be read from, and no route to the process that has one.
+  This is [Runtime 0.1 §11](specs/runtime/v0.1.md) satisfied by topology.
+
+`--out-dir` is written by the host afterwards, from the outputs that came back, so
+the agent cannot write outside its mounts even to deliver its own result.
+
+One limit worth knowing before you rely on it: a program whose agents want
+*different* boundaries is refused rather than run in the widest of them. The
+two-agent example is exactly that case — the coordinator may write and the
+reviewer may not — so it needs `--sandbox` for now
+([GAP-023](docs/gaps.md#gap-023)).
+
+See [RFC-0005](rfcs/0005-the-contained-run.md) and
+[ADR-0007](docs/adr/0007-containing-the-run-is-not-blocked-on-a-second-backend.md).
+
 ## How it fits together
 
 ```
@@ -410,6 +463,10 @@ a read mount refuses a write, an unnamed path does not exist inside, and
   MCP servers (stdio)                          ingot-mcp
 ```
 
+With `--sandbox` the MCP servers move inside a policy-derived boundary
+(`ingot-sandbox`). With `--contained` the interpreter moves in with them, and
+`ingot-supervisor` is the channel it reaches the model and the operator through.
+
 | Crate | Responsibility |
 |-------|----------------|
 | `ingot-source` | files, spans, line/column resolution |
@@ -423,6 +480,8 @@ a read mount refuses a write, an unnamed path does not exist inside, and
 | `ingot-compiler` | the driver and lowering |
 | `ingot-runtime` | the reference interpreter, providers and cassettes |
 | `ingot-mcp` | the MCP tool host, and the `ingot-mcp-fs` reference server |
+| `ingot-sandbox` | a `policy` block turned into a container boundary |
+| `ingot-supervisor` | the channel between a contained run and the host serving it |
 | `ingot-cli` | the `ingot` binary |
 
 ## Specifications
@@ -450,7 +509,7 @@ a read mount refuses a write, an unnamed path does not exist inside, and
 | M6 | OCI artifact, lockfile, reproducible digest | planned |
 | M7 | language server and editor support | planned |
 | M8 | conformance suite and backend author guide | planned |
-| M9 | Ingot Containers — the policy block as an enforced boundary | next |
+| M9 | Ingot Containers — the policy block as an enforced boundary | done |
 | M10 | `ingot new` — authoring with a model, verified by the compiler | planned |
 
 A number is an identity, not a position in a queue; things get referenced by it,
@@ -458,9 +517,12 @@ so they keep it. The order we intend to work in is **M9 → M5 → M6 → M10 �
 M7**, and [`docs/vision.md`](docs/vision.md) says why each is there at all.
 
 M3 and M4 landed together: the interpreter needed cassettes to be testable, and
-cassettes needed the interpreter to be worth recording. M5 is where the central
-claim is actually proven — the same source, two independent runtimes, with every
-unsupported feature named in a report rather than discovered in production.
+cassettes needed the interpreter to be worth recording. M9 landed in two stages —
+tool servers contained ([RFC-0004](rfcs/0004-ingot-containers.md)), then the run
+itself ([RFC-0005](rfcs/0005-the-contained-run.md)) — with one piece still open,
+[GAP-023](docs/gaps.md#gap-023). M5 is next, and is where the central claim is
+actually proven: the same source, two independent runtimes, with every unsupported
+feature named in a report rather than discovered in production.
 
 ## What is missing
 

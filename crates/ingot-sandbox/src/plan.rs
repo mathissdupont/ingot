@@ -18,6 +18,14 @@ use serde::{Deserialize, Serialize};
 /// agent that says `src` gets `/workspace/src`, on every machine.
 pub const GUEST_WORKSPACE: &str = "/workspace";
 
+/// The `server` a plan names when the boundary is for the run itself.
+///
+/// Stage 1 plans a boundary per (tool server, agent) pair. Stage 2 plans one for
+/// the run, which is not a server and has no name in the manifest, so it gets a
+/// reserved one — a manifest cannot collide with it because `[[mcp.server]]`
+/// names are identifiers and this is not.
+pub const RUN_SUBJECT: &str = "(the run)";
+
 /// Policy subjects that name filesystem paths.
 const READ: &str = "filesystem_read";
 const WRITE: &str = "filesystem_write";

@@ -6,12 +6,16 @@
 
 use std::fmt::Write;
 
-use crate::plan::{Network, SandboxPlan};
+use crate::plan::{Network, SandboxPlan, RUN_SUBJECT};
 
 /// A human-readable plan, without a trailing newline.
 pub fn render(plan: &SandboxPlan) -> String {
     let mut out = String::new();
-    let _ = writeln!(out, "server `{}`  (for agent {})", plan.server, plan.agent);
+    if plan.server == RUN_SUBJECT {
+        let _ = writeln!(out, "the run itself  (agent {})", plan.agent);
+    } else {
+        let _ = writeln!(out, "server `{}`  (for agent {})", plan.server, plan.agent);
+    }
 
     if plan.mounts.is_empty() {
         let _ = writeln!(
@@ -168,6 +172,18 @@ mod tests {
             text.lines().all(|line| line.len() <= 100),
             "reasons must wrap:\n{text}"
         );
+    }
+
+    #[test]
+    fn a_boundary_for_the_run_itself_does_not_pretend_to_be_a_server() {
+        // Stage 2 plans a boundary for the run, which has no name in the
+        // manifest. Printing "server `(the run)`" would read as a server called
+        // that.
+        let mut plan = plan();
+        plan.server = RUN_SUBJECT.to_string();
+        let text = render(&plan);
+        assert!(text.starts_with("the run itself  (agent "), "{text}");
+        assert!(!text.contains("server `"), "{text}");
     }
 
     #[test]

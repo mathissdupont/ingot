@@ -8,55 +8,12 @@
 
 mod support;
 
-use std::path::{Path, PathBuf};
-use std::sync::Once;
+use std::path::Path;
 
 use support::{
-    code, repo_root, run, stderr, stdout, stub_provider, text_reply, TempDir, EXIT_DIAGNOSTICS,
-    EXIT_OK,
+    code, fs_server, repo_root, run, stderr, stdout, stub_provider, text_reply, toml_string,
+    TempDir, EXIT_DIAGNOSTICS, EXIT_OK,
 };
-
-/// Where the reference server binary is, building it if this test binary was
-/// invoked in a way that did not.
-fn fs_server() -> PathBuf {
-    static BUILD: Once = Once::new();
-
-    let mut dir = std::env::current_exe().expect("the test binary has a path");
-    dir.pop();
-    if dir.ends_with("deps") {
-        dir.pop();
-    }
-    let path = dir.join(format!("ingot-mcp-fs{}", std::env::consts::EXE_SUFFIX));
-
-    BUILD.call_once(|| {
-        if path.is_file() {
-            return;
-        }
-        // `cargo test -p ingot-cli` builds the ingot-mcp library but not its
-        // binaries, so build it rather than failing with a puzzle.
-        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
-        let mut command = std::process::Command::new(cargo);
-        command.current_dir(repo_root()).args([
-            "build",
-            "-p",
-            "ingot-mcp",
-            "--bin",
-            "ingot-mcp-fs",
-        ]);
-        if dir.ends_with("release") {
-            command.arg("--release");
-        }
-        let status = command.status().expect("cargo must be runnable");
-        assert!(status.success(), "building ingot-mcp-fs failed");
-    });
-
-    assert!(
-        path.is_file(),
-        "expected the reference MCP server at {}",
-        path.display()
-    );
-    path
-}
 
 const DIGEST_SOURCE: &str = include_str!("../../../examples/repo-digest/main.ing");
 
@@ -99,10 +56,6 @@ impl Project {
     fn workspace(&self) -> &Path {
         self.dir.path()
     }
-}
-
-fn toml_string(value: &str) -> String {
-    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
 fn digest_args(project: &Project) -> Vec<String> {

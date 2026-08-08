@@ -8,7 +8,54 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
 
 ## [Unreleased]
 
-Nothing yet.
+**The agent runs inside the boundary too** ([RFC-0005](rfcs/0005-the-contained-run.md),
+[ADR-0007](docs/adr/0007-containing-the-run-is-not-blocked-on-a-second-backend.md);
+narrows [GAP-001](docs/gaps.md#gap-001))
+
+- `ingot run --contained` runs the interpreter and its tool servers inside a
+  container derived from the agent's own `policy` block. 0.3.0 contained an
+  agent's *tools*; the process holding the API key and writing the artifacts was
+  still the operator's, with the operator's whole machine.
+- **`network deny` now applies to the agent.** The box gets `--network none` and
+  still completes a model call: the call leaves through a supervisor on the
+  standard streams rather than through a socket. Those two things were previously
+  incompatible.
+- **The credential is outside the boundary by topology.** The provider stays on
+  the host, so there is no environment inside for a key to be read from and no
+  route to the process that has one — [Runtime 0.1 §11](specs/runtime/v0.1.md)
+  satisfied structurally rather than by discipline.
+- `--out-dir` is written by the host after the run, from the outputs the guest
+  returned. An agent cannot write outside its mounts even to deliver its own
+  result. Before this, `--out-dir` was written by a host process that no policy
+  constrained.
+- An `approval` gate crosses out and is decided by the operator. A gate that
+  cannot reach anybody is **refused**, never approved by default.
+- A provider failure keeps its kind across the boundary: a rate limit inside is
+  the same condition as a rate limit outside, so the interpreter does not behave
+  differently depending on where it is running.
+- New crate `ingot-supervisor`: the protocol and both halves of the channel.
+  Nothing in `ingot-runtime` changed to make a contained run possible, which is
+  the test of whether the boundary is really a deployment concern.
+- `tools/ingot.Dockerfile` builds the image. It is built **without** the HTTP
+  providers, so there is no code inside that could use a key even if one arrived.
+- **A program whose agents want different boundaries is refused** rather than run
+  in the widest of them ([GAP-023](docs/gaps.md#gap-023)). The two-agent example
+  is that case — the coordinator may write and the reviewer may not — and one box
+  for both would hand the reviewer a grant its own policy denies. `--sandbox`
+  still covers it.
+- `--record` with a contained run is refused: the cassette would record the model
+  exchanges, which happen outside, and omit the tool results, which happen inside.
+
+**Fixed**
+
+- `ingot-cli` did not build with `--no-default-features`: `catalogue::build` is
+  gated on a provider feature and was called unconditionally. A build with no
+  HTTP provider now refuses a `[[model.provider]]` declaration by name instead of
+  failing to compile.
+
+**Known**
+
+- A wedged contained run is not timed out ([GAP-024](docs/gaps.md#gap-024)).
 
 ## [0.3.0] — 2026-08-07
 

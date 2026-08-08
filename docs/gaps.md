@@ -57,6 +57,8 @@ to you*.
 | [GAP-019](#gap-019) | The name has had no trademark or registry clearance | Absent | legal review |
 | [GAP-020](#gap-020) | The boundary needs Linux containers | Refused | a second expression of the boundary |
 | [GAP-022](#gap-022) | Nothing has been released; you build from source | Absent | one tag |
+| [GAP-023](#gap-023) | A contained run cannot cross a boundary to a sub-agent | Refused | a box per agent, over the supervisor |
+| [GAP-024](#gap-024) | A wedged contained run is not timed out | Degraded | a deadline on the supervisor channel |
 
 ---
 
@@ -84,6 +86,14 @@ withhold one; it cannot bound egress to named hosts.
 tool that contacts anything. `ingot sandbox` says so rather than implying
 otherwise, and `ingot run --sandbox` refuses to start unless the operator
 acknowledges it — but the limit itself is not applied.
+
+*Narrowed again 2026-08-08.* `network deny` used to be enforced for an agent's
+tool servers and not for the agent, because the interpreter ran on the host with
+the host's network. `ingot run --contained` closes that half
+([RFC-0005](../rfcs/0005-the-contained-run.md)): the interpreter runs with
+`--network none` too, and its model call leaves through the supervisor rather than
+through a socket. What is still unenforced is only the *allowlist* — the choice
+between a network and none is now made and kept in both arrangements.
 
 *Why not yet.* An allowlist needs an egress proxy: a component every tool
 container routes through, which resolves and filters by host. That is a real
@@ -277,9 +287,65 @@ tests assert today.
 *Recorded in.* [RFC-0004](../rfcs/0004-ingot-containers.md),
 `crates/ingot-sandbox/src/executor.rs`.
 
+### GAP-023
+
+**A contained run cannot cross a boundary to a sub-agent.**
+
+`ingot run --contained` puts the whole run in one box, planned from the entry
+agent's policy. A program whose agents would get different boundaries is
+**refused**, naming both and what each would have got.
+
+*How it shows up.* `examples/code-review-team --contained` does not run: the
+coordinator may write `target/review` and the reviewer may not, and one box for
+both would hand the reviewer a write grant its own policy denies. Single-agent
+programs, which is most of them, are unaffected. `--sandbox` still works on the
+two-agent case, because it gives each agent's tool servers their own boundary.
+
+*Why not yet.* The fix is one box per agent, with an `agent.call` crossing the
+supervisor so the host starts a fresh boundary for the callee. The channel is
+already there and the method is a small addition; what needs deciding first is
+what a `file` handle means when it crosses between two boxes. A path under the
+workspace is portable, because both boxes mount the workspace at the same place;
+a path outside it is not, and silently passing one would be a hole exactly where
+this feature claims to close one.
+
+*What closing it needs.* An `agent` method on the supervisor protocol, a rule for
+handles that cross, and a test that a sub-agent in its own box cannot reach the
+caller's write mount.
+
+*Recorded in.* [RFC-0005](../rfcs/0005-the-contained-run.md),
+[ADR-0007](adr/0007-containing-the-run-is-not-blocked-on-a-second-backend.md),
+`crates/ingot-cli/src/contained.rs`.
+
 ---
 
 ## Degraded
+
+### GAP-024
+
+**A wedged contained run is not timed out.**
+
+The supervisor reads the guest's output synchronously. A guest that neither
+answers nor exits — a tool server deadlocked inside the box, a container the
+runtime has lost track of — leaves the host blocked on a read.
+
+*How it shows up.* `ingot run --contained` hangs instead of failing. Ctrl-C ends
+it and the container is `--rm`, so nothing is left behind, but a run in CI with no
+outer timeout would sit there.
+
+*Why not yet.* A deadline on the channel is not the obvious `read_timeout`: the
+guest is legitimately silent for as long as a model call takes, and that call is
+being served by *us*, so the host cannot distinguish "waiting for my answer" from
+"wedged" without tracking which side owes the other a message. That state machine
+is worth writing carefully rather than quickly. `ingot-mcp`'s `ChildTransport`
+solves the easier version of this problem, where every wait has a fixed bound.
+
+*What closing it needs.* A deadline that applies only while the guest owes the
+host a message, plus a bounded wait for the first `config` call so a guest that
+never starts is reported quickly.
+
+*Recorded in.* [RFC-0005](../rfcs/0005-the-contained-run.md),
+`crates/ingot-supervisor/src/host.rs`.
 
 ### GAP-010
 

@@ -118,6 +118,16 @@ execution engine.** That is the shape
 [ADR-0002](adr/0002-compiler-not-runtime.md) named as the only acceptable one,
 and [ADR-0006](adr/0006-a-policy-enforcing-runner.md) is where it was accepted.
 
+Where this stands, as of 2026-08-08: four of the five rows above are real.
+`ingot run --sandbox` contains an agent's tool servers
+([RFC-0004](../rfcs/0004-ingot-containers.md)) and `ingot run --contained`
+contains the agent itself ([RFC-0005](../rfcs/0005-the-contained-run.md)), which
+is what makes `network deny` and `secrets deny export` true of the agent rather
+than only of its tools. The remaining row is the host allowlist, which needs an
+egress proxy: [GAP-001](gaps.md#gap-001). One limitation is worth knowing —
+sub-agents cannot yet cross into their own boundary, so a program whose agents
+need different ones is refused: [GAP-023](gaps.md#gap-023).
+
 ### Authoring with a model
 
 Writing an agent should not require learning a language first. `ingot new

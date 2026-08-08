@@ -17,6 +17,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use ingot_compiler::{compile_path, format_source, Compilation};
 use ingot_diagnostics::{codes, ColorChoice as RenderColor};
 
+mod contained;
 mod manifest;
 mod run;
 mod sandbox;
@@ -70,6 +71,11 @@ impl ColorMode {
     }
 }
 
+/// `Run` carries far more flags than the others, so the enum is as large as its
+/// largest variant. Boxing it to save a few hundred bytes on one value that is
+/// constructed once per process, and doing so through clap's derive, costs more
+/// clarity than it buys.
+#[allow(clippy::large_enum_variant)]
 #[derive(Subcommand, Debug)]
 enum Command {
     /// Create a new agent project.
@@ -93,6 +99,13 @@ enum Command {
     Sandbox(SandboxArgs),
     /// Explain a diagnostic code in full.
     Explain(ExplainArgs),
+    /// The inside half of a supervised run. Not a way to run an agent.
+    ///
+    /// Hidden because invoking it directly does nothing useful: it reads its
+    /// whole configuration from a supervisor on its standard streams, and
+    /// without one it refuses. `ingot run --contained` is the command.
+    #[command(hide = true)]
+    Exec,
 }
 
 #[derive(Args, Debug)]
@@ -196,11 +209,35 @@ struct RunArgs {
     ///
     /// Needs a container runtime and an `image` on each server. `ingot sandbox`
     /// shows what the boundary would be.
-    #[arg(long)]
+    #[arg(long, conflicts_with_all = ["contained", "supervised"])]
     sandbox: bool,
 
+    /// Run the agent itself inside a boundary derived from its policy.
+    ///
+    /// Everything is inside: the interpreter, the tool servers, and nothing
+    /// else. The model call and the approval gate cross out through a
+    /// supervisor, so `network deny` holds and the API key never enters the box.
+    /// Needs a container runtime and `[run] image`.
+    #[arg(long)]
+    contained: bool,
+
+    /// The image a contained run happens inside.
+    #[arg(long, value_name = "IMAGE")]
+    image: Option<String>,
+
+    /// Run over the supervisor channel with no boundary at all.
+    ///
+    /// For proving the channel works where there is no container runtime. It
+    /// enforces nothing and says so on every run.
+    #[arg(long, hide = true, conflicts_with = "contained")]
+    supervised: bool,
+
     /// Proceed even where the boundary cannot honour a rule the policy states.
-    #[arg(long, requires = "sandbox")]
+    ///
+    /// Applies to `--sandbox` and `--contained`. Refused on its own rather than
+    /// ignored: a flag that looks like it loosened something and did nothing is
+    /// worse than an error.
+    #[arg(long)]
     sandbox_allow_unenforced: bool,
 
     /// The root the artifact's policy paths are relative to.
@@ -264,6 +301,7 @@ fn main() -> ExitCode {
         Command::Tools(args) => run_tools(args, color),
         Command::Sandbox(args) => run_sandbox(args, color),
         Command::Explain(args) => run_explain(args),
+        Command::Exec => contained::exec(),
     };
 
     match result {
@@ -540,6 +578,16 @@ fn run_ir(args: &IrArgs, color: RenderColor) -> Result<u8> {
 // --- run / test --------------------------------------------------------------
 
 fn run_run(args: &RunArgs, color: RenderColor) -> Result<u8> {
+    if args.sandbox_allow_unenforced && !args.sandbox && !args.contained {
+        bail!(
+            "--sandbox-allow-unenforced only means something with --sandbox or --contained; \
+             without a boundary there is nothing to leave unenforced"
+        );
+    }
+    if args.image.is_some() && !args.contained {
+        bail!("--image only applies to --contained; a run on the host has no image");
+    }
+
     let target = resolve_target(args.target.path.as_deref())?;
     let compilation = compile(&target)?;
     report(&compilation, color);
@@ -568,6 +616,9 @@ fn run_run(args: &RunArgs, color: RenderColor) -> Result<u8> {
             sandbox_allow_unenforced: args.sandbox_allow_unenforced,
             workspace: workspace(args.workspace.as_deref(), &target)?,
             models: target.model(),
+            contained: args.contained,
+            supervised: args.supervised,
+            image: args.image.clone().or_else(|| target.image()),
         },
     )
 }

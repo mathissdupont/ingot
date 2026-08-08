@@ -23,6 +23,7 @@ ingot-compiler.workspace = true
 ingot-runtime.workspace = true
 ingot-mcp.workspace = true
 ingot-sandbox.workspace = true
+ingot-supervisor.workspace = true
 ingot-ir.workspace = true
 ingot-diagnostics.workspace = true
 ingot-lexer.workspace = true

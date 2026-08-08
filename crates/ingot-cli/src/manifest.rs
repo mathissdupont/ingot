@@ -74,13 +74,23 @@ pub struct Run {
     /// whose files sit beside it needs nothing here.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace: Option<String>,
+
+    /// The container image `ingot run --contained` runs the agent inside.
+    ///
+    /// Unlike an `[[mcp.server]]` image, which contains somebody else's program
+    /// and is therefore entirely the operator's choice, this one contains
+    /// `ingot` itself and is built from `tools/ingot.Dockerfile`. There is still
+    /// no default: guessing a name would produce "image not found" from the
+    /// runtime instead of the instruction for building one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
 }
 
 impl Run {
     /// Whether the section carries anything, so an untouched manifest has no
     /// empty `[run]` table.
     pub fn is_default(&self) -> bool {
-        self.workspace.is_none()
+        self.workspace.is_none() && self.image.is_none()
     }
 }
 
@@ -166,6 +176,13 @@ impl Target {
             Some(relative) => self.root.join(relative),
             None => self.root.clone(),
         }
+    }
+
+    /// The image a contained run uses. None without a manifest.
+    pub fn image(&self) -> Option<String> {
+        self.manifest
+            .as_ref()
+            .and_then(|manifest| manifest.run.image.clone())
     }
 }
 

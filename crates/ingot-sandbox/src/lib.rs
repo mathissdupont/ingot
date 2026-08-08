@@ -52,5 +52,7 @@ pub mod plan;
 pub mod report;
 
 pub use executor::{detect, invocation, ExecutorError, Runtime, RUNTIMES};
-pub use plan::{plan, Mount, Network, PlanError, SandboxPlan, Unenforceable, GUEST_WORKSPACE};
+pub use plan::{
+    plan, Mount, Network, PlanError, SandboxPlan, Unenforceable, GUEST_WORKSPACE, RUN_SUBJECT,
+};
 pub use report::render;

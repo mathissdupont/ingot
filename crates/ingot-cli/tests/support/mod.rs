@@ -188,3 +188,54 @@ pub fn code(output: &Output) -> i32 {
         .code()
         .expect("the process must exit normally")
 }
+
+/// Where the reference MCP server binary is, building it if this test binary was
+/// invoked in a way that did not.
+///
+/// `CARGO_BIN_EXE_*` covers this package's own binaries only, and the server
+/// belongs to `ingot-mcp`, so it has to be found — and sometimes built — by hand.
+pub fn fs_server() -> PathBuf {
+    static BUILD: std::sync::Once = std::sync::Once::new();
+
+    let mut dir = std::env::current_exe().expect("the test binary has a path");
+    dir.pop();
+    if dir.ends_with("deps") {
+        dir.pop();
+    }
+    let path = dir.join(format!("ingot-mcp-fs{}", std::env::consts::EXE_SUFFIX));
+
+    BUILD.call_once(|| {
+        if path.is_file() {
+            return;
+        }
+        // `cargo test -p ingot-cli` builds the ingot-mcp library but not its
+        // binaries, so build it rather than failing with a puzzle.
+        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+        let mut command = Command::new(cargo);
+        command.current_dir(repo_root()).args([
+            "build",
+            "-p",
+            "ingot-mcp",
+            "--bin",
+            "ingot-mcp-fs",
+        ]);
+        if dir.ends_with("release") {
+            command.arg("--release");
+        }
+        let status = command.status().expect("cargo must be runnable");
+        assert!(status.success(), "building ingot-mcp-fs failed");
+    });
+
+    assert!(
+        path.is_file(),
+        "expected the reference MCP server at {}",
+        path.display()
+    );
+    path
+}
+
+/// A TOML string literal. Windows paths are full of backslashes and a manifest
+/// written without escaping them parses as something else entirely.
+pub fn toml_string(value: &str) -> String {
+    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+}

@@ -446,6 +446,7 @@ dependencies = [
  "ingot-mcp",
  "ingot-runtime",
  "ingot-sandbox",
+ "ingot-supervisor",
  "serde",
  "serde_json",
  "toml",
@@ -545,6 +546,17 @@ dependencies = [
 [[package]]
 name = "ingot-source"
 version = "0.3.0"
+
+[[package]]
+name = "ingot-supervisor"
+version = "0.3.0"
+dependencies = [
+ "ingot-ir",
+ "ingot-mcp",
+ "ingot-runtime",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "ingot-syntax"
