@@ -415,7 +415,10 @@ A compilation unit is a single `.ing` file. There is no `import`. A shared
 *How it shows up.* `ingot fmt` formats the entry file only, and a project cannot
 be split by concern.
 
-*Draft fix.* [RFC-0008](../rfcs/0008-language-v0.2-modules-and-imports.md).
+*Initial Language 0.2 fix.* [RFC-0008](../rfcs/0008-language-v0.2-modules-and-imports.md)
+specifies project-local imports, and the first implementation can import shared
+`type`, `tool` and `verifier` declarations. Broader package semantics,
+wildcards, re-exports and agent imports remain out of scope.
 
 *Recorded in.* [Language 0.1 §3 and §9](../specs/language/v0.1.md).
 
@@ -427,9 +430,9 @@ The type universe is fixed: scalars, `T[]`, and declared records. A value is
 always present, and a tool that may or may not return something has no way to
 say so.
 
-*Draft fixes.* Optionals and unions are specified in
-[RFC-0009](../rfcs/0009-language-v0.2-optionals-and-unions.md). Pure helper
-functions are specified in
+*Initial Language 0.2 fixes.* Optionals and unions are specified and implemented
+in [RFC-0009](../rfcs/0009-language-v0.2-optionals-and-unions.md). Pure helper
+functions are specified and implemented in
 [RFC-0010](../rfcs/0010-language-v0.2-pure-helper-functions.md). Generics are
 deferred until repeated real source demonstrates the need in
 [RFC-0011](../rfcs/0011-language-v0.2-generics-decision.md).

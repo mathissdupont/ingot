@@ -68,8 +68,12 @@ manifest and somebody's memory:
 | **what it may touch** | `policy { filesystem_read allow ["src"] }` |
 | **what it may spend** | `budget { steps <= 40  tokens <= 200000 }` |
 
-Small on purpose: no generics, no optionals, no user-defined functions. The
-value is not expressiveness; it is that everything expressible is checkable.
+Small on purpose does not mean frozen. Language 0.2 adds project-local imports,
+optional and union type expressions, and expression-only pure helper functions
+because those remove repeated authoring friction while staying checkable.
+Generics remain deliberately deferred until repeated real source shows the need.
+The value is not maximum expressiveness; it is that everything expressible is
+checkable.
 
 **2. A compiler.** Types, effects, capabilities, budgets and static bounds, all
 before execution. Default-deny throughout: an effect with no policy rule is

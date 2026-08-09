@@ -8,6 +8,25 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
 
 ## [Unreleased]
 
+**Language 0.2 reuse foundation**
+([RFC-0007](rfcs/0007-the-ingot-product-loop.md),
+[#7](https://github.com/mathissdupont/ingot/issues/7))
+
+- `language 0.2` now supports project-local `import` blocks for shared `type`,
+  `tool` and `verifier` declarations. Imports are compile-time source structure:
+  they are resolved before semantic analysis and erased before Agent IR
+  lowering.
+- Optional and union type expressions are available as `T?` and `A | B`, with
+  conservative assignability and canonical Agent IR type text. Existing Agent
+  IR schema version `0.1` is unchanged.
+- Expression-only pure helper functions can be declared with
+  `fn name(params) -> type = expression` and called from flow expressions.
+  Helpers type-check like ordinary calls, must remain effect-free, and lower by
+  inlining into pure IR values rather than adding runtime function calls.
+- Generics are intentionally deferred by RFC-0011 until at least three real
+  `.ing` source examples show the same reusable type or helper pattern that
+  imports, optionals, unions and pure helpers cannot express cleanly.
+
 **Editor-neutral language service foundation**
 ([RFC-0007](rfcs/0007-the-ingot-product-loop.md),
 [#6](https://github.com/mathissdupont/ingot/issues/6))

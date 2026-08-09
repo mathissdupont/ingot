@@ -354,21 +354,29 @@ executed elsewhere.
 
 ## Delivery order
 
-Milestone numbers are stable identifiers, not priority. The proposed order is:
+Milestone numbers are stable identifiers, not priority. The implemented order
+through the Language 0.2 reuse slice was:
 
 ```text
 M11 product loop foundation
   → M7 editor foundation
   → Language 0.2 reuse RFCs
+```
+
+The remaining proposed order is:
+
+```text
+IR 0.2 source spans
   → M10 optional model assistance
   → M6 packaging and distribution
   → M8 third-party backend conformance
 ```
 
-P1–P5 establish the path before broadening the language or adding a generator.
-P6 and P7 make direct `.ing` authoring pleasant and reusable. P9 accelerates
-that workflow without replacing it. P10 packages something people have already
-created, tested and run.
+P1–P5 established the path before broadening the language or adding a generator.
+P6 and P7 made direct `.ing` authoring pleasant and reusable. The source-span
+follow-up gives traces and future authoring repairs portable provenance before
+P9 accelerates the workflow with a model. P10 packages something people have
+already created, tested and run.
 
 ## Security and policy impact
 

@@ -16,18 +16,18 @@ ingot build --target python       # -> target/ingot/ResearchAgent.py
 ingot run --input topic=…         # execute it
 ```
 
-Status: **milestone M5**. The front end is complete — lexer, parser, type and
-effect checker, lowering to Agent IR — and a reference interpreter executes that
-IR against a real model provider, re-enforcing every capability, budget and
-approval the artifact declares. Tools are served over MCP by whichever servers
-the operator configures. Runs can be recorded to a cassette and replayed
-offline, so agent tests work in CI with no API key. A second, independent backend
-emits self-contained Python 3 and reports unsupported constructs before build.
-The editor-facing authoring stack is usable: the shared language service powers
-diagnostics, formatting, completion, hover and go-to-definition through
-`ingot-lsp`, and a reference VS Code extension contributes `.ing` syntax
-highlighting plus LSP startup. OCI packaging remains planned. See
-[the roadmap](#roadmap).
+Status: **pre-1.0, active product-loop development**. The compiler front end is
+complete, a reference interpreter executes Agent IR against real model
+providers, MCP tools can be discovered and preflighted, and runs can be recorded
+to cassettes and replayed offline. A second, independent backend emits
+self-contained Python 3 and reports unsupported constructs before build. The
+policy-derived boundary now covers tool servers and, with `--contained`, the
+agent process itself. The editor-facing authoring stack is usable through the
+shared language service, `ingot-lsp`, and a reference VS Code extension.
+Language 0.2 adds project-local imports, optional/union type expressions and
+expression-only pure helper functions; generics are deliberately deferred until
+real source shows the need. OCI packaging and model-assisted authoring remain
+planned. See [the roadmap](#roadmap).
 
 ---
 
@@ -622,12 +622,12 @@ With `--sandbox` the MCP servers move inside a policy-derived boundary
 | M8 | conformance suite and backend author guide | planned |
 | M9 | Ingot Containers — the policy block as an enforced boundary | done |
 | M10 | `ingot new` — authoring with a model, verified by the compiler | planned |
-| M11 | integrated `.ing` product loop: templates, `dev`, trace, readiness and safe-run UX | planned |
+| M11 | integrated `.ing` product loop: templates, `dev`, trace, readiness and safe-run UX | done |
 
 A number is an identity, not a position in a queue; things get referenced by it,
-so they keep it. The remaining proposed order is **M11 → Language 0.2 reuse
-RFCs → M10 → M6 → M8**. [RFC-0007](rfcs/0007-the-ingot-product-loop.md)
-explains why the usable language loop now comes before generation and packaging.
+so they keep it. The remaining proposed order is **IR 0.2 source spans → M10 →
+M6 → M8**. [RFC-0007](rfcs/0007-the-ingot-product-loop.md) explains why the
+usable language loop comes before generation and packaging.
 
 M3 and M4 landed together: the interpreter needed cassettes to be testable, and
 cassettes needed the interpreter to be worth recording. M9 landed in two stages —
@@ -636,6 +636,11 @@ itself ([RFC-0005](rfcs/0005-the-contained-run.md)) — with one piece still ope
 [GAP-023](docs/gaps.md#gap-023). M5 closed [GAP-018](docs/gaps.md#gap-018): the
 same artifact and cassette now run through two independent backends, and every
 unsupported construct is named in a portability report before deployment.
+M11 and the Language 0.2 reuse slice are complete: first-use templates,
+`doctor`, `dev`, human traces, contained-run readiness, editor/LSP support,
+typed tool onboarding, imports, optional/union types and pure helpers all now
+exist. [Issue #11](https://github.com/mathissdupont/ingot/issues/11) is the next
+trace-quality follow-up: carrying portable source spans in Agent IR.
 
 ## What is missing
 
