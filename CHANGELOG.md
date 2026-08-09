@@ -8,6 +8,21 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.4.0-rc.1] — 2026-08-09
+
+**The first tagged release.** The version headings below it record development
+milestones that were never published: there was no tag, no GitHub Release and no
+prebuilt binary until this one, which is why it is a release candidate — the
+release machinery had never run.
+
+- Language version: **0.2** (imports, optionals and unions, pure helper functions)
+- Agent IR version: **0.2** (portable node source spans)
+- Runtime version: **0.2** (a three-state `verify` outcome)
+- Ingot Package version: **0.1** (new)
+- CLI version: **0.4.0-rc.1**
+
 **A wedged contained run is ended rather than waited on**
 (closes [GAP-024](docs/gaps.md#gap-024))
 
@@ -389,7 +404,8 @@ narrows [GAP-001](docs/gaps.md#gap-001))
 ## [0.3.0] — 2026-08-07
 
 More than one model service, and the policy block enforced rather than only
-checked. The first release with prebuilt binaries.
+checked. Prepared for release with prebuilt binaries; never tagged, so the first
+published archives are 0.4.0-rc.1's.
 
 - Language version: **0.1** (unchanged; §7.1 defines what a policy path is
   relative to, which it never had)
@@ -708,6 +724,5 @@ Backends, packaging and the language server are not part of this release.
 - `Ingot` is a working name. Trademark, domain and registry clearance has not
   been carried out and requires legal review before any public release.
 
-[Unreleased]: https://github.com/mathissdupont/ingot/compare/v0.2.0...HEAD
-[0.2.0]: https://github.com/mathissdupont/ingot/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/mathissdupont/ingot/releases/tag/v0.1.0
+[Unreleased]: https://github.com/mathissdupont/ingot/compare/v0.4.0-rc.1...HEAD
+[0.4.0-rc.1]: https://github.com/mathissdupont/ingot/releases/tag/v0.4.0-rc.1

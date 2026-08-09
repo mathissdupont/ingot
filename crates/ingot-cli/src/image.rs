@@ -1,9 +1,12 @@
 //! Preparing the version-matched reference image for a contained run.
 //!
-//! Remote acquisition waits for M6 to define digest and signature verification.
-//! Until then this command makes the repository's auditable Dockerfile a product
-//! operation: one command finds the checkout, verifies its version, and asks the
-//! detected local runtime to build the exact tag the current binary selects.
+//! Remote acquisition waits for a signature scheme and a trust root
+//! ([GAP-029](../../../docs/gaps.md#gap-029)); a digest-pinned reference is
+//! verified against what is present, which is the half that can be done
+//! honestly. Until then this command makes the repository's auditable Dockerfile
+//! a product operation: one command finds the checkout, verifies its version,
+//! and asks the detected local runtime to build the exact tag the binary
+//! selects.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -60,7 +63,7 @@ pub fn build(source: Option<&Path>) -> Result<u8> {
 
 /// The digest an image reference pins, when it pins one.
 ///
-/// `ingot/run@sha256:…` names bytes; `ingot/run:0.3.0` names a tag, which is a
+/// `ingot/run@sha256:…` names bytes; `ingot/run:0.4.0` names a tag, which is a
 /// label somebody can move. Both are legitimate — this only says which one you
 /// wrote.
 pub fn pinned_digest(image: &str) -> Option<&str> {
@@ -154,7 +157,7 @@ fn reference_source(explicit: Option<&Path>) -> Result<PathBuf> {
     bail!(
         "could not find an Ingot source checkout containing `{REFERENCE_DOCKERFILE}`\n  \
          run from the checkout, or pass it explicitly:  ingot image build <SOURCE>\n  \
-         verified remote image acquisition is deferred until M6"
+         Ingot does not download an image: signed acquisition needs a trust root"
     )
 }
 
