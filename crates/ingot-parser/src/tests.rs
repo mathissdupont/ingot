@@ -113,6 +113,54 @@ fn records_declared_tool_effects() {
 }
 
 #[test]
+fn parses_import_declarations() {
+    let source = r#"
+language 0.2
+package heptapus.research
+
+import "./shared/web.ing" {
+  type search_result
+  tool web.search
+  verifier CitationCheck
+}
+
+agent ResearchAgent(topic: string) -> report<markdown> {
+  flow {
+    emit report = ask<markdown>("done")
+  }
+}
+"#;
+    let result = parse_text(source);
+    assert!(!result.diagnostics.has_errors(), "{:?}", result.diagnostics);
+    assert_eq!(result.program.imports.len(), 1);
+    let import = &result.program.imports[0];
+    assert_eq!(import.path.plain_text(), "./shared/web.ing");
+    assert_eq!(import.items.len(), 3);
+    assert_eq!(import.items[0].kind, ImportKind::Type);
+    assert_eq!(import.items[0].name.text(), "search_result");
+    assert_eq!(import.items[1].kind, ImportKind::Tool);
+    assert_eq!(import.items[1].name.text(), "web.search");
+    assert_eq!(import.items[2].kind, ImportKind::Verifier);
+    assert_eq!(import.items[2].name.text(), "CitationCheck");
+}
+
+#[test]
+fn import_requires_language_0_2() {
+    let result = parse_text(
+        r#"
+language 0.1
+import "./shared.ing" {
+  type shared
+}
+"#,
+    );
+    assert!(result
+        .diagnostics
+        .iter()
+        .any(|d| d.code == codes::UNSUPPORTED_LANGUAGE_VERSION));
+}
+
+#[test]
 fn reads_context_requirement_in_tokens() {
     let result = parse_text(RESEARCH_AGENT);
     let Some(ModelBlock::Requires { requirements, .. }) = &result.program.agents[0].model else {

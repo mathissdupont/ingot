@@ -5,7 +5,10 @@
 
 use ingot_ir::{NodeKind, RefScope, Value};
 
-use crate::compile_source;
+use std::fs;
+use std::path::PathBuf;
+
+use crate::{compile_path, compile_source};
 
 const PRELUDE: &str = r#"language 0.1
 package heptapus.test
@@ -29,6 +32,15 @@ fn compile(body: &str) -> crate::Compilation {
         compilation.render_diagnostics(ingot_diagnostics::ColorChoice::Never)
     );
     compilation
+}
+
+fn temp_project(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("ingot-{name}-{}", std::process::id()));
+    if dir.exists() {
+        fs::remove_dir_all(&dir).expect("removing stale test directory");
+    }
+    fs::create_dir_all(&dir).expect("creating test directory");
+    dir
 }
 
 const RESEARCH: &str = r#"
@@ -432,4 +444,123 @@ agent A(topic: string) -> report<markdown> {
         vec!["to", "body"],
         "named arguments follow the declaration order"
     );
+}
+
+#[test]
+fn imported_type_tool_and_verifier_are_available_to_the_entry_file() {
+    let dir = temp_project("imports-work");
+    let shared_dir = dir.join("shared");
+    fs::create_dir_all(&shared_dir).expect("creating shared directory");
+    fs::write(
+        shared_dir.join("web.ing"),
+        r#"
+language 0.2
+
+type search_result {
+  title: string
+  url: string
+}
+
+tool web.search(query: string) -> search_result[] !network
+
+verifier CitationCheck(draft: markdown, min_sources: int)
+"#,
+    )
+    .expect("writing imported file");
+    let entry = dir.join("main.ing");
+    fs::write(
+        &entry,
+        r#"
+language 0.2
+package heptapus.test
+
+import "./shared/web.ing" {
+  type search_result
+  tool web.search
+  verifier CitationCheck
+}
+
+agent A(topic: string) -> report<markdown> {
+  tools { mcp web.search }
+  policy { network allow ["example.com"] }
+  flow {
+    sources = call web.search(topic)
+    draft = ask<markdown>("done", context: sources)
+    verify CitationCheck(draft, min_sources: 1)
+    emit report = draft
+  }
+}
+"#,
+    )
+    .expect("writing entry file");
+
+    let compilation = compile_path(&entry).expect("entry must be readable");
+    assert!(
+        !compilation.has_errors(),
+        "expected imported declarations to compile:\n{}",
+        compilation.render_diagnostics(ingot_diagnostics::ColorChoice::Never)
+    );
+    let ir = compilation.primary_agent().expect("expected one agent");
+    assert_eq!(ir.language, "0.2");
+    assert!(ir.types.contains_key("search_result"));
+    assert_eq!(ir.tools[0].name, "web.search");
+}
+
+#[test]
+fn parent_traversal_import_paths_are_rejected() {
+    let dir = temp_project("imports-parent-traversal");
+    let entry = dir.join("main.ing");
+    fs::write(
+        &entry,
+        r#"
+language 0.2
+import "../shared.ing" {
+  type shared
+}
+"#,
+    )
+    .expect("writing entry file");
+
+    let compilation = compile_path(&entry).expect("entry must be readable");
+    assert!(compilation
+        .diagnostics
+        .iter()
+        .any(|d| d.code == ingot_diagnostics::codes::IMPORT_RESOLUTION_ERROR));
+}
+
+#[test]
+fn import_cycles_are_rejected() {
+    let dir = temp_project("imports-cycle");
+    fs::write(
+        dir.join("a.ing"),
+        r#"
+language 0.2
+import "./b.ing" {
+  type B
+}
+type A {
+  value: string
+}
+"#,
+    )
+    .expect("writing a.ing");
+    fs::write(
+        dir.join("b.ing"),
+        r#"
+language 0.2
+import "./a.ing" {
+  type A
+}
+type B {
+  value: string
+}
+"#,
+    )
+    .expect("writing b.ing");
+
+    let compilation = compile_path(dir.join("a.ing")).expect("entry must be readable");
+    assert!(compilation
+        .diagnostics
+        .iter()
+        .any(|d| d.message.contains("import cycle")));
 }

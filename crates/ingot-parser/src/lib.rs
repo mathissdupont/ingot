@@ -15,7 +15,7 @@ use ingot_syntax::*;
 mod strings;
 
 /// Language versions this compiler implements.
-pub const SUPPORTED_LANGUAGE_VERSIONS: &[(u32, u32)] = &[(0, 1)];
+pub const SUPPORTED_LANGUAGE_VERSIONS: &[(u32, u32)] = &[(0, 1), (0, 2)];
 
 #[derive(Debug)]
 pub struct ParseResult {
@@ -149,6 +149,7 @@ impl<'a> Parser<'a> {
             || matches!(
                 self.peek().keyword(),
                 Some(Keyword::Type)
+                    | Some(Keyword::Import)
                     | Some(Keyword::Tool)
                     | Some(Keyword::Verifier)
                     | Some(Keyword::Agent)
@@ -213,12 +214,39 @@ impl<'a> Parser<'a> {
         let mut program = Program {
             language,
             package,
+            imports: Vec::new(),
             types: Vec::new(),
             tools: Vec::new(),
             verifiers: Vec::new(),
             agents: Vec::new(),
             span: start,
         };
+
+        while self.at_keyword(Keyword::Import) {
+            if let Some(decl) = self.parse_import_decl() {
+                program.imports.push(decl);
+            }
+        }
+        if !program.imports.is_empty()
+            && !matches!(
+                program.language,
+                Some(LanguageVersion {
+                    major: 0,
+                    minor: 2..,
+                    ..
+                })
+            )
+        {
+            let span = program.imports[0].span;
+            self.error(
+                Diagnostic::error(
+                    codes::UNSUPPORTED_LANGUAGE_VERSION,
+                    "`import` requires language 0.2 or newer",
+                )
+                .with_primary(span, "not available in this language version")
+                .with_help("change the file header to `language 0.2`"),
+            );
+        }
 
         while !self.at_eof() {
             let before = self.position;
@@ -265,6 +293,17 @@ impl<'a> Parser<'a> {
                     );
                     self.recover_to_item();
                 }
+                Some(Keyword::Import) => {
+                    let span = self.span();
+                    self.error(
+                        Diagnostic::error(
+                            codes::UNEXPECTED_TOKEN,
+                            "`import` must appear after `package` and before declarations",
+                        )
+                        .with_primary(span, "move this import above the declarations"),
+                    );
+                    self.recover_to_item();
+                }
                 _ => {
                     let found = self.peek().kind.describe();
                     let span = self.span();
@@ -273,7 +312,10 @@ impl<'a> Parser<'a> {
                             codes::UNEXPECTED_TOKEN,
                             format!("expected a declaration, found {found}"),
                         )
-                        .with_primary(span, "expected `type`, `tool`, `verifier` or `agent`"),
+                        .with_primary(
+                            span,
+                            "expected `import`, `type`, `tool`, `verifier` or `agent`",
+                        ),
                     );
                     self.recover_to_item();
                 }
@@ -294,6 +336,7 @@ impl<'a> Parser<'a> {
             if matches!(
                 self.peek().keyword(),
                 Some(Keyword::Type)
+                    | Some(Keyword::Import)
                     | Some(Keyword::Tool)
                     | Some(Keyword::Verifier)
                     | Some(Keyword::Agent)
@@ -402,6 +445,130 @@ impl<'a> Parser<'a> {
     }
 
     // --- declarations -----------------------------------------------------
+
+    fn parse_import_decl(&mut self) -> Option<ImportDecl> {
+        let start = self.span();
+        self.bump(); // `import`
+
+        let path_span = self.span();
+        let TokenKind::Str(raw) = self.peek().kind.clone() else {
+            let found = self.peek().kind.describe();
+            self.error(
+                Diagnostic::error(
+                    codes::EXPECTED_TOKEN,
+                    format!("expected an import path, found {found}"),
+                )
+                .with_primary(path_span, "expected a string literal path"),
+            );
+            self.recover_to_item();
+            return None;
+        };
+        self.bump();
+        let path = self.build_string_literal(&raw, path_span);
+        if !path.is_plain() {
+            self.error(
+                Diagnostic::error(
+                    codes::UNEXPECTED_TOKEN,
+                    "import paths must be plain string literals",
+                )
+                .with_primary(path_span, "interpolation is not allowed here"),
+            );
+        }
+
+        if !self.expect(TokenKind::LBrace) {
+            self.recover_to_item();
+            return Some(ImportDecl {
+                path,
+                items: Vec::new(),
+                span: start.merge(self.previous_span()),
+            });
+        }
+
+        let mut items = Vec::new();
+        while !self.at(&TokenKind::RBrace) && !self.at_eof() {
+            let before = self.position;
+            if let Some(item) = self.parse_import_item() {
+                items.push(item);
+            }
+            self.eat(&TokenKind::Comma);
+            if self.position == before {
+                self.bump();
+            }
+        }
+        let end = self.span();
+        self.expect(TokenKind::RBrace);
+        Some(ImportDecl {
+            path,
+            items,
+            span: start.merge(end),
+        })
+    }
+
+    fn parse_import_item(&mut self) -> Option<ImportItem> {
+        let start = self.span();
+        let kind = match self.peek().keyword() {
+            Some(Keyword::Type) => {
+                self.bump();
+                ImportKind::Type
+            }
+            Some(Keyword::Tool) => {
+                self.bump();
+                ImportKind::Tool
+            }
+            Some(Keyword::Verifier) => {
+                self.bump();
+                ImportKind::Verifier
+            }
+            _ => {
+                let found = self.peek().kind.describe();
+                self.error(
+                    Diagnostic::error(
+                        codes::UNEXPECTED_TOKEN,
+                        format!("expected an import item, found {found}"),
+                    )
+                    .with_primary(start, "expected `type`, `tool` or `verifier`"),
+                );
+                self.recover_in_import_block();
+                return None;
+            }
+        };
+
+        let name = match kind {
+            ImportKind::Tool => self.parse_dotted_name("a tool name")?,
+            ImportKind::Type => {
+                let ident = self.expect_ident("a type name")?;
+                DottedName {
+                    span: ident.span,
+                    parts: vec![ident],
+                }
+            }
+            ImportKind::Verifier => {
+                let ident = self.expect_ident("a verifier name")?;
+                DottedName {
+                    span: ident.span,
+                    parts: vec![ident],
+                }
+            }
+        };
+
+        Some(ImportItem {
+            kind,
+            span: start.merge(name.span),
+            name,
+        })
+    }
+
+    fn recover_in_import_block(&mut self) {
+        while !self.at_eof() && !self.at(&TokenKind::RBrace) {
+            if matches!(
+                self.peek().keyword(),
+                Some(Keyword::Type) | Some(Keyword::Tool) | Some(Keyword::Verifier)
+            ) {
+                return;
+            }
+            self.bump();
+        }
+    }
 
     fn parse_type_decl(&mut self) -> Option<TypeDecl> {
         let doc = self.peek().doc.clone();

@@ -61,10 +61,43 @@ impl LanguageVersion {
 pub struct Program {
     pub language: Option<LanguageVersion>,
     pub package: Option<DottedName>,
+    pub imports: Vec<ImportDecl>,
     pub types: Vec<TypeDecl>,
     pub tools: Vec<ToolDecl>,
     pub verifiers: Vec<VerifierDecl>,
     pub agents: Vec<AgentDecl>,
+    pub span: Span,
+}
+
+/// `import "./shared.ing" { type search_result tool web.search }`
+#[derive(Debug, Clone)]
+pub struct ImportDecl {
+    pub path: StringLit,
+    pub items: Vec<ImportItem>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImportKind {
+    Type,
+    Tool,
+    Verifier,
+}
+
+impl ImportKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ImportKind::Type => "type",
+            ImportKind::Tool => "tool",
+            ImportKind::Verifier => "verifier",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ImportItem {
+    pub kind: ImportKind,
+    pub name: DottedName,
     pub span: Span,
 }
 

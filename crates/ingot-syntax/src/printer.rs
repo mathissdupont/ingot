@@ -30,6 +30,10 @@ pub fn print_program(program: &Program) -> String {
         let _ = writeln!(out, "package {}", package.text());
     }
 
+    for decl in &program.imports {
+        blank_line(&mut out);
+        print_import_decl(&mut out, decl);
+    }
     for decl in &program.types {
         blank_line(&mut out);
         print_type_decl(&mut out, decl);
@@ -72,6 +76,15 @@ fn print_doc(out: &mut String, doc: Option<&String>, level: usize) {
             let _ = writeln!(out, "/// {line}");
         }
     }
+}
+
+fn print_import_decl(out: &mut String, decl: &crate::ImportDecl) {
+    let _ = writeln!(out, "import \"{}\" {{", decl.path.template());
+    for item in &decl.items {
+        indent(out, 1);
+        let _ = writeln!(out, "{} {}", item.kind.as_str(), item.name.text());
+    }
+    out.push_str("}\n");
 }
 
 fn print_type_decl(out: &mut String, decl: &TypeDecl) {

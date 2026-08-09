@@ -422,15 +422,6 @@ fn editor_range(text: &str, start: u32, end: u32) -> EditorRange {
     }
 }
 
-fn source_range_for_file(file: &SourceFile, span: Span) -> SourceRange {
-    SourceRange {
-        file: file.name().to_string(),
-        start_byte: span.start,
-        end_byte: span.end,
-        range: editor_range(file.text(), span.start, span.end),
-    }
-}
-
 fn position_at_byte_offset(text: &str, offset: u32) -> EditorPosition {
     let mut offset = (offset as usize).min(text.len());
     while !text.is_char_boundary(offset) {
@@ -499,16 +490,15 @@ struct EditorSymbol {
 }
 
 fn collect_symbols(compilation: &Compilation) -> Vec<EditorSymbol> {
-    let file = compilation.sources.file(compilation.file);
     let mut symbols = Vec::new();
-    add_program_symbols(file, &compilation.program, &mut symbols);
+    add_program_symbols(&compilation.sources, &compilation.program, &mut symbols);
     symbols
 }
 
-fn add_program_symbols(file: &SourceFile, program: &Program, symbols: &mut Vec<EditorSymbol>) {
+fn add_program_symbols(map: &SourceMap, program: &Program, symbols: &mut Vec<EditorSymbol>) {
     if let Some(package) = &program.package {
         symbols.push(symbol_from_dotted(
-            file,
+            map,
             package,
             package.span,
             SymbolKind::Package,
@@ -518,22 +508,22 @@ fn add_program_symbols(file: &SourceFile, program: &Program, symbols: &mut Vec<E
     }
 
     for decl in &program.types {
-        add_type_symbols(file, decl, symbols);
+        add_type_symbols(map, decl, symbols);
     }
     for decl in &program.tools {
-        add_tool_symbols(file, decl, symbols);
+        add_tool_symbols(map, decl, symbols);
     }
     for decl in &program.verifiers {
-        add_verifier_symbols(file, decl, symbols);
+        add_verifier_symbols(map, decl, symbols);
     }
     for decl in &program.agents {
-        add_agent_symbols(file, decl, symbols);
+        add_agent_symbols(map, decl, symbols);
     }
 }
 
-fn add_type_symbols(file: &SourceFile, decl: &TypeDecl, symbols: &mut Vec<EditorSymbol>) {
+fn add_type_symbols(map: &SourceMap, decl: &TypeDecl, symbols: &mut Vec<EditorSymbol>) {
     symbols.push(symbol_from_ident(
-        file,
+        map,
         &decl.name,
         decl.span,
         SymbolKind::Type,
@@ -541,14 +531,14 @@ fn add_type_symbols(file: &SourceFile, decl: &TypeDecl, symbols: &mut Vec<Editor
         decl.doc.clone(),
     ));
     for field in &decl.fields {
-        add_field_symbol(file, field, SymbolKind::Field, symbols);
-        add_type_reference(file, &field.ty, symbols);
+        add_field_symbol(map, field, SymbolKind::Field, symbols);
+        add_type_reference(map, &field.ty, symbols);
     }
 }
 
-fn add_tool_symbols(file: &SourceFile, decl: &ToolDecl, symbols: &mut Vec<EditorSymbol>) {
+fn add_tool_symbols(map: &SourceMap, decl: &ToolDecl, symbols: &mut Vec<EditorSymbol>) {
     symbols.push(symbol_from_dotted(
-        file,
+        map,
         &decl.name,
         decl.span,
         SymbolKind::Tool,
@@ -562,15 +552,15 @@ fn add_tool_symbols(file: &SourceFile, decl: &ToolDecl, symbols: &mut Vec<Editor
         decl.doc.clone(),
     ));
     for param in &decl.params {
-        add_field_symbol(file, param, SymbolKind::Parameter, symbols);
-        add_type_reference(file, &param.ty, symbols);
+        add_field_symbol(map, param, SymbolKind::Parameter, symbols);
+        add_type_reference(map, &param.ty, symbols);
     }
-    add_type_reference(file, &decl.ret, symbols);
+    add_type_reference(map, &decl.ret, symbols);
 }
 
-fn add_verifier_symbols(file: &SourceFile, decl: &VerifierDecl, symbols: &mut Vec<EditorSymbol>) {
+fn add_verifier_symbols(map: &SourceMap, decl: &VerifierDecl, symbols: &mut Vec<EditorSymbol>) {
     symbols.push(symbol_from_ident(
-        file,
+        map,
         &decl.name,
         decl.span,
         SymbolKind::Verifier,
@@ -578,14 +568,14 @@ fn add_verifier_symbols(file: &SourceFile, decl: &VerifierDecl, symbols: &mut Ve
         decl.doc.clone(),
     ));
     for param in &decl.params {
-        add_field_symbol(file, param, SymbolKind::Parameter, symbols);
-        add_type_reference(file, &param.ty, symbols);
+        add_field_symbol(map, param, SymbolKind::Parameter, symbols);
+        add_type_reference(map, &param.ty, symbols);
     }
 }
 
-fn add_agent_symbols(file: &SourceFile, decl: &AgentDecl, symbols: &mut Vec<EditorSymbol>) {
+fn add_agent_symbols(map: &SourceMap, decl: &AgentDecl, symbols: &mut Vec<EditorSymbol>) {
     symbols.push(symbol_from_ident(
-        file,
+        map,
         &decl.name,
         decl.span,
         SymbolKind::Agent,
@@ -601,11 +591,11 @@ fn add_agent_symbols(file: &SourceFile, decl: &AgentDecl, symbols: &mut Vec<Edit
         decl.doc.clone(),
     ));
     for param in &decl.params {
-        add_field_symbol(file, param, SymbolKind::Parameter, symbols);
-        add_type_reference(file, &param.ty, symbols);
+        add_field_symbol(map, param, SymbolKind::Parameter, symbols);
+        add_type_reference(map, &param.ty, symbols);
     }
     if let Some(output) = &decl.output {
-        add_output_symbol(file, output, symbols);
+        add_output_symbol(map, output, symbols);
     }
     if let Some(model) = &decl.model {
         match model {
@@ -613,7 +603,7 @@ fn add_agent_symbols(file: &SourceFile, decl: &AgentDecl, symbols: &mut Vec<Edit
                 for requirement in requirements {
                     if let ModelRequirement::Capability(ident) = requirement {
                         symbols.push(symbol_from_ident(
-                            file,
+                            map,
                             ident,
                             ident.span,
                             SymbolKind::ModelCapability,
@@ -629,7 +619,7 @@ fn add_agent_symbols(file: &SourceFile, decl: &AgentDecl, symbols: &mut Vec<Edit
     if let Some(tools) = &decl.tools {
         for grant in &tools.grants {
             symbols.push(symbol_from_dotted(
-                file,
+                map,
                 &grant.name,
                 grant.span,
                 SymbolKind::Tool,
@@ -645,78 +635,78 @@ fn add_agent_symbols(file: &SourceFile, decl: &AgentDecl, symbols: &mut Vec<Edit
     if let Some(memory) = &decl.memory {
         if let Some(working) = &memory.working {
             for field in &working.fields {
-                add_field_symbol(file, field, SymbolKind::State, symbols);
+                add_field_symbol(map, field, SymbolKind::State, symbols);
             }
         }
     }
     if let Some(budget) = &decl.budget {
         for limit in &budget.limits {
-            add_budget_limit_symbol(file, limit, symbols);
+            add_budget_limit_symbol(map, limit, symbols);
         }
     }
     if let Some(policy) = &decl.policy {
         for rule in &policy.rules {
-            add_policy_rule_symbol(file, rule, symbols);
+            add_policy_rule_symbol(map, rule, symbols);
         }
     }
     if let Some(flow) = &decl.flow {
-        add_flow_symbols(file, flow, symbols);
+        add_flow_symbols(map, flow, symbols);
     }
 }
 
-fn add_flow_symbols(file: &SourceFile, flow: &FlowBlock, symbols: &mut Vec<EditorSymbol>) {
-    add_statement_symbols(file, &flow.statements, symbols);
+fn add_flow_symbols(map: &SourceMap, flow: &FlowBlock, symbols: &mut Vec<EditorSymbol>) {
+    add_statement_symbols(map, &flow.statements, symbols);
 }
 
-fn add_statement_symbols(file: &SourceFile, statements: &[Stmt], symbols: &mut Vec<EditorSymbol>) {
+fn add_statement_symbols(map: &SourceMap, statements: &[Stmt], symbols: &mut Vec<EditorSymbol>) {
     for statement in statements {
         match statement {
             Stmt::Bind { name, value, span } => {
                 symbols.push(symbol_from_ident(
-                    file,
+                    map,
                     name,
                     *span,
                     SymbolKind::Binding,
                     format!("binding {}", name.text),
                     Some("Value bound inside this flow.".to_string()),
                 ));
-                add_expr_symbols(file, value, symbols);
+                add_expr_symbols(map, value, symbols);
             }
             Stmt::StateWrite { field, value, .. } => {
                 symbols.push(symbol_from_ident(
-                    file,
+                    map,
                     field,
                     field.span,
                     SymbolKind::State,
                     format!("state.{}", field.text),
                     None,
                 ));
-                add_expr_symbols(file, value, symbols);
+                add_expr_symbols(map, value, symbols);
             }
-            Stmt::Expr { value, .. } => add_expr_symbols(file, value, symbols),
+            Stmt::Expr { value, .. } => add_expr_symbols(map, value, symbols),
             Stmt::Verify {
                 validator, args, ..
             } => {
                 symbols.push(symbol_from_ident(
-                    file,
+                    map,
                     validator,
                     validator.span,
                     SymbolKind::Verifier,
                     format!("verify {}", validator.text),
                     None,
                 ));
-                add_arg_symbols(file, args, symbols);
+                add_arg_symbols(map, args, symbols);
             }
             Stmt::Emit { output, value, .. } => {
                 symbols.push(symbol_from_ident(
-                    file,
+                    map,
                     output,
                     output.span,
                     SymbolKind::Output,
                     format!("emit {}", output.text),
                     None,
                 ));
-                add_expr_symbols(file, value, symbols);
+                add_expr_symbols(map, value, symbols);
             }
             Stmt::If {
                 condition,
@@ -724,36 +714,36 @@ fn add_statement_symbols(file: &SourceFile, statements: &[Stmt], symbols: &mut V
                 else_branch,
                 ..
             } => {
-                add_expr_symbols(file, condition, symbols);
-                add_statement_symbols(file, then_branch, symbols);
+                add_expr_symbols(map, condition, symbols);
+                add_statement_symbols(map, then_branch, symbols);
                 if let Some(else_branch) = else_branch {
-                    add_statement_symbols(file, else_branch, symbols);
+                    add_statement_symbols(map, else_branch, symbols);
                 }
             }
             Stmt::Loop { guard, body, .. } => {
                 if let Some(guard) = guard {
-                    add_expr_symbols(file, guard, symbols);
+                    add_expr_symbols(map, guard, symbols);
                 }
-                add_statement_symbols(file, body, symbols);
+                add_statement_symbols(map, body, symbols);
             }
-            Stmt::Checkpoint { label, .. } => add_string_symbols(file, label, symbols),
+            Stmt::Checkpoint { label, .. } => add_string_symbols(map, label, symbols),
             Stmt::Error { .. } => {}
         }
     }
 }
 
-fn add_expr_symbols(file: &SourceFile, expr: &Expr, symbols: &mut Vec<EditorSymbol>) {
+fn add_expr_symbols(map: &SourceMap, expr: &Expr, symbols: &mut Vec<EditorSymbol>) {
     match expr {
-        Expr::Str(literal) => add_string_symbols(file, literal, symbols),
+        Expr::Str(literal) => add_string_symbols(map, literal, symbols),
         Expr::List { items, .. } => {
             for item in items {
-                add_expr_symbols(file, item, symbols);
+                add_expr_symbols(map, item, symbols);
             }
         }
         Expr::Path(path) => {
             match &path.root {
                 PathRoot::Binding(ident) => symbols.push(symbol_from_ident(
-                    file,
+                    map,
                     ident,
                     path.span,
                     SymbolKind::Binding,
@@ -765,13 +755,13 @@ fn add_expr_symbols(file: &SourceFile, expr: &Expr, symbols: &mut Vec<EditorSymb
                     kind: SymbolKind::State,
                     detail: "state".to_string(),
                     documentation: Some("Agent working memory root.".to_string()),
-                    name_range: source_range_for_file(file, *span),
-                    declaration_range: source_range_for_file(file, path.span),
+                    name_range: source_range(map, *span),
+                    declaration_range: source_range(map, path.span),
                 }),
             }
             for segment in &path.segments {
                 symbols.push(symbol_from_ident(
-                    file,
+                    map,
                     segment,
                     segment.span,
                     SymbolKind::Field,
@@ -781,19 +771,19 @@ fn add_expr_symbols(file: &SourceFile, expr: &Expr, symbols: &mut Vec<EditorSymb
             }
         }
         Expr::Ask { result, args, .. } => {
-            add_type_reference(file, result, symbols);
-            add_arg_symbols(file, args, symbols);
+            add_type_reference(map, result, symbols);
+            add_arg_symbols(map, args, symbols);
         }
         Expr::Call { callee, args, span } => {
             symbols.push(symbol_from_dotted(
-                file,
+                map,
                 callee,
                 *span,
                 SymbolKind::Tool,
                 format!("call {}", callee.text()),
                 None,
             ));
-            add_arg_symbols(file, args, symbols);
+            add_arg_symbols(map, args, symbols);
         }
         Expr::ParallelMap {
             source,
@@ -801,20 +791,20 @@ fn add_expr_symbols(file: &SourceFile, expr: &Expr, symbols: &mut Vec<EditorSymb
             body,
             span,
         } => {
-            add_expr_symbols(file, source, symbols);
+            add_expr_symbols(map, source, symbols);
             symbols.push(symbol_from_ident(
-                file,
+                map,
                 binder,
                 *span,
                 SymbolKind::LoopVariable,
                 format!("loop variable {}", binder.text),
                 None,
             ));
-            add_statement_symbols(file, body, symbols);
+            add_statement_symbols(map, body, symbols);
         }
         Expr::Builtin { name, args, .. } => {
             symbols.push(symbol_from_ident(
-                file,
+                map,
                 name,
                 name.span,
                 SymbolKind::Binding,
@@ -822,23 +812,23 @@ fn add_expr_symbols(file: &SourceFile, expr: &Expr, symbols: &mut Vec<EditorSymb
                 builtin_doc(&name.text).map(str::to_string),
             ));
             for arg in args {
-                add_expr_symbols(file, arg, symbols);
+                add_expr_symbols(map, arg, symbols);
             }
         }
-        Expr::Unary { operand, .. } => add_expr_symbols(file, operand, symbols),
+        Expr::Unary { operand, .. } => add_expr_symbols(map, operand, symbols),
         Expr::Binary { lhs, rhs, .. } => {
-            add_expr_symbols(file, lhs, symbols);
-            add_expr_symbols(file, rhs, symbols);
+            add_expr_symbols(map, lhs, symbols);
+            add_expr_symbols(map, rhs, symbols);
         }
         Expr::Int { .. } | Expr::Float { .. } | Expr::Bool { .. } | Expr::Error { .. } => {}
     }
 }
 
-fn add_arg_symbols(file: &SourceFile, args: &[Arg], symbols: &mut Vec<EditorSymbol>) {
+fn add_arg_symbols(map: &SourceMap, args: &[Arg], symbols: &mut Vec<EditorSymbol>) {
     for arg in args {
         if let Some(name) = &arg.name {
             symbols.push(symbol_from_ident(
-                file,
+                map,
                 name,
                 arg.span,
                 SymbolKind::Parameter,
@@ -846,26 +836,26 @@ fn add_arg_symbols(file: &SourceFile, args: &[Arg], symbols: &mut Vec<EditorSymb
                 None,
             ));
         }
-        add_expr_symbols(file, &arg.value, symbols);
+        add_expr_symbols(map, &arg.value, symbols);
     }
 }
 
-fn add_string_symbols(file: &SourceFile, literal: &StringLit, symbols: &mut Vec<EditorSymbol>) {
+fn add_string_symbols(map: &SourceMap, literal: &StringLit, symbols: &mut Vec<EditorSymbol>) {
     for part in &literal.parts {
         if let StringPart::Interpolation(path) = part {
-            add_interpolation_symbols(file, path, symbols);
+            add_interpolation_symbols(map, path, symbols);
         }
     }
 }
 
 fn add_interpolation_symbols(
-    file: &SourceFile,
+    map: &SourceMap,
     path: &InterpolationPath,
     symbols: &mut Vec<EditorSymbol>,
 ) {
     match &path.root {
         PathRoot::Binding(ident) => symbols.push(symbol_from_ident(
-            file,
+            map,
             ident,
             path.span,
             SymbolKind::Binding,
@@ -877,13 +867,13 @@ fn add_interpolation_symbols(
             kind: SymbolKind::State,
             detail: "state".to_string(),
             documentation: Some("Agent working memory root.".to_string()),
-            name_range: source_range_for_file(file, *span),
-            declaration_range: source_range_for_file(file, path.span),
+            name_range: source_range(map, *span),
+            declaration_range: source_range(map, path.span),
         }),
     }
     for segment in &path.segments {
         symbols.push(symbol_from_ident(
-            file,
+            map,
             segment,
             segment.span,
             SymbolKind::Field,
@@ -893,28 +883,28 @@ fn add_interpolation_symbols(
     }
 }
 
-fn add_type_reference(file: &SourceFile, ty: &TypeExpr, symbols: &mut Vec<EditorSymbol>) {
+fn add_type_reference(map: &SourceMap, ty: &TypeExpr, symbols: &mut Vec<EditorSymbol>) {
     match ty {
         TypeExpr::Named(ident) => symbols.push(symbol_from_ident(
-            file,
+            map,
             ident,
             ident.span,
             SymbolKind::Type,
             format!("type {}", ident.text),
             primitive_type_doc(&ident.text).map(str::to_string),
         )),
-        TypeExpr::List { element, .. } => add_type_reference(file, element, symbols),
+        TypeExpr::List { element, .. } => add_type_reference(map, element, symbols),
     }
 }
 
 fn add_field_symbol(
-    file: &SourceFile,
+    map: &SourceMap,
     field: &FieldDecl,
     kind: SymbolKind,
     symbols: &mut Vec<EditorSymbol>,
 ) {
     symbols.push(symbol_from_ident(
-        file,
+        map,
         &field.name,
         field.span,
         kind,
@@ -923,9 +913,9 @@ fn add_field_symbol(
     ));
 }
 
-fn add_output_symbol(file: &SourceFile, output: &OutputDecl, symbols: &mut Vec<EditorSymbol>) {
+fn add_output_symbol(map: &SourceMap, output: &OutputDecl, symbols: &mut Vec<EditorSymbol>) {
     symbols.push(symbol_from_ident(
-        file,
+        map,
         &output.name,
         output.span,
         SymbolKind::Output,
@@ -933,7 +923,7 @@ fn add_output_symbol(file: &SourceFile, output: &OutputDecl, symbols: &mut Vec<E
         None,
     ));
     symbols.push(symbol_from_ident(
-        file,
+        map,
         &output.content,
         output.content.span,
         SymbolKind::Type,
@@ -942,13 +932,9 @@ fn add_output_symbol(file: &SourceFile, output: &OutputDecl, symbols: &mut Vec<E
     ));
 }
 
-fn add_budget_limit_symbol(
-    file: &SourceFile,
-    limit: &BudgetLimit,
-    symbols: &mut Vec<EditorSymbol>,
-) {
+fn add_budget_limit_symbol(map: &SourceMap, limit: &BudgetLimit, symbols: &mut Vec<EditorSymbol>) {
     symbols.push(symbol_from_ident(
-        file,
+        map,
         &limit.key,
         limit.span,
         SymbolKind::BudgetKey,
@@ -957,9 +943,9 @@ fn add_budget_limit_symbol(
     ));
 }
 
-fn add_policy_rule_symbol(file: &SourceFile, rule: &PolicyRule, symbols: &mut Vec<EditorSymbol>) {
+fn add_policy_rule_symbol(map: &SourceMap, rule: &PolicyRule, symbols: &mut Vec<EditorSymbol>) {
     symbols.push(symbol_from_ident(
-        file,
+        map,
         &rule.subject,
         rule.span,
         SymbolKind::PolicySubject,
@@ -975,7 +961,7 @@ fn add_policy_rule_symbol(file: &SourceFile, rule: &PolicyRule, symbols: &mut Ve
             qualifier: Some(qualifier),
             ..
         } => symbols.push(symbol_from_ident(
-            file,
+            map,
             qualifier,
             qualifier.span,
             SymbolKind::PolicySubject,
@@ -989,7 +975,7 @@ fn add_policy_rule_symbol(file: &SourceFile, rule: &PolicyRule, symbols: &mut Ve
 }
 
 fn symbol_from_ident(
-    file: &SourceFile,
+    map: &SourceMap,
     ident: &Ident,
     declaration_span: Span,
     kind: SymbolKind,
@@ -1001,13 +987,13 @@ fn symbol_from_ident(
         kind,
         detail,
         documentation,
-        name_range: source_range_for_file(file, ident.span),
-        declaration_range: source_range_for_file(file, declaration_span),
+        name_range: source_range(map, ident.span),
+        declaration_range: source_range(map, declaration_span),
     }
 }
 
 fn symbol_from_dotted(
-    file: &SourceFile,
+    map: &SourceMap,
     name: &DottedName,
     declaration_span: Span,
     kind: SymbolKind,
@@ -1019,8 +1005,8 @@ fn symbol_from_dotted(
         kind,
         detail,
         documentation,
-        name_range: source_range_for_file(file, name.span),
-        declaration_range: source_range_for_file(file, declaration_span),
+        name_range: source_range(map, name.span),
+        declaration_range: source_range(map, declaration_span),
     }
 }
 
@@ -1270,6 +1256,12 @@ const KEYWORD_COMPLETIONS: &[(&str, &str, &str, Option<&str>)] = &[
         "package name",
         "Groups declarations under a namespace.",
         None,
+    ),
+    (
+        "import",
+        "import \"./shared.ing\" { ... }",
+        "Imports shared type, tool or verifier declarations from another Ingot source file.",
+        Some("import \"./shared.ing\" {\n  type Name\n}"),
     ),
     (
         "type",

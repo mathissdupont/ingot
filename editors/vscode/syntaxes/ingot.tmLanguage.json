@@ -130,7 +130,7 @@
         },
         {
           "name": "keyword.other.ingot",
-          "match": "\\b(language|package|model|requires|exact|tools|mcp|memory|working|ephemeral|budget|policy|allow|deny|require|approval|flow|ask|call|verify|emit|max|checkpoint|state)\\b"
+          "match": "\\b(language|package|import|model|requires|exact|tools|mcp|memory|working|ephemeral|budget|policy|allow|deny|require|approval|flow|ask|call|verify|emit|max|checkpoint|state)\\b"
         },
         {
           "name": "constant.language.boolean.ingot",

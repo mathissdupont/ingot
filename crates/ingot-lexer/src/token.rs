@@ -122,6 +122,7 @@ impl TokenKind {
 pub enum Keyword {
     Language,
     Package,
+    Import,
     Type,
     Tool,
     Verifier,
@@ -169,6 +170,7 @@ impl Keyword {
         match self {
             Keyword::Language => "language",
             Keyword::Package => "package",
+            Keyword::Import => "import",
             Keyword::Type => "type",
             Keyword::Tool => "tool",
             Keyword::Verifier => "verifier",
@@ -215,6 +217,7 @@ impl Keyword {
         let keyword = match text {
             "language" => Keyword::Language,
             "package" => Keyword::Package,
+            "import" => Keyword::Import,
             "type" => Keyword::Type,
             "tool" => Keyword::Tool,
             "verifier" => Keyword::Verifier,
@@ -260,6 +263,7 @@ impl Keyword {
 pub const KEYWORDS: &[&str] = &[
     "language",
     "package",
+    "import",
     "type",
     "tool",
     "verifier",

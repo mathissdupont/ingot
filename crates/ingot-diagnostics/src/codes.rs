@@ -44,6 +44,7 @@ pub const RECURSIVE_AGENT: &str = "ING2014";
 pub const MISSING_OUTPUT_DECLARATION: &str = "ING2015";
 pub const UNSUPPORTED_TRANSPORT: &str = "ING2016";
 pub const UNSUPPORTED_MEMORY_LIFETIME: &str = "ING2017";
+pub const IMPORT_RESOLUTION_ERROR: &str = "ING2018";
 
 // --- ING3xxx: types -------------------------------------------------------
 

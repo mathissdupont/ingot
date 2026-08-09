@@ -13,7 +13,18 @@ use ingot_mcp::{McpConfig, McpToolHost, ServerConfig};
 use ingot_runtime::{ToolError, ToolHost, ToolInvocation};
 use serde_json::{json, Value};
 
-const SERVER: &str = env!("CARGO_BIN_EXE_ingot-mcp-fs");
+fn server() -> String {
+    let exe_name = format!("ingot-mcp-fs{}", std::env::consts::EXE_SUFFIX);
+    if let Ok(current) = std::env::current_exe() {
+        if let Some(debug_dir) = current.parent().and_then(Path::parent) {
+            let sibling = debug_dir.join(&exe_name);
+            if sibling.exists() {
+                return sibling.display().to_string();
+            }
+        }
+    }
+    env!("CARGO_BIN_EXE_ingot-mcp-fs").to_string()
+}
 
 fn workspace(label: &str) -> PathBuf {
     let root = std::env::temp_dir().join(format!("ingot-mcp-stdio-{label}"));
@@ -31,7 +42,7 @@ fn config(root: &Path, allow_write: bool, tools: &[(&str, &str)]) -> McpConfig {
     McpConfig {
         servers: vec![ServerConfig {
             name: "files".to_string(),
-            command: SERVER.to_string(),
+            command: server(),
             args,
             image: None,
             cwd: None,

@@ -5,6 +5,7 @@ Normative behaviour lives here. Implementation detail does not.
 | Document | Status | Covers |
 |----------|--------|--------|
 | [`language/v0.1.md`](language/v0.1.md) | Draft, implemented | Syntax and static semantics |
+| [`language/v0.2.md`](language/v0.2.md) | Draft, partially implemented | Language 0.1 plus project-local imports |
 | [`ir/v0.1.md`](ir/v0.1.md) | Draft, implemented | The Agent IR, the backend contract |
 | [`ir/agent-ir.schema.json`](ir/agent-ir.schema.json) | Draft, implemented | Machine-readable IR schema |
 | [`image/`](image/) | Not started (M6) | OCI artifact profile, media types, lockfile |
