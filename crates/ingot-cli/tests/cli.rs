@@ -436,6 +436,76 @@ fn a_template_project_checks_builds_and_replays_without_a_key() {
 }
 
 #[test]
+fn new_review_separates_policy_from_automatic_repair() {
+    let dir = TempDir::new("new-review-policy");
+    let previous = dir.path().join("previous.ing");
+    let candidate = dir.path().join("candidate.ing");
+    std::fs::write(
+        &previous,
+        r#"
+language 0.1
+package demo
+
+tool web.search(query: string) -> string[] !network
+
+agent Research(topic: string) -> report<markdown> {
+  tools { mcp web.search }
+  flow {
+    emit report = ask<markdown>("draft ${topic}")
+  }
+}
+"#,
+    )
+    .expect("writing previous source");
+    std::fs::write(
+        &candidate,
+        r##"
+language 0.1
+package demo
+
+tool web.search(query: string) -> string[] !network
+
+agent Research(topic: string) -> report<markdown> {
+  tools { mcp web.search }
+  policy {
+    network allow ["example.com"]
+  }
+  flow {
+    hits = call web.search(topic)
+    emit report = ask<markdown>("draft", context: hits)
+  }
+}
+"##,
+    )
+    .expect("writing candidate source");
+
+    let output = run(&[
+        "new",
+        "--previous",
+        &previous.display().to_string(),
+        "--candidate",
+        &candidate.display().to_string(),
+        "review",
+        "papers",
+    ]);
+
+    assert_eq!(code(&output), EXIT_DIAGNOSTICS, "{}", stderr(&output));
+    let out = stdout(&output);
+    assert!(
+        out.contains("candidate source requests policy changes"),
+        "{out}"
+    );
+    assert!(
+        out.contains("agent Research: network allow [\"example.com\"]"),
+        "{out}"
+    );
+    assert!(
+        out.contains("not part of automatic compiler repair"),
+        "{out}"
+    );
+}
+
+#[test]
 fn init_refuses_to_overwrite_an_existing_project() {
     let dir = TempDir::new("init-twice");
     let project = dir.path().join("agent");

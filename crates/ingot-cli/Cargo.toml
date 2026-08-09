@@ -27,6 +27,7 @@ ingot-supervisor.workspace = true
 ingot-backend-python.workspace = true
 ingot-ir.workspace = true
 ingot-source.workspace = true
+ingot-syntax.workspace = true
 ingot-diagnostics.workspace = true
 ingot-lexer.workspace = true
 anyhow = { workspace = true }

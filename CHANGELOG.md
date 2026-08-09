@@ -8,6 +8,18 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
 
 ## [Unreleased]
 
+**Model-assisted authoring guardrails**
+([RFC-0007](rfcs/0007-the-ingot-product-loop.md),
+[#9](https://github.com/mathissdupont/ingot/issues/9))
+
+- Added the first `ingot new` authoring review surface:
+  `ingot new --previous OLD.ing --candidate PROPOSED.ing` compares a proposed
+  source repair against the previous source and separates new policy rules from
+  ordinary compiler repair.
+- Automatic repair is blocked when a candidate adds policy. The candidate can
+  still explain the request, but policy acceptance remains an explicit operator
+  decision.
+
 **Agent IR 0.2 source provenance**
 ([RFC-0007](rfcs/0007-the-ingot-product-loop.md),
 [#11](https://github.com/mathissdupont/ingot/issues/11);

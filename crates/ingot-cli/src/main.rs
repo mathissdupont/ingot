@@ -17,6 +17,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use ingot_compiler::{compile_path, format_source, Compilation};
 use ingot_diagnostics::{codes, ColorChoice as RenderColor};
 
+mod authoring;
 mod contained;
 mod dev;
 mod doctor;
@@ -85,6 +86,8 @@ impl ColorMode {
 enum Command {
     /// Create a new agent project.
     Init(InitArgs),
+    /// Create or review a model-assisted authoring proposal.
+    New(NewArgs),
     /// Parse, type-check and validate policy without producing output.
     Check(PathArgs),
     /// Rewrite sources in canonical form.
@@ -127,6 +130,20 @@ struct InitArgs {
     /// Maintained starting point for the new project.
     #[arg(long, value_enum, default_value_t = StarterTemplate::Brief)]
     template: StarterTemplate,
+}
+
+#[derive(Args, Debug)]
+struct NewArgs {
+    /// Workflow to author, e.g. "review pull requests for security issues".
+    workflow: Vec<String>,
+
+    /// Existing `.ing` source to compare against when reviewing a candidate.
+    #[arg(long, value_name = "PATH", requires = "candidate")]
+    previous: Option<PathBuf>,
+
+    /// Model-proposed `.ing` source to review before any repair loop applies it.
+    #[arg(long, value_name = "PATH", requires = "previous")]
+    candidate: Option<PathBuf>,
 }
 
 #[derive(Args, Debug)]
@@ -435,6 +452,7 @@ fn main() -> ExitCode {
 
     let result = match &cli.command {
         Command::Init(args) => run_init(args),
+        Command::New(args) => run_new(args),
         Command::Check(args) => run_check(args, color),
         Command::Fmt(args) => run_fmt(args, color),
         Command::Build(args) => run_build(args, color),
@@ -510,6 +528,48 @@ fn run_init(args: &InitArgs) -> Result<u8> {
     println!("  ingot build");
     println!("  ingot test");
     Ok(EXIT_OK)
+}
+
+fn run_new(args: &NewArgs) -> Result<u8> {
+    match (&args.previous, &args.candidate) {
+        (Some(previous), Some(candidate)) => {
+            let previous_source = std::fs::read_to_string(previous)
+                .with_context(|| format!("reading {}", previous.display()))?;
+            let candidate_source = std::fs::read_to_string(candidate)
+                .with_context(|| format!("reading {}", candidate.display()))?;
+            let review = authoring::review_candidate(&previous_source, &candidate_source);
+
+            if review.automatic_repair_source().is_some() {
+                println!("candidate source contains no new policy proposal");
+                println!("automatic compiler repair may continue with this source");
+                return Ok(EXIT_OK);
+            }
+
+            println!("candidate source requests policy changes");
+            println!("these are not part of automatic compiler repair:");
+            for proposal in review.policy_proposals() {
+                println!(
+                    "  agent {}: {} {}",
+                    proposal.agent, proposal.subject, proposal.action
+                );
+            }
+            println!();
+            println!("review and accept policy changes explicitly before continuing");
+            Ok(EXIT_DIAGNOSTICS)
+        }
+        (None, None) => {
+            let workflow = args.workflow.join(" ");
+            if workflow.trim().is_empty() {
+                bail!("describe the workflow to author, or pass --previous and --candidate to review a proposal");
+            }
+            bail!(
+                "model-assisted generation is not wired yet for `{workflow}`\n  \
+                 use `ingot init` for maintained templates, or pass --previous and --candidate \
+                 to review a proposed source repair"
+            )
+        }
+        _ => unreachable!("clap requires --previous and --candidate together"),
+    }
 }
 
 fn run_image(args: &ImageArgs) -> Result<u8> {

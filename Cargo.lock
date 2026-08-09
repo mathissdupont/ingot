@@ -503,6 +503,7 @@ dependencies = [
  "ingot-sandbox",
  "ingot-source",
  "ingot-supervisor",
+ "ingot-syntax",
  "notify",
  "serde",
  "serde_json",
