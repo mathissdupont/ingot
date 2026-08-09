@@ -386,8 +386,15 @@ impl<'a> Lexer<'a> {
                 }
             }
             '+' => TokenKind::Plus,
+            '?' => TokenKind::Question,
             '&' if self.eat(b'&') => TokenKind::AmpAmp,
-            '|' if self.eat(b'|') => TokenKind::PipePipe,
+            '|' => {
+                if self.eat(b'|') {
+                    TokenKind::PipePipe
+                } else {
+                    TokenKind::Pipe
+                }
+            }
             other => {
                 self.diagnostics.push(
                     Diagnostic::error(
@@ -494,14 +501,16 @@ mod tests {
     #[test]
     fn lexes_multi_character_operators() {
         assert_eq!(
-            kinds("<= >= == != && || ->"),
+            kinds("<= >= == != && | || ? ->"),
             vec![
                 TokenKind::Le,
                 TokenKind::Ge,
                 TokenKind::EqEq,
                 TokenKind::BangEq,
                 TokenKind::AmpAmp,
+                TokenKind::Pipe,
                 TokenKind::PipePipe,
+                TokenKind::Question,
                 TokenKind::Arrow,
                 TokenKind::Eof
             ]

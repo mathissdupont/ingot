@@ -14,8 +14,8 @@ pub use policy::{PolicyDecision, PolicySubject};
 
 /// A resolved type.
 ///
-/// Ingot v0.1 has no generics, no optionals and no unions. `Unknown` exists only
-/// so that a single type error does not cascade into dozens of follow-ups.
+/// `Unknown` exists only so that a single type error does not cascade into
+/// dozens of follow-ups.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Ty {
     String,
@@ -31,6 +31,10 @@ pub enum Ty {
     /// A file handle produced or consumed by a tool.
     File,
     List(Box<Ty>),
+    /// A nullable value: either `T` or absent/null.
+    Optional(Box<Ty>),
+    /// A value that may be any one of several alternatives.
+    Union(Vec<Ty>),
     /// A user-declared record type, referenced by name.
     Record(String),
     /// Produced after an error so that checking can continue.
@@ -59,6 +63,31 @@ impl Ty {
         Ty::List(Box::new(element))
     }
 
+    pub fn optional(inner: Ty) -> Ty {
+        Ty::Optional(Box::new(inner))
+    }
+
+    pub fn union(options: Vec<Ty>) -> Ty {
+        let mut flattened = Vec::new();
+        for option in options {
+            match option {
+                Ty::Union(nested) => flattened.extend(nested),
+                other => flattened.push(other),
+            }
+        }
+        let mut unique = Vec::new();
+        for option in flattened {
+            if !unique.contains(&option) {
+                unique.push(option);
+            }
+        }
+        if unique.len() == 1 {
+            unique.pop().unwrap()
+        } else {
+            Ty::Union(unique)
+        }
+    }
+
     pub fn element(&self) -> Option<&Ty> {
         match self {
             Ty::List(element) => Some(element),
@@ -69,7 +98,8 @@ impl Ty {
     pub fn is_unknown(&self) -> bool {
         match self {
             Ty::Unknown => true,
-            Ty::List(element) => element.is_unknown(),
+            Ty::List(element) | Ty::Optional(element) => element.is_unknown(),
+            Ty::Union(options) => options.iter().any(Ty::is_unknown),
             _ => false,
         }
     }
@@ -94,6 +124,15 @@ impl Ty {
         match (self, expected) {
             (Ty::Int, Ty::Float) => true,
             (Ty::Markdown, Ty::Text) => true,
+            (Ty::Optional(actual), Ty::Optional(expected)) => actual.is_assignable_to(expected),
+            (actual, Ty::Optional(expected)) => actual.is_assignable_to(expected),
+            (Ty::Optional(_), _) => false,
+            (Ty::Union(actual), expected) => actual
+                .iter()
+                .all(|option| option.is_assignable_to(expected)),
+            (actual, Ty::Union(expected)) => expected
+                .iter()
+                .any(|option| actual.is_assignable_to(option)),
             (Ty::List(actual), Ty::List(expected)) => actual.is_assignable_to(expected),
             _ => false,
         }
@@ -119,7 +158,12 @@ impl Ty {
 
     /// Types that can be substituted into a prompt.
     pub fn is_renderable(&self) -> bool {
-        !matches!(self, Ty::Bytes | Ty::File)
+        match self {
+            Ty::Bytes | Ty::File => false,
+            Ty::List(element) | Ty::Optional(element) => element.is_renderable(),
+            Ty::Union(options) => options.iter().all(Ty::is_renderable),
+            _ => true,
+        }
     }
 }
 
@@ -135,10 +179,34 @@ impl fmt::Display for Ty {
             Ty::Text => f.write_str("text"),
             Ty::Markdown => f.write_str("markdown"),
             Ty::File => f.write_str("file"),
-            Ty::List(element) => write!(f, "{element}[]"),
+            Ty::List(element) => write!(f, "{}[]", display_with_precedence(element, 2)),
+            Ty::Optional(inner) => write!(f, "{}?", display_with_precedence(inner, 2)),
+            Ty::Union(options) => {
+                for (index, option) in options.iter().enumerate() {
+                    if index > 0 {
+                        f.write_str(" | ")?;
+                    }
+                    write!(f, "{}", display_with_precedence(option, 1))?;
+                }
+                Ok(())
+            }
             Ty::Record(name) => f.write_str(name),
             Ty::Unknown => f.write_str("<unknown>"),
         }
+    }
+}
+
+fn display_with_precedence(ty: &Ty, parent: u8) -> String {
+    let precedence = match ty {
+        Ty::Union(_) => 1,
+        Ty::List(_) | Ty::Optional(_) => 2,
+        _ => 3,
+    };
+    let rendered = ty.to_string();
+    if precedence < parent {
+        format!("({rendered})")
+    } else {
+        rendered
     }
 }
 
@@ -221,6 +289,22 @@ mod tests {
     }
 
     #[test]
+    fn concrete_values_assign_to_optional_slots_but_not_back() {
+        let optional_markdown = Ty::optional(Ty::Markdown);
+        assert!(Ty::Markdown.is_assignable_to(&optional_markdown));
+        assert!(Ty::optional(Ty::Markdown).is_assignable_to(&optional_markdown));
+        assert!(!optional_markdown.is_assignable_to(&Ty::Markdown));
+    }
+
+    #[test]
+    fn union_values_assign_only_when_every_alternative_is_safe() {
+        let content = Ty::union(vec![Ty::Markdown, Ty::Text]);
+        assert!(Ty::Markdown.is_assignable_to(&content));
+        assert!(content.is_assignable_to(&Ty::Text));
+        assert!(!Ty::union(vec![Ty::Markdown, Ty::File]).is_assignable_to(&Ty::Text));
+    }
+
+    #[test]
     fn unknown_absorbs_errors_without_cascading() {
         assert!(Ty::Unknown.is_assignable_to(&Ty::Markdown));
         assert!(Ty::Markdown.is_assignable_to(&Ty::Unknown));
@@ -237,6 +321,11 @@ mod tests {
     #[test]
     fn renders_types_the_way_source_spells_them() {
         assert_eq!(Ty::list_of(Ty::String).to_string(), "string[]");
+        assert_eq!(Ty::optional(Ty::String).to_string(), "string?");
+        assert_eq!(
+            Ty::list_of(Ty::union(vec![Ty::String, Ty::Int])).to_string(),
+            "(string | int)[]"
+        );
         assert_eq!(
             Ty::Record("search_result".into()).to_string(),
             "search_result"

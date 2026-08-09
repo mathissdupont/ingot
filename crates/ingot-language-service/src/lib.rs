@@ -894,6 +894,12 @@ fn add_type_reference(map: &SourceMap, ty: &TypeExpr, symbols: &mut Vec<EditorSy
             primitive_type_doc(&ident.text).map(str::to_string),
         )),
         TypeExpr::List { element, .. } => add_type_reference(map, element, symbols),
+        TypeExpr::Optional { inner, .. } => add_type_reference(map, inner, symbols),
+        TypeExpr::Union { options, .. } => {
+            for option in options {
+                add_type_reference(map, option, symbols);
+            }
+        }
     }
 }
 

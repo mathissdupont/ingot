@@ -326,6 +326,19 @@ impl<'a> Parser<'a> {
             }
         }
 
+        if !language_supports_v0_2_types(program.language) {
+            if let Some(span) = first_v0_2_type_span(&program) {
+                self.error(
+                    Diagnostic::error(
+                        codes::UNSUPPORTED_LANGUAGE_VERSION,
+                        "optional and union types require language 0.2 or newer",
+                    )
+                    .with_primary(span, "not available in this language version")
+                    .with_help("change the file header to `language 0.2`"),
+                );
+            }
+        }
+
         program.span = program.span.merge(self.eof_span);
         program
     }
@@ -622,19 +635,56 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_type(&mut self) -> Option<TypeExpr> {
-        let name = self.expect_ident("a type")?;
-        let mut ty = TypeExpr::Named(name);
-        while self.at(&TokenKind::LBracket) {
-            let start = self.span();
+        let first = self.parse_type_postfix()?;
+        let mut span = first.span();
+        let mut options = vec![first];
+        while self.at(&TokenKind::Pipe) {
             self.bump();
-            let end = self.span();
-            self.expect(TokenKind::RBracket);
-            ty = TypeExpr::List {
-                span: ty.span().merge(start).merge(end),
-                element: Box::new(ty),
+            let Some(option) = self.parse_type_postfix() else {
+                break;
             };
+            span = span.merge(option.span());
+            options.push(option);
         }
-        Some(ty)
+        if options.len() == 1 {
+            options.pop()
+        } else {
+            Some(TypeExpr::Union { options, span })
+        }
+    }
+
+    fn parse_type_postfix(&mut self) -> Option<TypeExpr> {
+        let mut ty = self.parse_type_primary()?;
+        loop {
+            if self.at(&TokenKind::LBracket) {
+                let start = self.span();
+                self.bump();
+                let end = self.span();
+                self.expect(TokenKind::RBracket);
+                ty = TypeExpr::List {
+                    span: ty.span().merge(start).merge(end),
+                    element: Box::new(ty),
+                };
+            } else if self.at(&TokenKind::Question) {
+                let question = self.span();
+                self.bump();
+                ty = TypeExpr::Optional {
+                    span: ty.span().merge(question),
+                    inner: Box::new(ty),
+                };
+            } else {
+                return Some(ty);
+            }
+        }
+    }
+
+    fn parse_type_primary(&mut self) -> Option<TypeExpr> {
+        if self.eat(&TokenKind::LParen) {
+            let inner = self.parse_type();
+            self.expect(TokenKind::RParen);
+            return inner;
+        }
+        self.expect_ident("a type").map(TypeExpr::Named)
     }
 
     fn parse_params(&mut self) -> Vec<FieldDecl> {
@@ -1781,6 +1831,109 @@ fn starts_statement(keyword: Keyword) -> bool {
             | Keyword::Parallel
             | Keyword::State
     )
+}
+
+fn language_supports_v0_2_types(version: Option<LanguageVersion>) -> bool {
+    matches!(
+        version,
+        Some(LanguageVersion {
+            major: 0,
+            minor: 2..,
+            ..
+        })
+    )
+}
+
+fn first_v0_2_type_span(program: &Program) -> Option<Span> {
+    fn from_type(ty: &TypeExpr) -> Option<Span> {
+        match ty {
+            TypeExpr::Named(_) => None,
+            TypeExpr::List { element, .. } => from_type(element),
+            TypeExpr::Optional { span, .. } | TypeExpr::Union { span, .. } => Some(*span),
+        }
+    }
+
+    fn from_fields(fields: &[FieldDecl]) -> Option<Span> {
+        fields.iter().find_map(|field| from_type(&field.ty))
+    }
+
+    fn from_expr(expr: &Expr) -> Option<Span> {
+        match expr {
+            Expr::Ask { result, args, .. } => {
+                from_type(result).or_else(|| args.iter().find_map(|arg| from_expr(&arg.value)))
+            }
+            Expr::Call { args, .. } => args.iter().find_map(|arg| from_expr(&arg.value)),
+            Expr::ParallelMap { source, body, .. } => {
+                from_expr(source).or_else(|| from_statements(body))
+            }
+            Expr::List { items, .. } => items.iter().find_map(from_expr),
+            Expr::Builtin { args, .. } => args.iter().find_map(from_expr),
+            Expr::Unary { operand, .. } => from_expr(operand),
+            Expr::Binary { lhs, rhs, .. } => from_expr(lhs).or_else(|| from_expr(rhs)),
+            Expr::Str(_)
+            | Expr::Int { .. }
+            | Expr::Float { .. }
+            | Expr::Bool { .. }
+            | Expr::Path(_)
+            | Expr::Error { .. } => None,
+        }
+    }
+
+    fn from_statements(statements: &[Stmt]) -> Option<Span> {
+        statements.iter().find_map(|statement| match statement {
+            Stmt::Bind { value, .. }
+            | Stmt::StateWrite { value, .. }
+            | Stmt::Expr { value, .. }
+            | Stmt::Emit { value, .. } => from_expr(value),
+            Stmt::Verify { args, .. } => args.iter().find_map(|arg| from_expr(&arg.value)),
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+                ..
+            } => from_expr(condition)
+                .or_else(|| from_statements(then_branch))
+                .or_else(|| else_branch.as_deref().and_then(from_statements)),
+            Stmt::Loop { guard, body, .. } => guard
+                .as_ref()
+                .and_then(from_expr)
+                .or_else(|| from_statements(body)),
+            Stmt::Checkpoint { .. } | Stmt::Error { .. } => None,
+        })
+    }
+
+    program
+        .types
+        .iter()
+        .find_map(|decl| from_fields(&decl.fields))
+        .or_else(|| {
+            program
+                .tools
+                .iter()
+                .find_map(|decl| from_fields(&decl.params).or_else(|| from_type(&decl.ret)))
+        })
+        .or_else(|| {
+            program
+                .verifiers
+                .iter()
+                .find_map(|decl| from_fields(&decl.params))
+        })
+        .or_else(|| {
+            program.agents.iter().find_map(|decl| {
+                from_fields(&decl.params)
+                    .or_else(|| {
+                        decl.memory
+                            .as_ref()
+                            .and_then(|memory| memory.working.as_ref())
+                            .and_then(|working| from_fields(&working.fields))
+                    })
+                    .or_else(|| {
+                        decl.flow
+                            .as_ref()
+                            .and_then(|flow| from_statements(&flow.statements))
+                    })
+            })
+        })
 }
 
 /// Lets `set_section` report duplicates uniformly across section types.

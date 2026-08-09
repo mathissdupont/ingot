@@ -145,6 +145,51 @@ agent ResearchAgent(topic: string) -> report<markdown> {
 }
 
 #[test]
+fn parses_optional_and_union_types_in_language_0_2() {
+    let source = r#"
+language 0.2
+
+type maybe_page {
+  title: string?
+  body: markdown | text
+  attachments: (file | bytes)[]
+}
+
+tool web.fetch(url: string) -> maybe_page?
+
+agent A(topic: string) -> report<markdown> {
+  flow {
+    draft = ask<markdown | text>("write")
+    emit report = ask<markdown>("done", context: draft)
+  }
+}
+"#;
+    let result = parse_text(source);
+    assert!(!result.diagnostics.has_errors(), "{:?}", result.diagnostics);
+    let fields = &result.program.types[0].fields;
+    assert_eq!(fields[0].ty.text(), "string?");
+    assert_eq!(fields[1].ty.text(), "markdown | text");
+    assert_eq!(fields[2].ty.text(), "(file | bytes)[]");
+    assert_eq!(result.program.tools[0].ret.text(), "maybe_page?");
+}
+
+#[test]
+fn optional_and_union_types_require_language_0_2() {
+    let result = parse_text(
+        r#"
+language 0.1
+type page {
+  title: string?
+}
+"#,
+    );
+    assert!(result
+        .diagnostics
+        .iter()
+        .any(|d| d.code == codes::UNSUPPORTED_LANGUAGE_VERSION));
+}
+
+#[test]
 fn import_requires_language_0_2() {
     let result = parse_text(
         r#"

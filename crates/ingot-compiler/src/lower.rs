@@ -368,7 +368,7 @@ impl<'a> Lowerer<'a> {
             Expr::Ask { result, args, .. } => {
                 let mut node = Node::new(String::new(), NodeKind::LlmCall);
                 node.binding = binding;
-                node.response_type = Some(self.type_text(result));
+                node.response_type = Some(result.text());
                 node.effects = vec!["model_access".to_string()];
 
                 let mut named: Vec<Argument> = Vec::new();
@@ -624,13 +624,6 @@ impl<'a> Lowerer<'a> {
         self.push(level, node);
         self.state_reads.insert(field.to_string(), binding.clone());
         binding
-    }
-
-    fn type_text(&self, ty: &TypeExpr) -> String {
-        match ty {
-            TypeExpr::Named(ident) => ident.text.clone(),
-            TypeExpr::List { element, .. } => format!("{}[]", self.type_text(element)),
-        }
     }
 }
 

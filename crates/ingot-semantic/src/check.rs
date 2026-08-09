@@ -2199,6 +2199,13 @@ impl<'a> Checker<'a> {
         match ty {
             TypeExpr::Named(ident) => self.resolve_named_type(ident),
             TypeExpr::List { element, .. } => Ty::list_of(self.resolve_type(element)),
+            TypeExpr::Optional { inner, .. } => Ty::optional(self.resolve_type(inner)),
+            TypeExpr::Union { options, .. } => Ty::union(
+                options
+                    .iter()
+                    .map(|option| self.resolve_type(option))
+                    .collect(),
+            ),
         }
     }
 

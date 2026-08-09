@@ -103,26 +103,58 @@ pub struct ImportItem {
 
 // --- type expressions -----------------------------------------------------
 
-/// A syntactic type: either a name or a list of a type.
+/// A syntactic type: name, list, optional or union.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypeExpr {
     Named(Ident),
     List { element: Box<TypeExpr>, span: Span },
+    Optional { inner: Box<TypeExpr>, span: Span },
+    Union { options: Vec<TypeExpr>, span: Span },
 }
 
 impl TypeExpr {
     pub fn span(&self) -> Span {
         match self {
             TypeExpr::Named(ident) => ident.span,
-            TypeExpr::List { span, .. } => *span,
+            TypeExpr::List { span, .. }
+            | TypeExpr::Optional { span, .. }
+            | TypeExpr::Union { span, .. } => *span,
         }
     }
 
     /// Source-like rendering, used in diagnostics and by the formatter.
     pub fn text(&self) -> String {
-        match self {
+        self.text_with_precedence(0)
+    }
+
+    fn text_with_precedence(&self, parent: u8) -> String {
+        let precedence = self.precedence();
+        let rendered = match self {
             TypeExpr::Named(ident) => ident.text.clone(),
-            TypeExpr::List { element, .. } => format!("{}[]", element.text()),
+            TypeExpr::List { element, .. } => {
+                format!("{}[]", element.text_with_precedence(precedence))
+            }
+            TypeExpr::Optional { inner, .. } => {
+                format!("{}?", inner.text_with_precedence(precedence))
+            }
+            TypeExpr::Union { options, .. } => options
+                .iter()
+                .map(|option| option.text_with_precedence(precedence))
+                .collect::<Vec<_>>()
+                .join(" | "),
+        };
+        if precedence < parent {
+            format!("({rendered})")
+        } else {
+            rendered
+        }
+    }
+
+    fn precedence(&self) -> u8 {
+        match self {
+            TypeExpr::Union { .. } => 1,
+            TypeExpr::List { .. } | TypeExpr::Optional { .. } => 2,
+            TypeExpr::Named(_) => 3,
         }
     }
 }

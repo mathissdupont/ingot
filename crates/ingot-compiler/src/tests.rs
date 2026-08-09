@@ -507,6 +507,72 @@ agent A(topic: string) -> report<markdown> {
 }
 
 #[test]
+fn optional_and_union_types_lower_as_canonical_type_text() {
+    let compilation = compile_source(
+        "optional.ing",
+        r#"
+language 0.2
+package heptapus.test
+
+type page {
+  title: string?
+  body: markdown | text
+}
+
+tool web.fetch(url: string) -> page? !network
+
+agent A(url: string) -> report<markdown> {
+  tools { mcp web.fetch }
+  policy { network allow ["example.com"] }
+  flow {
+    page = call web.fetch(url)
+    emit report = ask<markdown>("summarise", context: page)
+  }
+}
+"#,
+    );
+    assert!(
+        !compilation.has_errors(),
+        "expected optional/union signatures to compile:\n{}",
+        compilation.render_diagnostics(ingot_diagnostics::ColorChoice::Never)
+    );
+    let ir = compilation.primary_agent().expect("expected an agent");
+    assert_eq!(ir.language, "0.2");
+    let page = ir.types.get("page").expect("record should lower");
+    let fields: Vec<(&str, &str)> = page
+        .fields
+        .iter()
+        .map(|field| (field.name.as_str(), field.ty.as_str()))
+        .collect();
+    assert_eq!(
+        fields,
+        vec![("title", "string?"), ("body", "markdown | text")]
+    );
+    assert_eq!(ir.tools[0].signature.result, "page?");
+}
+
+#[test]
+fn optional_values_do_not_assign_to_required_slots_without_narrowing() {
+    let compilation = compile_source(
+        "optional-error.ing",
+        r#"
+language 0.2
+agent A() -> report<markdown> {
+  flow {
+    draft = ask<markdown?>("maybe")
+    emit report = draft
+  }
+}
+"#,
+    );
+    assert!(compilation.has_errors());
+    assert!(compilation
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == ingot_diagnostics::codes::EMIT_TYPE_MISMATCH));
+}
+
+#[test]
 fn parent_traversal_import_paths_are_rejected() {
     let dir = temp_project("imports-parent-traversal");
     let entry = dir.join("main.ing");
