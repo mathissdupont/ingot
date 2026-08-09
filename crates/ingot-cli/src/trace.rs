@@ -2,14 +2,15 @@
 //!
 //! The renderer consumes events in order and never rewrites them. It enriches
 //! them from Agent IR where that is safe: agent/node provenance, budget ceilings,
-//! static prompt text, and context names. Runtime-derived values are redacted
-//! because IR 0.1 carries no secret classification that could make selective
-//! disclosure honest.
+//! static prompt text, source ranges, and context names. Runtime-derived values
+//! are redacted because Agent IR carries no secret classification that could
+//! make selective disclosure honest.
 
 use std::collections::BTreeMap;
 
-use ingot_ir::{AgentIr, Node, RefScope, TemplatePart, Value};
+use ingot_ir::{AgentIr, Node, RefScope, SourceSpan, TemplatePart, Value};
 use ingot_runtime::RunEvent;
+use ingot_source::{FileId, SourceMap};
 
 const MAX_PROMPT_CHARS: usize = 240;
 
@@ -25,8 +26,20 @@ struct Frame {
 /// events. It writes plain text only: no cursor control, colour or TTY state.
 pub struct HumanTrace {
     agents: BTreeMap<String, AgentIr>,
+    sources: Option<SourceContext>,
     frames: Vec<Frame>,
     sequence: u64,
+}
+
+#[derive(Debug)]
+struct SourceContext {
+    files: BTreeMap<String, SourceSnapshot>,
+}
+
+#[derive(Debug)]
+struct SourceSnapshot {
+    text: String,
+    line_starts: Vec<u32>,
 }
 
 impl HumanTrace {
@@ -36,9 +49,16 @@ impl HumanTrace {
                 .iter()
                 .map(|agent| (agent.agent.clone(), agent.clone()))
                 .collect(),
+            sources: None,
             frames: Vec::new(),
             sequence: 0,
         }
+    }
+
+    pub fn with_sources(agents: &[AgentIr], sources: &SourceMap, root: FileId) -> Self {
+        let mut trace = Self::new(agents);
+        trace.sources = Some(SourceContext::new(sources, root));
+        trace
     }
 
     /// Render exactly one block for exactly one event.
@@ -67,6 +87,7 @@ impl HumanTrace {
                     if let Some(prompt) = ir_node.prompt.as_ref() {
                         detail.push(format!("prompt {}", safe_prompt(prompt)));
                     }
+                    detail.push(self.source_detail(ir_node));
                     let context: Vec<&str> = ir_node
                         .args
                         .iter()
@@ -83,8 +104,10 @@ impl HumanTrace {
                                 .join(", ")
                         ));
                     }
+                } else {
+                    detail
+                        .push("source span unavailable: node not present in Agent IR".to_string());
                 }
-                detail.push("source span unavailable in Agent IR 0.1 (GAP-027)".to_string());
                 format!("node.started {agent}:{node}  {kind}")
             }
             RunEvent::ModelCall {
@@ -219,6 +242,23 @@ impl HumanTrace {
             .and_then(|agent| agent.node(node))
     }
 
+    fn source_detail(&self, node: &Node) -> String {
+        let Some(span) = node.source_span.as_ref() else {
+            return "source span unavailable in Agent IR".to_string();
+        };
+        match self
+            .sources
+            .as_ref()
+            .and_then(|sources| sources.render(span))
+        {
+            Some(rendered) => format!("source {rendered}"),
+            None => format!(
+                "source {} bytes {}..{} (source unavailable locally)",
+                span.source, span.start, span.end
+            ),
+        }
+    }
+
     fn charge(&mut self, steps: u32, tokens: u64) {
         // A nested agent's work counts toward its caller's total too. Frames are
         // the live call stack, so charging each one mirrors the runtime report.
@@ -245,6 +285,57 @@ impl HumanTrace {
             frame.observed_tokens,
             limit(agent.budget.tokens)
         )
+    }
+}
+
+impl SourceContext {
+    fn new(sources: &SourceMap, root: FileId) -> Self {
+        let files = sources
+            .files()
+            .map(|file| {
+                (
+                    sources.portable_name(file.id(), root),
+                    SourceSnapshot::new(file.text()),
+                )
+            })
+            .collect();
+        Self { files }
+    }
+
+    fn render(&self, span: &SourceSpan) -> Option<String> {
+        let source = self.files.get(&span.source)?;
+        Some(format!(
+            "{}:{}..{}",
+            span.source,
+            source.line_col(span.start),
+            source.line_col(span.end)
+        ))
+    }
+}
+
+impl SourceSnapshot {
+    fn new(text: &str) -> Self {
+        let mut line_starts = vec![0u32];
+        for (index, byte) in text.bytes().enumerate() {
+            if byte == b'\n' {
+                line_starts.push(index as u32 + 1);
+            }
+        }
+        Self {
+            text: text.to_string(),
+            line_starts,
+        }
+    }
+
+    fn line_col(&self, offset: u32) -> String {
+        let offset = offset.min(self.text.len() as u32);
+        let line_index = match self.line_starts.binary_search(&offset) {
+            Ok(exact) => exact,
+            Err(next) => next.saturating_sub(1),
+        };
+        let line_start = self.line_starts[line_index] as usize;
+        let column = self.text[line_start..offset as usize].chars().count() as u32 + 1;
+        format!("{}:{}", line_index as u32 + 1, column)
     }
 }
 
@@ -423,5 +514,67 @@ mod tests {
                 "event moved or disappeared: {rendered:#?}"
             );
         }
+    }
+
+    #[test]
+    fn node_started_resolves_local_source_spans() {
+        let compilation = ingot_compiler::compile_source(
+            "main.ing",
+            r#"
+language 0.1
+package demo
+
+agent Trace(topic: string) -> report<markdown> {
+  flow {
+    emit report = ask<markdown>("hello ${topic}")
+  }
+}
+"#,
+        );
+        assert!(
+            !compilation.has_errors(),
+            "expected clean compile:\n{}",
+            compilation.render_diagnostics(ingot_diagnostics::ColorChoice::Never)
+        );
+        let agent = compilation.primary_agent().unwrap();
+        let mut trace =
+            HumanTrace::with_sources(&compilation.agents, &compilation.sources, compilation.file);
+        trace.render(&RunEvent::RunStarted {
+            agent: agent.agent.clone(),
+            provider: "replay".to_string(),
+        });
+        let rendered = trace.render(&RunEvent::NodeStarted {
+            node: agent.entry.clone().unwrap(),
+            kind: "llm.call".to_string(),
+        });
+        assert!(
+            rendered.contains("source main.ing:"),
+            "trace should resolve source span, got:\n{rendered}"
+        );
+        assert!(!rendered.contains("unavailable"));
+    }
+
+    #[test]
+    fn node_started_keeps_byte_span_when_source_is_missing() {
+        let mut agent = agent();
+        let mut node = Node::new("n0", ingot_ir::NodeKind::Checkpoint);
+        node.source_span = Some(SourceSpan {
+            source: "main.ing".to_string(),
+            start: 1,
+            end: 4,
+        });
+        agent.entry = Some("n0".to_string());
+        agent.nodes.push(node);
+        let mut trace = HumanTrace::new(&[agent]);
+        trace.render(&RunEvent::RunStarted {
+            agent: "demo.Trace".to_string(),
+            provider: "replay".to_string(),
+        });
+        let rendered = trace.render(&RunEvent::NodeStarted {
+            node: "n0".to_string(),
+            kind: "checkpoint".to_string(),
+        });
+        assert!(rendered.contains("source main.ing bytes 1..4"));
+        assert!(rendered.contains("source unavailable locally"));
     }
 }

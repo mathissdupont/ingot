@@ -1,5 +1,5 @@
 {
-  "irVersion": "0.1",
+  "irVersion": "0.2",
   "language": "0.1",
   "agent": "heptapus.examples.research.ResearchAgent",
   "doc": "A realistic research workflow.\n\nExercises: MCP tools, a network allowlist, working memory, `parallel map`\nfan-out, record field access, verification and budgets.",
@@ -97,6 +97,11 @@
     {
       "id": "n0",
       "kind": "llm.call",
+      "sourceSpan": {
+        "source": "main.ing",
+        "start": 1056,
+        "end": 1135
+      },
       "binding": "queries",
       "prompt": {
         "kind": "template",
@@ -127,6 +132,11 @@
     {
       "id": "n1",
       "kind": "state.write",
+      "sourceSpan": {
+        "source": "main.ing",
+        "start": 1140,
+        "end": 1163
+      },
       "field": "queries",
       "value": {
         "kind": "ref",
@@ -140,6 +150,11 @@
     {
       "id": "n2",
       "kind": "tool.call",
+      "sourceSpan": {
+        "source": "main.ing",
+        "start": 1216,
+        "end": 1238
+      },
       "tool": "mcp:web.search",
       "args": [
         {
@@ -161,6 +176,11 @@
     {
       "id": "n3",
       "kind": "parallel",
+      "sourceSpan": {
+        "source": "main.ing",
+        "start": 1178,
+        "end": 1244
+      },
       "binding": "sources",
       "body": "n2",
       "binder": "query",
@@ -177,12 +197,22 @@
     {
       "id": "n4",
       "kind": "checkpoint",
+      "sourceSpan": {
+        "source": "main.ing",
+        "start": 1249,
+        "end": 1279
+      },
       "label": "sources-collected",
       "next": "n5"
     },
     {
       "id": "n5",
       "kind": "llm.call",
+      "sourceSpan": {
+        "source": "main.ing",
+        "start": 1292,
+        "end": 1420
+      },
       "binding": "draft",
       "prompt": {
         "kind": "literal",
@@ -218,6 +248,11 @@
     {
       "id": "n6",
       "kind": "verify",
+      "sourceSpan": {
+        "source": "main.ing",
+        "start": 1425,
+        "end": 1468
+      },
       "verifier": "CitationCheck",
       "args": [
         {
@@ -244,6 +279,11 @@
     {
       "id": "n7",
       "kind": "artifact.emit",
+      "sourceSpan": {
+        "source": "main.ing",
+        "start": 1473,
+        "end": 1492
+      },
       "value": {
         "kind": "ref",
         "scope": "binding",

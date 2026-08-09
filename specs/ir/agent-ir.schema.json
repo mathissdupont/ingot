@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/mathissdupont/ingot/specs/ir/agent-ir.schema.json",
   "title": "Ingot Agent IR",
-  "description": "Canonical, target-neutral representation of a compiled Ingot agent. See specs/ir/v0.1.md for the normative prose.",
+  "description": "Canonical, target-neutral representation of a compiled Ingot agent. See specs/ir/v0.2.md for the normative prose.",
   "type": "object",
   "required": [
     "irVersion",
@@ -236,6 +236,7 @@
             "checkpoint"
           ]
         },
+        "sourceSpan": { "$ref": "#/$defs/sourceSpan" },
         "binding": { "type": "string" },
         "tool": { "type": "string" },
         "agent": { "type": "string" },
@@ -258,6 +259,28 @@
         "label": { "type": "string" },
         "effects": { "type": "array", "items": { "$ref": "#/$defs/effect" } },
         "next": { "type": ["string", "null"] }
+      }
+    },
+    "sourceSpan": {
+      "type": "object",
+      "required": ["source", "start", "end"],
+      "additionalProperties": false,
+      "properties": {
+        "source": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "anyOf": [
+              { "pattern": "^/" },
+              { "pattern": "^[A-Za-z]:" },
+              { "pattern": "(^|/)\\.\\.(/|$)" },
+              { "pattern": "\\\\" }
+            ]
+          },
+          "description": "Project-relative, slash-normalized source identifier."
+        },
+        "start": { "type": "integer", "minimum": 0 },
+        "end": { "type": "integer", "minimum": 0 }
       }
     },
     "argument": {

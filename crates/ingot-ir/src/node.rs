@@ -75,11 +75,28 @@ impl NodeKind {
     }
 }
 
+/// Portable source provenance for a node.
+///
+/// The offsets are UTF-8 byte offsets into `source`. The source identifier is
+/// project-relative and slash-normalized; it must never be an absolute host
+/// path.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceSpan {
+    pub source: String,
+    pub start: u32,
+    pub end: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Node {
     pub id: String,
     pub kind: NodeKind,
+
+    /// Optional source provenance. Non-Ingot producers may omit it.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub source_span: Option<SourceSpan>,
 
     /// Name this node's result is bound to, when it produces one.
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -156,6 +173,7 @@ impl Node {
         Node {
             id: id.into(),
             kind,
+            source_span: None,
             binding: None,
             tool: None,
             agent: None,
@@ -309,6 +327,20 @@ mod tests {
         let node = Node::new("n0", NodeKind::Checkpoint);
         let json = serde_json::to_string(&node).unwrap();
         assert_eq!(json, r#"{"id":"n0","kind":"checkpoint","next":null}"#);
+    }
+
+    #[test]
+    fn source_span_is_optional_but_round_trips_when_present() {
+        let mut node = Node::new("n0", NodeKind::Checkpoint);
+        node.source_span = Some(SourceSpan {
+            source: "main.ing".to_string(),
+            start: 4,
+            end: 12,
+        });
+        let json = serde_json::to_string(&node).unwrap();
+        assert!(json.contains(r#""sourceSpan":{"source":"main.ing","start":4,"end":12}"#));
+        let parsed: Node = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, node);
     }
 
     #[test]

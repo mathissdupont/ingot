@@ -23,10 +23,10 @@ use serde::{Deserialize, Serialize};
 
 pub mod node;
 
-pub use node::{Node, NodeKind, RefScope, TemplatePart, Value};
+pub use node::{Node, NodeKind, RefScope, SourceSpan, TemplatePart, Value};
 
 /// Version of the IR schema this crate emits and understands.
-pub const IR_VERSION: &str = "0.1";
+pub const IR_VERSION: &str = "0.2";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

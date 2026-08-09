@@ -339,15 +339,15 @@ them safely. Use `--events json` for the original unchanged JSON Lines stream or
 ```text
 trace[0002] node.started demo.Brief:n0  llm.call
              prompt "Write about <redacted input.topic:string>."
-             source span unavailable in Agent IR 0.1 (GAP-027)
+             source main.ing:7:19..7:60
 trace[0003] model.call   demo.Brief:n0  cassette/model -> markdown  (120 in, 60 out)
              observed steps 1/4; tokens 180/20000
 ```
 
-Portable source spans require the minimal IR addition tracked in
-[GAP-027](docs/gaps.md#gap-027) and
-[issue #11](https://github.com/mathissdupont/ingot/issues/11); absolute build
-machine paths will not be embedded as a shortcut.
+Agent IR 0.2 carries optional portable source spans, so a trace renderer with
+the local source can map `agent:node` back to the originating `.ing` byte range.
+Those spans use project-relative slash-normalized source ids; absolute build
+machine paths are not embedded as a shortcut.
 
 ### Tools
 
@@ -597,7 +597,8 @@ With `--sandbox` the MCP servers move inside a policy-derived boundary
 ## Specifications
 
 * [Language 0.1](specs/language/v0.1.md) — syntax and static semantics
-* [Agent IR 0.1](specs/ir/v0.1.md) — the backend contract
+* [Agent IR 0.2](specs/ir/v0.2.md) — the backend contract with portable node source spans
+* [Agent IR 0.1](specs/ir/v0.1.md) — the original backend contract
 * [Runtime 0.1](specs/runtime/v0.1.md) — what executing an artifact means
 * [MCP binding 0.1](specs/tools/mcp-v0.1.md) — how a declared tool is served
 * [`agent-ir.schema.json`](specs/ir/agent-ir.schema.json) — machine-readable schema
@@ -625,8 +626,8 @@ With `--sandbox` the MCP servers move inside a policy-derived boundary
 | M11 | integrated `.ing` product loop: templates, `dev`, trace, readiness and safe-run UX | done |
 
 A number is an identity, not a position in a queue; things get referenced by it,
-so they keep it. The remaining proposed order is **IR 0.2 source spans → M10 →
-M6 → M8**. [RFC-0007](rfcs/0007-the-ingot-product-loop.md) explains why the
+so they keep it. The remaining proposed order is **M10 → M6 → M8**.
+[RFC-0007](rfcs/0007-the-ingot-product-loop.md) explains why the
 usable language loop comes before generation and packaging.
 
 M3 and M4 landed together: the interpreter needed cassettes to be testable, and
@@ -639,8 +640,9 @@ unsupported construct is named in a portability report before deployment.
 M11 and the Language 0.2 reuse slice are complete: first-use templates,
 `doctor`, `dev`, human traces, contained-run readiness, editor/LSP support,
 typed tool onboarding, imports, optional/union types and pure helpers all now
-exist. [Issue #11](https://github.com/mathissdupont/ingot/issues/11) is the next
-trace-quality follow-up: carrying portable source spans in Agent IR.
+exist. [Issue #11](https://github.com/mathissdupont/ingot/issues/11) is now
+implemented by Agent IR 0.2: human traces can resolve runtime nodes to portable
+`.ing` source ranges when local source is available.
 
 ## What is missing
 

@@ -89,7 +89,7 @@ fn lowers_the_reference_agent() {
         .primary_agent()
         .expect("expected one lowered agent");
 
-    assert_eq!(ir.ir_version, "0.1");
+    assert_eq!(ir.ir_version, "0.2");
     assert_eq!(ir.language, "0.1");
     assert_eq!(ir.agent, "heptapus.test.ResearchAgent");
     assert_eq!(ir.inputs.get("topic").map(String::as_str), Some("string"));
@@ -106,6 +106,25 @@ fn lowers_the_reference_agent() {
     );
     assert_eq!(ir.tools.len(), 1);
     assert_eq!(ir.tools[0].reference, "mcp:web.search");
+}
+
+#[test]
+fn every_lowered_node_carries_a_portable_source_span() {
+    let compilation = compile(RESEARCH);
+    let ir = compilation.primary_agent().unwrap();
+    for node in &ir.nodes {
+        let span = node
+            .source_span
+            .as_ref()
+            .unwrap_or_else(|| panic!("{} lacks source provenance", node.id));
+        assert_eq!(span.source, "test.ing");
+        assert!(span.start <= span.end);
+        assert!(
+            !span.source.contains('\\') && !span.source.contains(':'),
+            "source id must be portable, got {}",
+            span.source
+        );
+    }
 }
 
 #[test]
@@ -301,6 +320,7 @@ agent A(topic: string) -> report<markdown> {
     assert_eq!(path[0].effects, vec!["external_write".to_string()]);
     assert!(path[0].label.as_deref().unwrap().contains("mailer.send"));
     assert_eq!(path[1].kind, NodeKind::ToolCall);
+    assert_eq!(path[0].source_span, path[1].source_span);
 }
 
 #[test]
@@ -714,4 +734,102 @@ type B {
         .diagnostics
         .iter()
         .any(|d| d.message.contains("import cycle")));
+}
+
+#[test]
+fn file_source_spans_are_project_relative_for_imported_projects() {
+    let dir = temp_project("source-spans-relative");
+    let shared_dir = dir.join("shared");
+    fs::create_dir_all(&shared_dir).expect("creating shared directory");
+    fs::write(
+        shared_dir.join("web.ing"),
+        r#"
+language 0.2
+
+tool web.search(query: string) -> string[] !network
+"#,
+    )
+    .expect("writing imported file");
+    let entry = dir.join("main.ing");
+    fs::write(
+        &entry,
+        r##"
+language 0.2
+package heptapus.test
+
+import "./shared/web.ing" {
+  tool web.search
+}
+
+agent A(topic: string) -> report<markdown> {
+  tools { mcp web.search }
+  policy { network allow ["example.com"] }
+  flow {
+    hits = call web.search(topic)
+    emit report = ask<markdown>("done", context: hits)
+  }
+}
+"##,
+    )
+    .expect("writing entry file");
+
+    let compilation = compile_path(&entry).expect("entry must be readable");
+    assert!(
+        !compilation.has_errors(),
+        "expected clean compile:\n{}",
+        compilation.render_diagnostics(ingot_diagnostics::ColorChoice::Never)
+    );
+    let ir = compilation.primary_agent().unwrap();
+    let sources: Vec<&str> = ir
+        .nodes
+        .iter()
+        .filter_map(|node| node.source_span.as_ref().map(|span| span.source.as_str()))
+        .collect();
+    assert_eq!(sources, vec!["main.ing", "main.ing", "main.ing"]);
+    assert!(
+        sources
+            .iter()
+            .all(|source| !source.contains(&dir.to_string_lossy().to_string())),
+        "absolute temp directory leaked into source spans: {sources:?}"
+    );
+}
+
+#[test]
+fn nested_agent_irs_keep_their_own_source_spans() {
+    let compilation = compile_source(
+        "nested.ing",
+        r#"
+language 0.1
+package heptapus.test
+
+agent Child(topic: string) -> report<markdown> {
+  flow {
+    emit report = ask<markdown>("child ${topic}")
+  }
+}
+
+agent Parent(topic: string) -> report<markdown> {
+  flow {
+    child = call Child(topic)
+    emit report = ask<markdown>("parent", context: child)
+  }
+}
+"#,
+    );
+    assert!(
+        !compilation.has_errors(),
+        "expected clean compile:\n{}",
+        compilation.render_diagnostics(ingot_diagnostics::ColorChoice::Never)
+    );
+
+    let child = compilation.agent("Child").unwrap();
+    let parent = compilation.agent("Parent").unwrap();
+    assert!(child.nodes.iter().all(|node| node.source_span.is_some()));
+    assert!(parent.nodes.iter().all(|node| node.source_span.is_some()));
+    let call = parent
+        .nodes
+        .iter()
+        .find(|node| node.kind == NodeKind::AgentCall)
+        .expect("parent should call child");
+    assert_eq!(call.source_span.as_ref().unwrap().source, "nested.ing");
 }

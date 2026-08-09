@@ -5,7 +5,7 @@
 //! readable line/column pairs only when a diagnostic is rendered.
 
 use std::fmt;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 /// Handle to a file registered in a [`SourceMap`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -235,6 +235,89 @@ impl SourceMap {
         let file = self.file(span.file);
         format!("{}:{}", file.name(), file.line_col(span.start))
     }
+
+    /// A stable source identifier safe to serialize into portable artifacts.
+    ///
+    /// The result is relative to the entry file's directory when both files are
+    /// on disk, slash-normalized, and never an absolute host path. Virtual
+    /// sources keep their display name when it is already portable.
+    pub fn portable_name(&self, file: FileId, root: FileId) -> String {
+        let source = self.file(file);
+        if let Some(path) = source.path() {
+            if let Some(root_dir) = self.file(root).path().and_then(Path::parent) {
+                let canonical_root = root_dir
+                    .canonicalize()
+                    .unwrap_or_else(|_| root_dir.to_path_buf());
+                let canonical_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+                if let Ok(relative) = canonical_path.strip_prefix(&canonical_root) {
+                    return normalize_path(relative).unwrap_or_else(|| fallback_file_name(path));
+                }
+            }
+            return fallback_file_name(path);
+        }
+        sanitize_source_name(source.name())
+    }
+
+    /// Resolve a portable source identifier back to a local source file.
+    pub fn file_by_portable_name(&self, source: &str, root: FileId) -> Option<&SourceFile> {
+        self.files()
+            .find(|file| self.portable_name(file.id(), root) == source)
+    }
+}
+
+fn normalize_path(path: &Path) -> Option<String> {
+    let mut parts = Vec::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::Normal(part) => parts.push(part.to_string_lossy().into_owned()),
+            Component::ParentDir | Component::Prefix(_) | Component::RootDir => return None,
+        }
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("/"))
+    }
+}
+
+fn fallback_file_name(path: &Path) -> String {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| name.replace('\\', "/"))
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| "source.ing".to_string())
+}
+
+fn sanitize_source_name(name: &str) -> String {
+    let normalized = name.replace('\\', "/");
+    if normalized.starts_with('/') || normalized.contains(':') {
+        return normalized
+            .rsplit('/')
+            .find(|part| !part.is_empty())
+            .unwrap_or("source.ing")
+            .to_string();
+    }
+
+    let mut parts = Vec::new();
+    for part in normalized.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                return normalized
+                    .rsplit('/')
+                    .find(|part| !part.is_empty() && *part != "." && *part != "..")
+                    .unwrap_or("source.ing")
+                    .to_string();
+            }
+            other => parts.push(other),
+        }
+    }
+    if parts.is_empty() {
+        "source.ing".to_string()
+    } else {
+        parts.join("/")
+    }
 }
 
 #[cfg(test)]
@@ -278,5 +361,20 @@ mod tests {
         let source = map.file(file);
         assert_eq!(source.line_col(3), LineCol { line: 1, column: 4 });
         assert_eq!(source.line_col(99), LineCol { line: 1, column: 4 });
+    }
+
+    #[test]
+    fn virtual_portable_names_do_not_leak_absolute_paths() {
+        let mut map = SourceMap::new();
+        let root = map.add_virtual("C:\\Users\\samet\\secret\\main.ing", "");
+        assert_eq!(map.portable_name(root, root), "main.ing");
+    }
+
+    #[test]
+    fn relative_virtual_names_are_slash_normalized() {
+        let mut map = SourceMap::new();
+        let root = map.add_virtual("main.ing", "");
+        let file = map.add_virtual("shared\\web.ing", "");
+        assert_eq!(map.portable_name(file, root), "shared/web.ing");
     }
 }

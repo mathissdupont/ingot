@@ -100,7 +100,7 @@ fn compile_registered(mut sources: SourceMap, file: FileId) -> Compilation {
         analysis
             .agents
             .iter()
-            .map(|agent| lower_agent(&program, &analysis, agent))
+            .map(|agent| lower_agent(&program, &analysis, agent, &sources, file))
             .collect()
     };
 

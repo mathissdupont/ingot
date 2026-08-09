@@ -85,8 +85,8 @@ Helper functions do not appear in Agent IR. A helper call is lowered by
 substituting the lowered argument values into the helper body and lowering the
 body as a pure `Value`.
 
-This preserves Agent IR schema version `0.1`. No new node kind is introduced,
-and helper calls consume no step budget.
+This requires no helper-specific Agent IR schema change. No new node kind is
+introduced, and helper calls consume no step budget.
 
 ## Target lowering
 

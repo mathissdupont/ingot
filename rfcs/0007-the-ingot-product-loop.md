@@ -361,22 +361,22 @@ through the Language 0.2 reuse slice was:
 M11 product loop foundation
   → M7 editor foundation
   → Language 0.2 reuse RFCs
+  → IR 0.2 source spans
 ```
 
 The remaining proposed order is:
 
 ```text
-IR 0.2 source spans
-  → M10 optional model assistance
+M10 optional model assistance
   → M6 packaging and distribution
   → M8 third-party backend conformance
 ```
 
 P1–P5 established the path before broadening the language or adding a generator.
 P6 and P7 made direct `.ing` authoring pleasant and reusable. The source-span
-follow-up gives traces and future authoring repairs portable provenance before
-P9 accelerates the workflow with a model. P10 packages something people have
-already created, tested and run.
+follow-up now gives traces and future authoring repairs portable provenance
+before P9 accelerates the workflow with a model. P10 packages something people
+have already created, tested and run.
 
 ## Security and policy impact
 

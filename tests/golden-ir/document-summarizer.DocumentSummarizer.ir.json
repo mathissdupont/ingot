@@ -1,5 +1,5 @@
 {
-  "irVersion": "0.1",
+  "irVersion": "0.2",
   "language": "0.1",
   "agent": "heptapus.examples.summarizer.DocumentSummarizer",
   "doc": "The smallest end-to-end agent: typed input, one model call, one artifact.\n\nExercises: inputs, prompt interpolation, budgets, a default-deny policy and\nartifact emission. No tools, so it needs no capability grants at all.",
@@ -52,6 +52,11 @@
     {
       "id": "n0",
       "kind": "llm.call",
+      "sourceSpan": {
+        "source": "main.ing",
+        "start": 647,
+        "end": 782
+      },
       "binding": "$tmp0",
       "prompt": {
         "kind": "template",
@@ -97,6 +102,11 @@
     {
       "id": "n1",
       "kind": "artifact.emit",
+      "sourceSpan": {
+        "source": "main.ing",
+        "start": 632,
+        "end": 782
+      },
       "value": {
         "kind": "ref",
         "scope": "binding",

@@ -19,21 +19,29 @@ use std::collections::{BTreeMap, HashMap};
 
 use ingot_ir::{
     node::Argument, AgentIr, Budget, ContextTokens, Cost, Decision, FieldType, ModelRequirement,
-    Node, NodeKind, PolicyRule, RecordType, RefScope, Requirements, TemplatePart, ToolBinding,
-    ToolSignature, Value, IR_VERSION,
+    Node, NodeKind, PolicyRule, RecordType, RefScope, Requirements, SourceSpan, TemplatePart,
+    ToolBinding, ToolSignature, Value, IR_VERSION,
 };
 use ingot_semantic::{AgentInfo, Analysis, CallTarget, ModelInfo};
-use ingot_source::Span;
+use ingot_source::{FileId, SourceMap, Span};
 use ingot_syntax::*;
 use ingot_types::{PolicyDecision, Ty};
 
 /// Lower one checked agent to IR.
-pub fn lower_agent(program: &Program, analysis: &Analysis, agent: &AgentInfo) -> AgentIr {
+pub fn lower_agent(
+    program: &Program,
+    analysis: &Analysis,
+    agent: &AgentInfo,
+    sources: &SourceMap,
+    root_file: FileId,
+) -> AgentIr {
     let decl = &program.agents[agent.decl_index];
     let mut lowerer = Lowerer {
         program,
         analysis,
         agent,
+        sources,
+        root_file,
         nodes: Vec::new(),
         counter: 0,
         temp_counter: 0,
@@ -182,6 +190,8 @@ struct Lowerer<'a> {
     program: &'a Program,
     analysis: &'a Analysis,
     agent: &'a AgentInfo,
+    sources: &'a SourceMap,
+    root_file: FileId,
     nodes: Vec<Node>,
     counter: usize,
     temp_counter: usize,
@@ -204,6 +214,14 @@ impl<'a> Lowerer<'a> {
         name
     }
 
+    fn source_span(&self, span: Span) -> SourceSpan {
+        SourceSpan {
+            source: self.sources.portable_name(span.file, self.root_file),
+            start: span.start,
+            end: span.end,
+        }
+    }
+
     /// Append a node to the current region, inserting an approval gate first if
     /// the policy requires one for the node's effects.
     fn push(&mut self, level: &mut Vec<usize>, mut node: Node) -> usize {
@@ -222,6 +240,7 @@ impl<'a> Lowerer<'a> {
 
         if !gated.is_empty() {
             let mut approval = Node::new(self.next_id(), NodeKind::Approval);
+            approval.source_span = node.source_span.clone();
             approval.label = Some(match (&node.tool, &node.agent) {
                 (Some(tool), _) => format!("approval required before calling {tool}"),
                 (_, Some(agent)) => format!("approval required before calling {agent}"),
@@ -274,9 +293,10 @@ impl<'a> Lowerer<'a> {
                     self.aliases.insert(name.text.clone(), lowered);
                 }
             }
-            Stmt::StateWrite { field, value, .. } => {
+            Stmt::StateWrite { field, value, span } => {
                 let lowered = self.lower_value(level, value);
                 let mut node = Node::new(String::new(), NodeKind::StateWrite);
+                node.source_span = Some(self.source_span(*span));
                 node.field = Some(field.text.clone());
                 node.value = Some(lowered);
                 self.push(level, node);
@@ -300,13 +320,19 @@ impl<'a> Lowerer<'a> {
                 let arguments =
                     self.lower_arguments(level, args, &info.arg_order, &verifier.params);
                 let mut node = Node::new(String::new(), NodeKind::Verify);
+                node.source_span = Some(self.source_span(*span));
                 node.verifier = Some(validator.text.clone());
                 node.args = arguments;
                 self.push(level, node);
             }
-            Stmt::Emit { output, value, .. } => {
+            Stmt::Emit {
+                output,
+                value,
+                span,
+            } => {
                 let lowered = self.lower_value(level, value);
                 let mut node = Node::new(String::new(), NodeKind::ArtifactEmit);
+                node.source_span = Some(self.source_span(*span));
                 node.output = Some(output.text.clone());
                 node.value = Some(lowered);
                 self.push(level, node);
@@ -315,10 +341,11 @@ impl<'a> Lowerer<'a> {
                 condition,
                 then_branch,
                 else_branch,
-                ..
+                span,
             } => {
                 let lowered = self.lower_value(level, condition);
                 let mut node = Node::new(String::new(), NodeKind::Branch);
+                node.source_span = Some(self.source_span(*span));
                 node.condition = Some(lowered);
                 let index = self.push(level, node);
 
@@ -339,10 +366,14 @@ impl<'a> Lowerer<'a> {
                 self.nodes[index].otherwise = else_entry;
             }
             Stmt::Loop {
-                max, guard, body, ..
+                max,
+                guard,
+                body,
+                span,
             } => {
                 let lowered_guard = guard.as_ref().map(|guard| self.lower_value(level, guard));
                 let mut node = Node::new(String::new(), NodeKind::Loop);
+                node.source_span = Some(self.source_span(*span));
                 node.max_iterations = max.map(|bound| bound.value);
                 node.guard = lowered_guard;
                 let index = self.push(level, node);
@@ -351,8 +382,9 @@ impl<'a> Lowerer<'a> {
                 self.link(&body_level);
                 self.nodes[index].body = body_level.first().map(|i| self.nodes[*i].id.clone());
             }
-            Stmt::Checkpoint { label, .. } => {
+            Stmt::Checkpoint { label, span } => {
                 let mut node = Node::new(String::new(), NodeKind::Checkpoint);
+                node.source_span = Some(self.source_span(*span));
                 node.label = Some(label.plain_text());
                 self.push(level, node);
             }
@@ -368,8 +400,9 @@ impl<'a> Lowerer<'a> {
         binding: Option<String>,
     ) -> Option<Node> {
         match expr {
-            Expr::Ask { result, args, .. } => {
+            Expr::Ask { result, args, span } => {
                 let mut node = Node::new(String::new(), NodeKind::LlmCall);
+                node.source_span = Some(self.source_span(*span));
                 node.binding = binding;
                 node.response_type = Some(result.text());
                 node.effects = vec!["model_access".to_string()];
@@ -412,6 +445,7 @@ impl<'a> Lowerer<'a> {
                         (target.inputs.clone(), node)
                     }
                 };
+                node.source_span = Some(self.source_span(*span));
                 node.binding = binding;
                 node.effects = info.effects.names();
                 node.args = self.lower_arguments(level, args, &info.arg_order, &params);
@@ -422,10 +456,11 @@ impl<'a> Lowerer<'a> {
                 source,
                 binder,
                 body,
-                ..
+                span,
             } => {
                 let lowered_source = self.lower_value(level, source);
                 let mut node = Node::new(String::new(), NodeKind::Parallel);
+                node.source_span = Some(self.source_span(*span));
                 node.binding = binding;
                 node.mode = Some("map".to_string());
                 node.binder = Some(binder.text.clone());
@@ -542,7 +577,7 @@ impl<'a> Lowerer<'a> {
                         .get(&path.span)
                         .cloned()
                         .unwrap_or(Ty::Unknown);
-                    let value = self.lower_reference(level, &path.root, &path.segments);
+                    let value = self.lower_reference(level, &path.root, &path.segments, path.span);
                     parts.push(TemplatePart::Value {
                         value,
                         ty: ty.to_string(),
@@ -597,7 +632,7 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_path(&mut self, level: &mut Vec<usize>, path: &PathExpr) -> Value {
-        self.lower_reference(level, &path.root, &path.segments)
+        self.lower_reference(level, &path.root, &path.segments, path.span)
     }
 
     /// Resolve a name into a pure value.
@@ -609,6 +644,7 @@ impl<'a> Lowerer<'a> {
         level: &mut Vec<usize>,
         root: &PathRoot,
         segments: &[Ident],
+        span: Span,
     ) -> Value {
         let field_names = || segments.iter().map(|segment| segment.text.clone());
 
@@ -617,7 +653,7 @@ impl<'a> Lowerer<'a> {
                 let Some(field) = segments.first() else {
                     return Value::Unknown;
                 };
-                let binding = self.read_state(level, &field.text);
+                let binding = self.read_state(level, &field.text, span);
                 let mut path = vec![binding];
                 path.extend(segments[1..].iter().map(|segment| segment.text.clone()));
                 Value::Ref {
@@ -660,12 +696,13 @@ impl<'a> Lowerer<'a> {
     }
 
     /// Emit one `state.read` per field per statement and reuse it afterwards.
-    fn read_state(&mut self, level: &mut Vec<usize>, field: &str) -> String {
+    fn read_state(&mut self, level: &mut Vec<usize>, field: &str, span: Span) -> String {
         if let Some(binding) = self.state_reads.get(field) {
             return binding.clone();
         }
         let binding = format!("$state.{field}");
         let mut node = Node::new(String::new(), NodeKind::StateRead);
+        node.source_span = Some(self.source_span(span));
         node.field = Some(field.to_string());
         node.binding = Some(binding.clone());
         self.push(level, node);

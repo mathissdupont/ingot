@@ -501,6 +501,7 @@ dependencies = [
  "ingot-mcp",
  "ingot-runtime",
  "ingot-sandbox",
+ "ingot-source",
  "ingot-supervisor",
  "notify",
  "serde",

@@ -194,7 +194,11 @@ impl EventPrinter {
     pub(crate) fn new(format: EventFormat, compilation: &Compilation) -> Self {
         Self {
             format,
-            trace: crate::trace::HumanTrace::new(&compilation.agents),
+            trace: crate::trace::HumanTrace::with_sources(
+                &compilation.agents,
+                &compilation.sources,
+                compilation.file,
+            ),
         }
     }
 

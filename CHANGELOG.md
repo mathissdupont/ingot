@@ -8,6 +8,24 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
 
 ## [Unreleased]
 
+**Agent IR 0.2 source provenance**
+([RFC-0007](rfcs/0007-the-ingot-product-loop.md),
+[#11](https://github.com/mathissdupont/ingot/issues/11);
+closes [GAP-027](docs/gaps.md#gap-027))
+
+- Agent IR now emits `"irVersion": "0.2"` and supports optional per-node
+  `sourceSpan` metadata with a project-relative source id plus UTF-8 byte
+  offsets.
+- The compiler preserves source spans through lowering for executable nodes,
+  including `state.read` nodes created from state references and approval nodes
+  inserted before gated calls.
+- Human text traces resolve `sourceSpan` to local file/line/column ranges when
+  the project source is available, and fall back to portable byte ranges when it
+  is not.
+- Source provenance is descriptive only: runtime event JSON, execution
+  semantics, canonical node ids, policy, budgets and cassette request digests
+  are unchanged. IR without `sourceSpan` remains valid.
+
 **Language 0.2 reuse foundation**
 ([RFC-0007](rfcs/0007-the-ingot-product-loop.md),
 [#7](https://github.com/mathissdupont/ingot/issues/7))
@@ -17,8 +35,7 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
   they are resolved before semantic analysis and erased before Agent IR
   lowering.
 - Optional and union type expressions are available as `T?` and `A | B`, with
-  conservative assignability and canonical Agent IR type text. Existing Agent
-  IR schema version `0.1` is unchanged.
+  conservative assignability and canonical Agent IR type text.
 - Expression-only pure helper functions can be declared with
   `fn name(params) -> type = expression` and called from flow expressions.
   Helpers type-check like ordinary calls, must remain effect-free, and lower by
@@ -109,9 +126,9 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
   shape and order; quiet output remains quiet.
 - The same renderer handles local, supervised and contained runs without TTY
   control sequences and preserves existing text landmarks used by scripts.
-- Agent IR 0.1 cannot map node ids to source ranges. This is recorded as
-  [GAP-027](docs/gaps.md#gap-027), with the minimum privacy-safe IR 0.2 change
-  tracked in [#11](https://github.com/mathissdupont/ingot/issues/11).
+- Source range resolution now lives in the Agent IR 0.2 source provenance entry
+  above; dynamic values remain redacted without a separate secret-classification
+  design.
 
 **An integrated edit loop**
 ([RFC-0007](rfcs/0007-the-ingot-product-loop.md),

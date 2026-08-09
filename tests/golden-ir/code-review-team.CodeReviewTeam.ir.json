@@ -1,5 +1,5 @@
 {
-  "irVersion": "0.1",
+  "irVersion": "0.2",
   "language": "0.1",
   "agent": "heptapus.examples.review.CodeReviewTeam",
   "doc": "Coordinates a review across several files and publishes the result.\n\nExercises: sub-agent calls, `parallel map` over inputs, a branch,\nfilesystem and external-write capabilities, and an approval checkpoint the\ncompiler inserts from `external_write require approval`.",
@@ -130,6 +130,11 @@
     {
       "id": "n0",
       "kind": "state.write",
+      "sourceSpan": {
+        "source": "main.ing",
+        "start": 2225,
+        "end": 2247
+      },
       "field": "reviewed",
       "value": {
         "kind": "ref",
@@ -143,6 +148,11 @@
     {
       "id": "n1",
       "kind": "agent.call",
+      "sourceSpan": {
+        "source": "main.ing",
+        "start": 2295,
+        "end": 2322
+      },
       "agent": "heptapus.examples.review.SecurityReviewer",
       "args": [
         {
@@ -165,6 +175,11 @@
     {
       "id": "n2",
       "kind": "parallel",
+      "sourceSpan": {
+        "source": "main.ing",
+        "start": 2260,
+        "end": 2328
+      },
       "binding": "notes",
       "body": "n1",
       "binder": "path",
@@ -181,6 +196,11 @@
     {
       "id": "n3",
       "kind": "llm.call",
+      "sourceSpan": {
+        "source": "main.ing",
+        "start": 2343,
+        "end": 2472
+      },
       "binding": "summary",
       "prompt": {
         "kind": "template",
@@ -227,6 +247,11 @@
     {
       "id": "n4",
       "kind": "verify",
+      "sourceSpan": {
+        "source": "main.ing",
+        "start": 2477,
+        "end": 2531
+      },
       "verifier": "HasActionableFindings",
       "args": [
         {
@@ -253,6 +278,11 @@
     {
       "id": "n5",
       "kind": "tool.call",
+      "sourceSpan": {
+        "source": "main.ing",
+        "start": 2545,
+        "end": 2602
+      },
       "binding": "_saved",
       "tool": "mcp:repo.write_file",
       "args": [
@@ -283,6 +313,11 @@
     {
       "id": "n6",
       "kind": "branch",
+      "sourceSpan": {
+        "source": "main.ing",
+        "start": 2607,
+        "end": 2817
+      },
       "condition": {
         "kind": "binary",
         "op": ">",
@@ -312,6 +347,11 @@
     {
       "id": "n7",
       "kind": "approval",
+      "sourceSpan": {
+        "source": "main.ing",
+        "start": 2643,
+        "end": 2684
+      },
       "label": "approval required before calling mcp:forge.comment",
       "effects": [
         "external_write"
@@ -321,6 +361,11 @@
     {
       "id": "n8",
       "kind": "tool.call",
+      "sourceSpan": {
+        "source": "main.ing",
+        "start": 2643,
+        "end": 2684
+      },
       "binding": "_posted",
       "tool": "mcp:forge.comment",
       "args": [
@@ -353,6 +398,11 @@
     {
       "id": "n9",
       "kind": "artifact.emit",
+      "sourceSpan": {
+        "source": "main.ing",
+        "start": 2691,
+        "end": 2712
+      },
       "value": {
         "kind": "ref",
         "scope": "binding",
@@ -366,6 +416,11 @@
     {
       "id": "n10",
       "kind": "llm.call",
+      "sourceSpan": {
+        "source": "main.ing",
+        "start": 2746,
+        "end": 2811
+      },
       "binding": "$tmp0",
       "prompt": {
         "kind": "literal",
@@ -381,6 +436,11 @@
     {
       "id": "n11",
       "kind": "artifact.emit",
+      "sourceSpan": {
+        "source": "main.ing",
+        "start": 2732,
+        "end": 2811
+      },
       "value": {
         "kind": "ref",
         "scope": "binding",

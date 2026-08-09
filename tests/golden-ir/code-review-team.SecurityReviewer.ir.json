@@ -1,5 +1,5 @@
 {
-  "irVersion": "0.1",
+  "irVersion": "0.2",
   "language": "0.1",
   "agent": "heptapus.examples.review.SecurityReviewer",
   "doc": "Reviews one file for security problems.\n\nA sub-agent: it has its own capability grants and its own budget, so the\ncaller cannot widen what it is allowed to reach.",
@@ -88,6 +88,11 @@
     {
       "id": "n0",
       "kind": "tool.call",
+      "sourceSpan": {
+        "source": "main.ing",
+        "start": 1189,
+        "end": 1214
+      },
       "binding": "contents",
       "tool": "mcp:repo.read_file",
       "args": [
@@ -110,6 +115,11 @@
     {
       "id": "n1",
       "kind": "llm.call",
+      "sourceSpan": {
+        "source": "main.ing",
+        "start": 1232,
+        "end": 1375
+      },
       "binding": "$tmp0",
       "prompt": {
         "kind": "template",
@@ -150,6 +160,11 @@
     {
       "id": "n2",
       "kind": "artifact.emit",
+      "sourceSpan": {
+        "source": "main.ing",
+        "start": 1219,
+        "end": 1375
+      },
       "value": {
         "kind": "ref",
         "scope": "binding",
