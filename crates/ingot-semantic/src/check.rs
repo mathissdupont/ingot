@@ -140,12 +140,14 @@ pub(crate) struct Checker<'a> {
     records: BTreeMap<String, RecordInfo>,
     tools: BTreeMap<String, ToolInfo>,
     verifiers: BTreeMap<String, VerifierInfo>,
+    functions: BTreeMap<String, FunctionInfo>,
     signatures: BTreeMap<String, AgentSignature>,
     recursive_agents: BTreeSet<String>,
     agents: Vec<AgentInfo>,
     exprs: HashMap<Span, ExprInfo>,
     calls: HashMap<Span, CallInfo>,
     verifies: HashMap<Span, VerifyInfo>,
+    function_calls: HashMap<Span, FunctionCallInfo>,
     interpolations: HashMap<Span, Ty>,
 }
 
@@ -157,12 +159,14 @@ impl<'a> Checker<'a> {
             records: BTreeMap::new(),
             tools: BTreeMap::new(),
             verifiers: BTreeMap::new(),
+            functions: BTreeMap::new(),
             signatures: BTreeMap::new(),
             recursive_agents: BTreeSet::new(),
             agents: Vec::new(),
             exprs: HashMap::new(),
             calls: HashMap::new(),
             verifies: HashMap::new(),
+            function_calls: HashMap::new(),
             interpolations: HashMap::new(),
         }
     }
@@ -171,7 +175,9 @@ impl<'a> Checker<'a> {
         self.collect_records();
         self.collect_tools();
         self.collect_verifiers();
+        self.collect_functions();
         self.collect_agent_signatures();
+        self.check_function_bodies();
         self.detect_recursion();
 
         if self.program.agents.is_empty() {
@@ -200,10 +206,12 @@ impl<'a> Checker<'a> {
             records: self.records,
             tools: self.tools,
             verifiers: self.verifiers,
+            functions: self.functions,
             agents: self.agents,
             exprs: self.exprs,
             calls: self.calls,
             verifies: self.verifies,
+            function_calls: self.function_calls,
             interpolations: self.interpolations,
             diagnostics: self.diagnostics,
         }
@@ -327,6 +335,91 @@ impl<'a> Checker<'a> {
                     doc: decl.doc.clone(),
                     span: decl.name.span,
                 },
+            );
+        }
+    }
+
+    fn collect_functions(&mut self) {
+        for (index, decl) in self.program.functions.iter().enumerate() {
+            if let Some(previous) = self.functions.get(&decl.name.text).map(|info| info.span) {
+                self.duplicate(&decl.name.text, "function", decl.name.span, previous);
+                continue;
+            }
+            let params = self.resolve_params(&decl.params);
+            let result = self.resolve_type(&decl.ret);
+            self.functions.insert(
+                decl.name.text.clone(),
+                FunctionInfo {
+                    name: decl.name.text.clone(),
+                    params,
+                    result,
+                    doc: decl.doc.clone(),
+                    span: decl.name.span,
+                    decl_index: index,
+                },
+            );
+        }
+    }
+
+    fn check_function_bodies(&mut self) {
+        for index in 0..self.program.functions.len() {
+            let decl = &self.program.functions[index];
+            let Some(signature) = self.functions.get(&decl.name.text).cloned() else {
+                continue;
+            };
+
+            if let Some(span) = first_disallowed_helper_expr(&decl.body) {
+                self.error(
+                    Diagnostic::error(
+                        codes::FUNCTION_NOT_PURE,
+                        format!("function `{}` is not pure", decl.name.text),
+                    )
+                    .with_primary(span, "this expression is not allowed in a pure helper")
+                    .with_help(
+                        "keep helper bodies as one value expression over parameters and builtins",
+                    ),
+                );
+            }
+
+            let mut ctx = FlowCtx {
+                agent: format!("fn {}", decl.name.text),
+                scopes: Vec::new(),
+                state: Vec::new(),
+                granted: BTreeSet::new(),
+                used_tools: BTreeSet::new(),
+                effects: EffectSet::new(),
+                output: None,
+                emitted_anywhere: false,
+                parallel_depth: 0,
+            };
+            ctx.push_scope(false);
+            for param in &signature.params {
+                let span = decl
+                    .params
+                    .iter()
+                    .find(|syntax| syntax.name.text == param.name)
+                    .map(|syntax| syntax.name.span)
+                    .unwrap_or(decl.name.span);
+                ctx.insert(param.name.clone(), param.ty.clone(), span);
+            }
+
+            let empty_policy = BTreeMap::new();
+            let actual = self.check_expr(&mut ctx, &decl.body, &empty_policy);
+            if !ctx.effects.is_empty() {
+                self.error(
+                    Diagnostic::error(
+                        codes::FUNCTION_NOT_PURE,
+                        format!("function `{}` is not pure", decl.name.text),
+                    )
+                    .with_primary(decl.body.span(), "this expression performs agent work")
+                    .with_help("pure helper functions cannot `ask`, `call` tools or run agents"),
+                );
+            }
+            self.expect_assignable(
+                &actual,
+                &signature.result,
+                decl.body.span(),
+                &format!("function `{}` return type", decl.name.text),
             );
         }
     }
@@ -1482,6 +1575,9 @@ impl<'a> Checker<'a> {
             Expr::Builtin { name, args, span } => {
                 self.infer_builtin(ctx, name, args, *span, policy)
             }
+            Expr::FunctionCall { callee, args, span } => {
+                self.infer_function_call(ctx, callee, args, *span, policy)
+            }
             Expr::Unary { op, operand, span } => {
                 let operand_ty = self.check_expr(ctx, operand, policy);
                 let result = match op {
@@ -1628,6 +1724,54 @@ impl<'a> Checker<'a> {
                 (Ty::Unknown, EffectSet::new())
             }
         }
+    }
+
+    fn infer_function_call(
+        &mut self,
+        ctx: &mut FlowCtx,
+        callee: &Ident,
+        args: &[Arg],
+        span: Span,
+        policy: &BTreeMap<PolicySubject, PolicyRuleInfo>,
+    ) -> (Ty, EffectSet) {
+        let arg_types: Vec<Ty> = args
+            .iter()
+            .map(|arg| self.check_expr(ctx, &arg.value, policy))
+            .collect();
+        let name = callee.text.clone();
+        let Some(function) = self.functions.get(&name).cloned() else {
+            let known: Vec<String> = self.functions.keys().cloned().collect();
+            let mut diagnostic = Diagnostic::error(
+                codes::UNRESOLVED_NAME,
+                format!("no function named `{name}`"),
+            )
+            .with_primary(callee.span, "not a declared helper")
+            .with_help("declare a helper with `fn name(args) -> type = expression`");
+            if let Some(suggestion) = closest_match(&name, &known) {
+                diagnostic =
+                    diagnostic.with_note(format!("a function named `{suggestion}` exists"));
+            }
+            self.error(diagnostic);
+            return (Ty::Unknown, EffectSet::new());
+        };
+
+        let arg_order = self.match_arguments(
+            &function.params,
+            args,
+            &arg_types,
+            span,
+            &function.name,
+            "function",
+        );
+        self.function_calls.insert(
+            span,
+            FunctionCallInfo {
+                function: function.name,
+                result: function.result.clone(),
+                arg_order,
+            },
+        );
+        (function.result, EffectSet::new())
     }
 
     fn infer_path(&mut self, ctx: &mut FlowCtx, path: &PathExpr) -> Ty {
@@ -2291,6 +2435,11 @@ fn collect_agent_calls(
                     visit_expr(arg, signatures, out);
                 }
             }
+            Expr::FunctionCall { args, .. } => {
+                for arg in args {
+                    visit_expr(&arg.value, signatures, out);
+                }
+            }
             Expr::Unary { operand, .. } => visit_expr(operand, signatures, out),
             Expr::Binary { lhs, rhs, .. } => {
                 visit_expr(lhs, signatures, out);
@@ -2334,6 +2483,27 @@ fn collect_agent_calls(
     }
 }
 
+fn first_disallowed_helper_expr(expr: &Expr) -> Option<Span> {
+    match expr {
+        Expr::FunctionCall { span, .. }
+        | Expr::Ask { span, .. }
+        | Expr::Call { span, .. }
+        | Expr::ParallelMap { span, .. } => Some(*span),
+        Expr::List { items, .. } => items.iter().find_map(first_disallowed_helper_expr),
+        Expr::Builtin { args, .. } => args.iter().find_map(first_disallowed_helper_expr),
+        Expr::Unary { operand, .. } => first_disallowed_helper_expr(operand),
+        Expr::Binary { lhs, rhs, .. } => {
+            first_disallowed_helper_expr(lhs).or_else(|| first_disallowed_helper_expr(rhs))
+        }
+        Expr::Str(_)
+        | Expr::Int { .. }
+        | Expr::Float { .. }
+        | Expr::Bool { .. }
+        | Expr::Path(_)
+        | Expr::Error { .. } => None,
+    }
+}
+
 /// Whether every path through `statements` emits `output`.
 ///
 /// A bounded loop may run zero times, and a `parallel map` body may not run at
@@ -2364,6 +2534,7 @@ fn min_steps(statements: &[Stmt]) -> i64 {
             Expr::ParallelMap { source, .. } => expr_steps(source),
             Expr::List { items, .. } => items.iter().map(expr_steps).sum(),
             Expr::Builtin { args, .. } => args.iter().map(expr_steps).sum(),
+            Expr::FunctionCall { args, .. } => args.iter().map(|arg| expr_steps(&arg.value)).sum(),
             Expr::Unary { operand, .. } => expr_steps(operand),
             Expr::Binary { lhs, rhs, .. } => expr_steps(lhs) + expr_steps(rhs),
             _ => 0,

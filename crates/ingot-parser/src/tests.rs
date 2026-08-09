@@ -174,6 +174,54 @@ agent A(topic: string) -> report<markdown> {
 }
 
 #[test]
+fn parses_pure_function_declarations_and_calls() {
+    let source = r#"
+language 0.2
+
+fn headline(title: string, fallback: string) -> string = title
+
+agent A(topic: string) -> report<markdown> {
+  flow {
+    subject = headline(topic, fallback: "Untitled")
+    emit report = ask<markdown>("Write ${subject}")
+  }
+}
+"#;
+    let result = parse_text(source);
+    assert!(!result.diagnostics.has_errors(), "{:?}", result.diagnostics);
+    assert_eq!(result.program.functions.len(), 1);
+    let function = &result.program.functions[0];
+    assert_eq!(function.name.text, "headline");
+    assert_eq!(function.params.len(), 2);
+    assert_eq!(function.ret.text(), "string");
+
+    let Stmt::Bind {
+        value: Expr::FunctionCall { callee, args, .. },
+        ..
+    } = &result.program.agents[0].flow.as_ref().unwrap().statements[0]
+    else {
+        panic!("expected a helper call binding");
+    };
+    assert_eq!(callee.text, "headline");
+    assert_eq!(args.len(), 2);
+    assert_eq!(args[1].name.as_ref().unwrap().text, "fallback");
+}
+
+#[test]
+fn function_declarations_require_language_0_2() {
+    let result = parse_text(
+        r#"
+language 0.1
+fn id(value: string) -> string = value
+"#,
+    );
+    assert!(result
+        .diagnostics
+        .iter()
+        .any(|d| d.code == codes::UNSUPPORTED_LANGUAGE_VERSION));
+}
+
+#[test]
 fn optional_and_union_types_require_language_0_2() {
     let result = parse_text(
         r#"

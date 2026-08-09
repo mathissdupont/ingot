@@ -8,7 +8,7 @@
 use std::fmt::Write as _;
 
 use crate::{
-    AgentDecl, Arg, BudgetBlock, Expr, FieldDecl, FlowBlock, MemoryBlock, ModelBlock,
+    AgentDecl, Arg, BudgetBlock, Expr, FieldDecl, FlowBlock, FunctionDecl, MemoryBlock, ModelBlock,
     ModelRequirement, PolicyAction, PolicyBlock, Program, Stmt, StringLit, StringPart, ToolDecl,
     ToolsBlock, TypeDecl, VerifierDecl,
 };
@@ -45,6 +45,10 @@ pub fn print_program(program: &Program) -> String {
     for decl in &program.verifiers {
         blank_line(&mut out);
         print_verifier_decl(&mut out, decl);
+    }
+    for decl in &program.functions {
+        blank_line(&mut out);
+        print_function_decl(&mut out, decl);
     }
     for decl in &program.agents {
         blank_line(&mut out);
@@ -128,6 +132,19 @@ fn print_verifier_decl(out: &mut String, decl: &VerifierDecl) {
         decl.name.text,
         print_params(&decl.params)
     );
+}
+
+fn print_function_decl(out: &mut String, decl: &FunctionDecl) {
+    print_doc(out, decl.doc.as_ref(), 0);
+    let _ = write!(
+        out,
+        "fn {}({}) -> {} = ",
+        decl.name.text,
+        print_params(&decl.params),
+        decl.ret.text()
+    );
+    print_expr(out, &decl.body, 0);
+    out.push('\n');
 }
 
 fn print_agent_decl(out: &mut String, decl: &AgentDecl) {
@@ -540,6 +557,9 @@ fn print_expr(out: &mut String, expr: &Expr, level: usize) {
                 print_expr(out, arg, level);
             }
             out.push(')');
+        }
+        Expr::FunctionCall { callee, args, .. } => {
+            let _ = write!(out, "{}({})", callee.text, print_args(args, level));
         }
         Expr::Unary { op, operand, .. } => {
             out.push_str(op.symbol());

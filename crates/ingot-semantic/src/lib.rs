@@ -65,6 +65,16 @@ pub struct VerifierInfo {
 }
 
 #[derive(Debug, Clone)]
+pub struct FunctionInfo {
+    pub name: String,
+    pub params: Vec<Param>,
+    pub result: Ty,
+    pub doc: Option<String>,
+    pub span: Span,
+    pub decl_index: usize,
+}
+
+#[derive(Debug, Clone)]
 pub struct OutputInfo {
     pub name: String,
     /// The artifact content type, e.g. `markdown`.
@@ -183,6 +193,14 @@ pub struct VerifyInfo {
     pub arg_order: Vec<Option<usize>>,
 }
 
+/// Resolution result for one pure helper function call.
+#[derive(Debug, Clone)]
+pub struct FunctionCallInfo {
+    pub function: String,
+    pub result: Ty,
+    pub arg_order: Vec<Option<usize>>,
+}
+
 /// Type and effects of one expression.
 #[derive(Debug, Clone)]
 pub struct ExprInfo {
@@ -198,6 +216,7 @@ pub struct Analysis {
     pub records: BTreeMap<String, RecordInfo>,
     pub tools: BTreeMap<String, ToolInfo>,
     pub verifiers: BTreeMap<String, VerifierInfo>,
+    pub functions: BTreeMap<String, FunctionInfo>,
     pub agents: Vec<AgentInfo>,
     /// Keyed by expression span, which is unique within a compilation.
     pub exprs: HashMap<Span, ExprInfo>,
@@ -205,6 +224,8 @@ pub struct Analysis {
     pub calls: HashMap<Span, CallInfo>,
     /// Keyed by the span of the `verify` statement.
     pub verifies: HashMap<Span, VerifyInfo>,
+    /// Keyed by the span of the helper call expression.
+    pub function_calls: HashMap<Span, FunctionCallInfo>,
     /// Type of each resolved `${...}` placeholder, keyed by the placeholder span.
     /// Lowering needs it to tell a backend how to render each substitution.
     pub interpolations: HashMap<Span, Ty>,
@@ -226,6 +247,10 @@ impl Analysis {
 
     pub fn call(&self, span: Span) -> Option<&CallInfo> {
         self.calls.get(&span)
+    }
+
+    pub fn function_call(&self, span: Span) -> Option<&FunctionCallInfo> {
+        self.function_calls.get(&span)
     }
 
     pub fn agent(&self, name: &str) -> Option<&AgentInfo> {

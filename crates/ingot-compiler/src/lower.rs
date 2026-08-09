@@ -23,6 +23,7 @@ use ingot_ir::{
     ToolSignature, Value, IR_VERSION,
 };
 use ingot_semantic::{AgentInfo, Analysis, CallTarget, ModelInfo};
+use ingot_source::Span;
 use ingot_syntax::*;
 use ingot_types::{PolicyDecision, Ty};
 
@@ -30,6 +31,7 @@ use ingot_types::{PolicyDecision, Ty};
 pub fn lower_agent(program: &Program, analysis: &Analysis, agent: &AgentInfo) -> AgentIr {
     let decl = &program.agents[agent.decl_index];
     let mut lowerer = Lowerer {
+        program,
         analysis,
         agent,
         nodes: Vec::new(),
@@ -177,6 +179,7 @@ fn lower_tools(analysis: &Analysis, agent: &AgentInfo) -> Vec<ToolBinding> {
 }
 
 struct Lowerer<'a> {
+    program: &'a Program,
     analysis: &'a Analysis,
     agent: &'a AgentInfo,
     nodes: Vec<Node>,
@@ -502,6 +505,7 @@ impl<'a> Lowerer<'a> {
                     .map(|arg| self.lower_value(level, arg))
                     .collect(),
             },
+            Expr::FunctionCall { args, span, .. } => self.lower_function_call(level, args, *span),
             Expr::Unary { op, operand, .. } => Value::Unary {
                 op: op.symbol().to_string(),
                 operand: Box::new(self.lower_value(level, operand)),
@@ -547,6 +551,49 @@ impl<'a> Lowerer<'a> {
             }
         }
         Value::Template { parts }
+    }
+
+    fn lower_function_call(&mut self, level: &mut Vec<usize>, args: &[Arg], span: Span) -> Value {
+        let Some(call) = self.analysis.function_call(span).cloned() else {
+            return Value::Unknown;
+        };
+        let Some(function) = self.analysis.functions.get(&call.function) else {
+            return Value::Unknown;
+        };
+        let Some(decl) = self.program.functions.get(function.decl_index) else {
+            return Value::Unknown;
+        };
+
+        let mut saved = Vec::new();
+        for (position, slot) in call.arg_order.iter().enumerate() {
+            let Some(index) = slot else { continue };
+            let Some(arg) = args.get(*index) else {
+                continue;
+            };
+            let Some(param) = function.params.get(position) else {
+                continue;
+            };
+            let value = self.lower_value(level, &arg.value);
+            saved.push((
+                param.name.clone(),
+                self.aliases.insert(param.name.clone(), value),
+            ));
+        }
+
+        let lowered = self.lower_value(level, &decl.body);
+
+        for (name, previous) in saved.into_iter().rev() {
+            match previous {
+                Some(value) => {
+                    self.aliases.insert(name, value);
+                }
+                None => {
+                    self.aliases.remove(&name);
+                }
+            }
+        }
+
+        lowered
     }
 
     fn lower_path(&mut self, level: &mut Vec<usize>, path: &PathExpr) -> Value {

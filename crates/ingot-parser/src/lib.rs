@@ -152,6 +152,7 @@ impl<'a> Parser<'a> {
                     | Some(Keyword::Import)
                     | Some(Keyword::Tool)
                     | Some(Keyword::Verifier)
+                    | Some(Keyword::Fn)
                     | Some(Keyword::Agent)
             )
     }
@@ -218,6 +219,7 @@ impl<'a> Parser<'a> {
             types: Vec::new(),
             tools: Vec::new(),
             verifiers: Vec::new(),
+            functions: Vec::new(),
             agents: Vec::new(),
             span: start,
         };
@@ -264,6 +266,11 @@ impl<'a> Parser<'a> {
                 Some(Keyword::Verifier) => {
                     if let Some(decl) = self.parse_verifier_decl() {
                         program.verifiers.push(decl);
+                    }
+                }
+                Some(Keyword::Fn) => {
+                    if let Some(decl) = self.parse_function_decl() {
+                        program.functions.push(decl);
                     }
                 }
                 Some(Keyword::Agent) => {
@@ -314,7 +321,7 @@ impl<'a> Parser<'a> {
                         )
                         .with_primary(
                             span,
-                            "expected `import`, `type`, `tool`, `verifier` or `agent`",
+                            "expected `import`, `type`, `tool`, `verifier`, `fn` or `agent`",
                         ),
                     );
                     self.recover_to_item();
@@ -338,6 +345,19 @@ impl<'a> Parser<'a> {
                 );
             }
         }
+        if !program.functions.is_empty() && !language_supports_v0_2_types(program.language) {
+            self.error(
+                Diagnostic::error(
+                    codes::UNSUPPORTED_LANGUAGE_VERSION,
+                    "`fn` declarations require language 0.2 or newer",
+                )
+                .with_primary(
+                    program.functions[0].span,
+                    "not available in this language version",
+                )
+                .with_help("change the file header to `language 0.2`"),
+            );
+        }
 
         program.span = program.span.merge(self.eof_span);
         program
@@ -352,6 +372,7 @@ impl<'a> Parser<'a> {
                     | Some(Keyword::Import)
                     | Some(Keyword::Tool)
                     | Some(Keyword::Verifier)
+                    | Some(Keyword::Fn)
                     | Some(Keyword::Agent)
             ) {
                 return;
@@ -756,6 +777,26 @@ impl<'a> Parser<'a> {
             params,
             doc,
             span,
+        })
+    }
+
+    fn parse_function_decl(&mut self) -> Option<FunctionDecl> {
+        let doc = self.peek().doc.clone();
+        let start = self.span();
+        self.bump(); // `fn`
+        let name = self.expect_ident("a function name")?;
+        let params = self.parse_params();
+        self.expect(TokenKind::Arrow);
+        let ret = self.parse_type()?;
+        self.expect(TokenKind::Eq);
+        let body = self.parse_expr();
+        Some(FunctionDecl {
+            name,
+            params,
+            ret,
+            body,
+            doc,
+            span: start.merge(self.previous_span()),
         })
     }
 
@@ -1707,20 +1748,10 @@ impl<'a> Parser<'a> {
                     };
                 }
                 if self.at(&TokenKind::LParen) {
-                    let span = self.span();
-                    self.error(
-                        Diagnostic::error(
-                            codes::UNEXPECTED_TOKEN,
-                            format!("`{}` is not a builtin function", ident.text),
-                        )
-                        .with_primary(span, "unexpected call")
-                        .with_help(
-                            "call tools and sub-agents with `call name(...)`; \
-                             builtin functions are: len",
-                        ),
-                    );
-                    let _ = self.parse_positional_args();
-                    return Expr::Error {
+                    let args = self.parse_args();
+                    return Expr::FunctionCall {
+                        callee: ident,
+                        args,
                         span: start.merge(self.previous_span()),
                     };
                 }
@@ -1868,6 +1899,7 @@ fn first_v0_2_type_span(program: &Program) -> Option<Span> {
             }
             Expr::List { items, .. } => items.iter().find_map(from_expr),
             Expr::Builtin { args, .. } => args.iter().find_map(from_expr),
+            Expr::FunctionCall { args, .. } => args.iter().find_map(|arg| from_expr(&arg.value)),
             Expr::Unary { operand, .. } => from_expr(operand),
             Expr::Binary { lhs, rhs, .. } => from_expr(lhs).or_else(|| from_expr(rhs)),
             Expr::Str(_)
@@ -1917,6 +1949,13 @@ fn first_v0_2_type_span(program: &Program) -> Option<Span> {
                 .verifiers
                 .iter()
                 .find_map(|decl| from_fields(&decl.params))
+        })
+        .or_else(|| {
+            program.functions.iter().find_map(|decl| {
+                from_fields(&decl.params)
+                    .or_else(|| from_type(&decl.ret))
+                    .or_else(|| from_expr(&decl.body))
+            })
         })
         .or_else(|| {
             program.agents.iter().find_map(|decl| {

@@ -65,6 +65,7 @@ pub struct Program {
     pub types: Vec<TypeDecl>,
     pub tools: Vec<ToolDecl>,
     pub verifiers: Vec<VerifierDecl>,
+    pub functions: Vec<FunctionDecl>,
     pub agents: Vec<AgentDecl>,
     pub span: Span,
 }
@@ -199,6 +200,17 @@ pub struct ToolDecl {
 pub struct VerifierDecl {
     pub name: Ident,
     pub params: Vec<ParamDecl>,
+    pub doc: Option<String>,
+    pub span: Span,
+}
+
+/// `fn title(result: search_result) -> string = result.title`
+#[derive(Debug, Clone)]
+pub struct FunctionDecl {
+    pub name: Ident,
+    pub params: Vec<ParamDecl>,
+    pub ret: TypeExpr,
+    pub body: Expr,
     pub doc: Option<String>,
     pub span: Span,
 }
@@ -508,6 +520,12 @@ pub enum Expr {
         args: Vec<Expr>,
         span: Span,
     },
+    /// `normalise_title(result)` â€” a pure user-defined helper call.
+    FunctionCall {
+        callee: Ident,
+        args: Vec<Arg>,
+        span: Span,
+    },
     Unary {
         op: UnaryOp,
         operand: Box<Expr>,
@@ -537,6 +555,7 @@ impl Expr {
             | Expr::Call { span, .. }
             | Expr::ParallelMap { span, .. }
             | Expr::Builtin { span, .. }
+            | Expr::FunctionCall { span, .. }
             | Expr::Unary { span, .. }
             | Expr::Binary { span, .. }
             | Expr::Error { span } => *span,

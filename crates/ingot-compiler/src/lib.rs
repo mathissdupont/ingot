@@ -162,6 +162,7 @@ impl<'a> ImportResolver<'a> {
             types: Vec::new(),
             tools: Vec::new(),
             verifiers: Vec::new(),
+            functions: Vec::new(),
             agents: program.agents.clone(),
             span: program.span,
         };
@@ -226,6 +227,7 @@ impl<'a> ImportResolver<'a> {
         expanded.types.extend(program.types);
         expanded.tools.extend(program.tools);
         expanded.verifiers.extend(program.verifiers);
+        expanded.functions.extend(program.functions);
         if current_key.is_some() {
             self.stack.pop();
         }

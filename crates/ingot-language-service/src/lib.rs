@@ -13,9 +13,9 @@ use ingot_compiler::{
 use ingot_diagnostics::{DiagnosticBag, Severity};
 use ingot_source::{SourceFile, SourceMap, Span};
 use ingot_syntax::{
-    AgentDecl, Arg, BudgetLimit, DottedName, Expr, FieldDecl, FlowBlock, Ident, InterpolationPath,
-    ModelRequirement, OutputDecl, PathRoot, PolicyAction, PolicyRule, Program, Stmt, StringLit,
-    StringPart, ToolDecl, TypeDecl, TypeExpr, VerifierDecl,
+    AgentDecl, Arg, BudgetLimit, DottedName, Expr, FieldDecl, FlowBlock, FunctionDecl, Ident,
+    InterpolationPath, ModelRequirement, OutputDecl, PathRoot, PolicyAction, PolicyRule, Program,
+    Stmt, StringLit, StringPart, ToolDecl, TypeDecl, TypeExpr, VerifierDecl,
 };
 use ingot_types::{PolicySubject, MODEL_CAPABILITIES};
 use serde::Serialize;
@@ -234,6 +234,7 @@ pub enum CompletionKind {
     Type,
     Tool,
     Verifier,
+    Function,
     Agent,
     Field,
     Binding,
@@ -282,6 +283,7 @@ pub enum SymbolKind {
     Type,
     Tool,
     Verifier,
+    Function,
     Agent,
     Field,
     Parameter,
@@ -516,6 +518,9 @@ fn add_program_symbols(map: &SourceMap, program: &Program, symbols: &mut Vec<Edi
     for decl in &program.verifiers {
         add_verifier_symbols(map, decl, symbols);
     }
+    for decl in &program.functions {
+        add_function_symbols(map, decl, symbols);
+    }
     for decl in &program.agents {
         add_agent_symbols(map, decl, symbols);
     }
@@ -571,6 +576,28 @@ fn add_verifier_symbols(map: &SourceMap, decl: &VerifierDecl, symbols: &mut Vec<
         add_field_symbol(map, param, SymbolKind::Parameter, symbols);
         add_type_reference(map, &param.ty, symbols);
     }
+}
+
+fn add_function_symbols(map: &SourceMap, decl: &FunctionDecl, symbols: &mut Vec<EditorSymbol>) {
+    symbols.push(symbol_from_ident(
+        map,
+        &decl.name,
+        decl.span,
+        SymbolKind::Function,
+        format!(
+            "fn {}({}) -> {}",
+            decl.name.text,
+            params_text(&decl.params),
+            decl.ret.text()
+        ),
+        decl.doc.clone(),
+    ));
+    for param in &decl.params {
+        add_field_symbol(map, param, SymbolKind::Parameter, symbols);
+        add_type_reference(map, &param.ty, symbols);
+    }
+    add_type_reference(map, &decl.ret, symbols);
+    add_expr_symbols(map, &decl.body, symbols);
 }
 
 fn add_agent_symbols(map: &SourceMap, decl: &AgentDecl, symbols: &mut Vec<EditorSymbol>) {
@@ -814,6 +841,17 @@ fn add_expr_symbols(map: &SourceMap, expr: &Expr, symbols: &mut Vec<EditorSymbol
             for arg in args {
                 add_expr_symbols(map, arg, symbols);
             }
+        }
+        Expr::FunctionCall { callee, args, .. } => {
+            symbols.push(symbol_from_ident(
+                map,
+                callee,
+                callee.span,
+                SymbolKind::Function,
+                format!("function {}", callee.text),
+                None,
+            ));
+            add_arg_symbols(map, args, symbols);
         }
         Expr::Unary { operand, .. } => add_expr_symbols(map, operand, symbols),
         Expr::Binary { lhs, rhs, .. } => {
@@ -1098,6 +1136,7 @@ fn completion_kind_for_symbol(kind: SymbolKind) -> CompletionKind {
         SymbolKind::Type => CompletionKind::Type,
         SymbolKind::Tool => CompletionKind::Tool,
         SymbolKind::Verifier => CompletionKind::Verifier,
+        SymbolKind::Function => CompletionKind::Function,
         SymbolKind::Agent => CompletionKind::Agent,
         SymbolKind::Field => CompletionKind::Field,
         SymbolKind::Parameter => CompletionKind::Binding,
@@ -1117,12 +1156,13 @@ fn completion_sort_key(kind: CompletionKind, label: &str) -> (u8, String) {
         CompletionKind::Agent => 2,
         CompletionKind::Tool => 3,
         CompletionKind::Verifier => 4,
-        CompletionKind::Type => 5,
-        CompletionKind::Binding => 6,
-        CompletionKind::Field => 7,
-        CompletionKind::Output => 8,
-        CompletionKind::Builtin => 9,
-        CompletionKind::Value => 10,
+        CompletionKind::Function => 5,
+        CompletionKind::Type => 6,
+        CompletionKind::Binding => 7,
+        CompletionKind::Field => 8,
+        CompletionKind::Output => 9,
+        CompletionKind::Builtin => 10,
+        CompletionKind::Value => 11,
     };
     (rank, label.to_string())
 }
@@ -1225,6 +1265,7 @@ fn is_definition_target(symbol: &EditorSymbol) -> bool {
         SymbolKind::Verifier => symbol
             .detail
             .starts_with(&format!("verifier {}(", symbol.name)),
+        SymbolKind::Function => symbol.detail.starts_with(&format!("fn {}(", symbol.name)),
         SymbolKind::Agent => symbol
             .detail
             .starts_with(&format!("agent {}(", symbol.name)),
@@ -1285,6 +1326,12 @@ const KEYWORD_COMPLETIONS: &[(&str, &str, &str, Option<&str>)] = &[
         "verifier",
         "verifier Name(args)",
         "Declares a deterministic check.",
+        None,
+    ),
+    (
+        "fn",
+        "fn name(args) -> type = expression",
+        "Declares a pure helper expression.",
         None,
     ),
     (

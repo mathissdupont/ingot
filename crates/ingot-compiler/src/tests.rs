@@ -573,6 +573,91 @@ agent A() -> report<markdown> {
 }
 
 #[test]
+fn pure_function_calls_inline_into_ir_values() {
+    let compilation = compile_source(
+        "helpers.ing",
+        r#"
+language 0.2
+package heptapus.test
+
+fn bump(n: int) -> int = n + 1
+
+agent A(count: int) -> report<markdown> {
+  flow {
+    next = bump(count)
+    emit report = ask<markdown>("done", context: next)
+  }
+}
+"#,
+    );
+    assert!(
+        !compilation.has_errors(),
+        "expected helper function to compile:\n{}",
+        compilation.render_diagnostics(ingot_diagnostics::ColorChoice::Never)
+    );
+    let ir = compilation.primary_agent().expect("expected an agent");
+    assert_eq!(ir.nodes.len(), 2, "the helper call must not create a node");
+    let context = &ir.main_path()[0].args[0].value;
+    assert_eq!(
+        context,
+        &Value::Binary {
+            op: "+".to_string(),
+            lhs: Box::new(Value::Ref {
+                scope: RefScope::Input,
+                path: vec!["count".to_string()],
+            }),
+            rhs: Box::new(Value::int(1)),
+        }
+    );
+}
+
+#[test]
+fn function_bodies_must_be_effect_free() {
+    let compilation = compile_source(
+        "effectful-helper.ing",
+        r#"
+language 0.2
+fn draft(topic: string) -> markdown = ask<markdown>("write ${topic}")
+
+agent A(topic: string) -> report<markdown> {
+  flow {
+    emit report = draft(topic)
+  }
+}
+"#,
+    );
+    assert!(compilation.has_errors());
+    assert!(compilation
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == ingot_diagnostics::codes::FUNCTION_NOT_PURE));
+}
+
+#[test]
+fn function_bodies_must_not_lower_to_nodes() {
+    let compilation = compile_source(
+        "parallel-helper.ing",
+        r#"
+language 0.2
+fn copy_all(items: string[]) -> string[] = parallel map items as item {
+  item
+}
+
+agent A(items: string[]) -> report<json> {
+  flow {
+    emit report = copy_all(items)
+  }
+}
+"#,
+    );
+    assert!(compilation.has_errors());
+    assert!(compilation
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == ingot_diagnostics::codes::FUNCTION_NOT_PURE));
+}
+
+#[test]
 fn parent_traversal_import_paths_are_rejected() {
     let dir = temp_project("imports-parent-traversal");
     let entry = dir.join("main.ing");

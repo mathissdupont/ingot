@@ -469,9 +469,10 @@ fn lsp_completion_kind(kind: CompletionKind) -> CompletionItemKind {
             CompletionItemKind::KEYWORD
         }
         CompletionKind::Type => CompletionItemKind::STRUCT,
-        CompletionKind::Tool | CompletionKind::Verifier | CompletionKind::Agent => {
-            CompletionItemKind::FUNCTION
-        }
+        CompletionKind::Tool
+        | CompletionKind::Verifier
+        | CompletionKind::Function
+        | CompletionKind::Agent => CompletionItemKind::FUNCTION,
         CompletionKind::Field | CompletionKind::Output => CompletionItemKind::FIELD,
         CompletionKind::Binding => CompletionItemKind::VARIABLE,
         CompletionKind::Builtin => CompletionItemKind::FUNCTION,

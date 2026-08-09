@@ -45,6 +45,7 @@ pub const MISSING_OUTPUT_DECLARATION: &str = "ING2015";
 pub const UNSUPPORTED_TRANSPORT: &str = "ING2016";
 pub const UNSUPPORTED_MEMORY_LIFETIME: &str = "ING2017";
 pub const IMPORT_RESOLUTION_ERROR: &str = "ING2018";
+pub const FUNCTION_NOT_PURE: &str = "ING2019";
 
 // --- ING3xxx: types -------------------------------------------------------
 
@@ -204,6 +205,13 @@ pub fn explain(code: &str) -> Option<&'static str> {
              Recursion has no static bound, so step and cost budgets could not be \
              checked. Model repetition with `loop max N` instead."
         }
+        FUNCTION_NOT_PURE => {
+            "A `fn` helper body contains agent work or another construct that \
+             cannot be erased into a pure value.\n\nHelpers are source-level \
+             conveniences: they inline into Agent IR instead of adding runtime \
+             function calls. Keep the body to parameters, literals, lists, \
+             field reads, pure builtins and operators."
+        }
         UNSUPPORTED_TRANSPORT => {
             "The `tools` block names a transport this language version does not \
              support.\n\nLanguage 0.1 grants tools over MCP only: write \
@@ -242,6 +250,7 @@ pub const EXPLAINED_CODES: &[&str] = &[
     OUTPUT_NOT_ON_ALL_PATHS,
     INVALID_IN_PARALLEL,
     RECURSIVE_AGENT,
+    FUNCTION_NOT_PURE,
     UNSUPPORTED_TRANSPORT,
     STATIC_STEPS_EXCEED_BUDGET,
 ];

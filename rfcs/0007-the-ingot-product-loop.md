@@ -306,7 +306,8 @@ Tracking issue: [#7](https://github.com/mathissdupont/ingot/issues/7).
   ([RFC-0008](0008-language-v0.2-modules-and-imports.md)).
 - Use real MCP schemas and examples to specify optional/union values
   ([RFC-0009](0009-language-v0.2-optionals-and-unions.md)).
-- Specify pure helper functions separately from agent calls.
+- Specify pure helper functions separately from agent calls
+  ([RFC-0010](0010-language-v0.2-pure-helper-functions.md)).
 - Require lowering and both-backend portability reports for every addition.
 
 **Done when:** shared types, tool declarations and pure transformations no

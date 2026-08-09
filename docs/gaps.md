@@ -427,9 +427,11 @@ The type universe is fixed: scalars, `T[]`, and declared records. A value is
 always present, and a tool that may or may not return something has no way to
 say so.
 
-*Draft fix.* Optionals and unions are specified in
-[RFC-0009](../rfcs/0009-language-v0.2-optionals-and-unions.md). Generics and
-pure user-defined functions remain open.
+*Draft fixes.* Optionals and unions are specified in
+[RFC-0009](../rfcs/0009-language-v0.2-optionals-and-unions.md). Pure helper
+functions are specified in
+[RFC-0010](../rfcs/0010-language-v0.2-pure-helper-functions.md). Generics
+remain open.
 
 *Recorded in.* [Language 0.1 §4 and §9](../specs/language/v0.1.md).
 
