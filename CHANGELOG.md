@@ -8,6 +8,24 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
 
 ## [Unreleased]
 
+**A wedged contained run is ended rather than waited on**
+(closes [GAP-024](docs/gaps.md#gap-024))
+
+- The supervisor reads the guest on its own thread and waits on a channel, so a
+  wait can end. A guest that stops responding is killed and reported; the
+  container is `--rm`, so nothing is left behind.
+- Two deadlines, because the two silences differ: 60 seconds from spawn to the
+  first `config` call, for a guest that may not exist yet, and an idle deadline
+  between two lines from one that has started.
+- Every line resets the idle deadline, including `event` notifications. A guest
+  running a long flow is not silent — it narrates — so the bound only has to
+  cover the gap between two steps rather than the length of a run.
+- The idle deadline is **derived** from `[mcp] timeout-seconds`, the bound the
+  guest's own tool host already honours: `max(120s, timeout × 2 + 60s)`. A
+  project that raised its tool timeout does not have to remember a second number.
+- `[run] timeout-seconds` and `--timeout` override it. `--timeout 0` waits
+  indefinitely, which is a deliberate choice rather than a default.
+
 **A verification that never ran no longer says it passed** (Runtime 0.2;
 closes [GAP-002](docs/gaps.md#gap-002))
 
@@ -367,10 +385,6 @@ narrows [GAP-001](docs/gaps.md#gap-001))
   gated on a provider feature and was called unconditionally. A build with no
   HTTP provider now refuses a `[[model.provider]]` declaration by name instead of
   failing to compile.
-
-**Known**
-
-- A wedged contained run is not timed out ([GAP-024](docs/gaps.md#gap-024)).
 
 ## [0.3.0] — 2026-08-07
 

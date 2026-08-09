@@ -660,6 +660,17 @@ Two things follow from the shape rather than from care:
 `--out-dir` is written by the host afterwards, from the outputs that came back, so
 the agent cannot write outside its mounts even to deliver its own result.
 
+A run that stops responding is ended rather than waited on. The guest narrates as
+it works, so every line it sends resets the clock and the deadline only has to
+cover the gap between two steps — which is one tool call inside the box, and that
+is already bounded by `[mcp] timeout-seconds`. The ceiling is derived from it,
+and stated when you want to state it:
+
+```toml
+[run]
+timeout-seconds = 600   # or --timeout 600; --timeout 0 waits indefinitely
+```
+
 One limit worth knowing before you rely on it: a program whose agents want
 *different* boundaries is refused rather than run in the widest of them. The
 two-agent example is exactly that case — the coordinator may write and the

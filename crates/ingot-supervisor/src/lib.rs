@@ -48,5 +48,7 @@ pub mod host;
 pub mod protocol;
 
 pub use guest::{Guest, GuestApprovals, GuestError, GuestEvents, GuestProvider};
-pub use host::{serve, supervise, HostError, Outcome, Supervisor};
+pub use host::{
+    serve, supervise, Deadlines, GuestLines, HostError, Outcome, ReadLines, Supervisor,
+};
 pub use protocol::{Failed, Finished, RunConfig, WireError, PROTOCOL_VERSION};

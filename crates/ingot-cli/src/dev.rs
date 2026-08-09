@@ -144,6 +144,7 @@ fn cycle(target: Target, revision: u64, last_good: &mut Option<u64>, config: &De
             contained: false,
             supervised: false,
             image: None,
+            timeout_seconds: None,
         };
         match crate::run::execute(&compilation, &run) {
             Ok(crate::EXIT_OK) => eprintln!("[dev {revision}] run complete"),

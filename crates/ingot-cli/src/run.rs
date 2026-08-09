@@ -87,6 +87,10 @@ pub struct RunConfig {
     pub supervised: bool,
     /// The image a contained run happens inside.
     pub image: Option<String>,
+    /// How long a contained run may go without a word from inside, when the
+    /// operator or the manifest states a ceiling. Absent, it is derived from the
+    /// tool timeout the guest already honours.
+    pub timeout_seconds: Option<u64>,
 }
 
 impl RunConfig {

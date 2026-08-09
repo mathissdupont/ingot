@@ -52,7 +52,6 @@ to you*.
 | [GAP-020](#gap-020) | The boundary needs Linux containers | Refused | a second expression of the boundary |
 | [GAP-022](#gap-022) | Nothing has been released; you build from source | Absent | one tag |
 | [GAP-023](#gap-023) | A contained run cannot cross a boundary to a sub-agent | Refused | a box per agent, over the supervisor |
-| [GAP-024](#gap-024) | A wedged contained run is not timed out | Degraded | a deadline on the supervisor channel |
 | [GAP-025](#gap-025) | The product loop is fragmented across commands and raw output | Degraded | M11 |
 | [GAP-028](#gap-028) | A model-authored project has no offline test until one run is recorded | Degraded | cassette synthesis, or nothing |
 | [GAP-029](#gap-029) | An image cannot be verified by signature, so acquisition stays manual | Refused | a signature scheme and a trust root |
@@ -306,32 +305,6 @@ caller's write mount.
 
 ## Degraded
 
-### GAP-024
-
-**A wedged contained run is not timed out.**
-
-The supervisor reads the guest's output synchronously. A guest that neither
-answers nor exits — a tool server deadlocked inside the box, a container the
-runtime has lost track of — leaves the host blocked on a read.
-
-*How it shows up.* `ingot run --contained` hangs instead of failing. Ctrl-C ends
-it and the container is `--rm`, so nothing is left behind, but a run in CI with no
-outer timeout would sit there.
-
-*Why not yet.* A deadline on the channel is not the obvious `read_timeout`: the
-guest is legitimately silent for as long as a model call takes, and that call is
-being served by *us*, so the host cannot distinguish "waiting for my answer" from
-"wedged" without tracking which side owes the other a message. That state machine
-is worth writing carefully rather than quickly. `ingot-mcp`'s `ChildTransport`
-solves the easier version of this problem, where every wait has a fixed bound.
-
-*What closing it needs.* A deadline that applies only while the guest owes the
-host a message, plus a bounded wait for the first `config` call so a guest that
-never starts is reported quickly.
-
-*Recorded in.* [RFC-0005](../rfcs/0005-the-contained-run.md),
-`crates/ingot-supervisor/src/host.rs`.
-
 ### GAP-028
 
 **A model-authored project has no offline test until one run is recorded.**
@@ -525,6 +498,36 @@ remain.
 When a gap closes it moves here with the release that closed it, and its section
 stays where a link can find it. Identifiers are never reused: a link to GAP-007
 must keep meaning what it meant.
+
+### GAP-024
+
+**A wedged contained run is not timed out.**
+*Closed in Unreleased.*
+
+The host now reads the guest's output on its own thread and waits on a channel,
+so a wait can end. Two deadlines, because the two silences mean different things:
+**60s** from spawn to the first `config` call, for a guest that may not exist
+yet, and an idle deadline between two lines from a guest that has started. A
+wedged run is ended rather than waited on; the container is `--rm`, so killing it
+leaves nothing behind.
+
+The state machine the original entry worried about turned out to be simpler than
+feared. Initiative flows one way — the guest calls, the host answers — so the
+host is only ever waiting when the guest owes it a message. And the guest is not
+silent while it works: it narrates with `event` notifications, so **every line
+resets the idle deadline** and the bound only has to cover the gap between two
+steps rather than the length of a run.
+
+The longest legitimate gap is one tool call inside the box, which the guest's own
+`[mcp] timeout-seconds` already bounds — so the idle deadline is **derived** from
+it (`max(120s, timeout × 2 + 60s)`) rather than being a second number somebody
+has to keep in step. `[run] timeout-seconds` and `--timeout` override it;
+`--timeout 0` waits indefinitely, which is a deliberate choice rather than a
+default.
+
+*Recorded in.* [RFC-0005](../rfcs/0005-the-contained-run.md),
+[README](../README.md#putting-the-agent-in-the-box-too),
+`crates/ingot-supervisor/src/host.rs`.
 
 ### GAP-002
 

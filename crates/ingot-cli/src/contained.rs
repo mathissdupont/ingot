@@ -19,7 +19,7 @@ use ingot_runtime::{
     RunReport, ToolHost,
 };
 use ingot_sandbox::{Network, SandboxPlan, RUN_SUBJECT};
-use ingot_supervisor::host::{supervise, Outcome, Supervisor};
+use ingot_supervisor::host::{supervise, Deadlines, Outcome, Supervisor};
 use ingot_supervisor::protocol::RunConfig as WireConfig;
 use ingot_supervisor::{Guest, PROTOCOL_VERSION};
 use serde_json::Value;
@@ -108,9 +108,12 @@ pub fn execute(
         provider,
         approval,
     };
-    let outcome = supervise(&mut command, &mut supervisor, &mut |event| {
-        printer.print(event)
-    })
+    let outcome = supervise(
+        &mut command,
+        &mut supervisor,
+        &mut |event| printer.print(event),
+        deadlines(config),
+    )
     .map_err(|error| anyhow!("{error}"))?;
 
     match outcome {
@@ -133,6 +136,20 @@ pub fn execute(
             }
             Ok(super::EXIT_DIAGNOSTICS)
         }
+    }
+}
+
+/// How long the host waits for a guest that owes it a message.
+///
+/// An explicit ceiling — `--timeout` or `[run] timeout-seconds` — is taken as
+/// stated. Otherwise it is derived from `[mcp] timeout-seconds`: the longest a
+/// guest can legitimately be silent is one tool call inside the box, and that is
+/// the bound the guest already honours, so deriving it means nobody has to keep
+/// two numbers in step by hand.
+fn deadlines(config: &RunConfig) -> Deadlines {
+    match config.timeout_seconds {
+        Some(seconds) => Deadlines::explicit(seconds),
+        None => Deadlines::derived(config.mcp.timeout_seconds),
     }
 }
 

@@ -6,7 +6,8 @@
 - Implements: [ADR-0006](../docs/adr/0006-a-policy-enforcing-runner.md) stage 2,
   as amended by [ADR-0007](../docs/adr/0007-containing-the-run-is-not-blocked-on-a-second-backend.md)
 - Closes: the rest of the filesystem half of [GAP-001](../docs/gaps.md#gap-001)
-- Opens: [GAP-023](../docs/gaps.md#gap-023) (sub-agents), [GAP-024](../docs/gaps.md#gap-024) (image provenance)
+- Opens: [GAP-023](../docs/gaps.md#gap-023) (sub-agents across a boundary),
+  [GAP-024](../docs/gaps.md#gap-024) (a wedged run is not timed out; since closed)
 
 ## Problem
 

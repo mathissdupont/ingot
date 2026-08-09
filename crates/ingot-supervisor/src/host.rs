@@ -12,6 +12,8 @@
 use std::fmt;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
+use std::sync::mpsc::{sync_channel, Receiver, RecvTimeoutError};
+use std::time::Duration;
 
 use ingot_runtime::{ApprovalMode, ApprovalRequest, ModelProvider, RunEvent};
 
@@ -41,6 +43,11 @@ pub enum HostError {
     NoOutcome(String),
     /// The guest could not be started, or its streams failed.
     Io(String),
+    /// The guest owed the host a message and did not send one in time.
+    Wedged {
+        waited: Duration,
+        what: &'static str,
+    },
 }
 
 impl fmt::Display for HostError {
@@ -57,6 +64,175 @@ impl fmt::Display for HostError {
                 "the contained run ended without saying how it went\n  {detail}"
             ),
             HostError::Io(message) => write!(f, "{message}"),
+            HostError::Wedged { waited, what } => write!(
+                f,
+                "the contained run stopped responding
+                   waited {}s for {what}
+                   the run was ended; a container started with --rm leaves nothing behind
+                   raise the ceiling with `[run] timeout-seconds` or `--timeout`, or use                  `--timeout 0` to wait indefinitely",
+                waited.as_secs()
+            ),
+        }
+    }
+}
+
+/// How long the host waits for a guest that owes it a message.
+///
+/// Two deadlines rather than one, because the two silences mean different
+/// things. Before the first `config` the guest may not exist yet: an image is
+/// being loaded, a runtime is deciding whether it can. After it, the guest is
+/// working, and the longest it can legitimately work without saying anything is
+/// one tool call inside the box — which the guest's own MCP timeout already
+/// bounds.
+///
+/// Every line resets the idle deadline, including `event` notifications. That is
+/// what makes the bound safe: a guest running a long flow is not silent, it is
+/// narrating, so the deadline only has to cover the gap between two steps rather
+/// than the length of a run.
+///
+/// `None` disables a deadline. That is a deliberate operator choice
+/// (`--timeout 0`), not a default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Deadlines {
+    /// Spawn to the first `config` call.
+    pub start: Option<Duration>,
+    /// Between two lines from the guest.
+    pub idle: Option<Duration>,
+}
+
+impl Deadlines {
+    /// The wait before a guest that never starts is reported.
+    pub const START: Duration = Duration::from_secs(60);
+    /// The floor for the idle deadline, whatever the manifest says.
+    pub const MINIMUM_IDLE: Duration = Duration::from_secs(120);
+
+    /// Derive the idle deadline from the bound the guest's own tool host uses.
+    ///
+    /// A project that raises `[mcp] timeout-seconds` has said that its tools are
+    /// slow; the supervisor's ceiling has to clear that or it would cut off the
+    /// wait it was told to expect. Deriving it means nobody has to keep two
+    /// numbers in step by hand.
+    pub fn derived(mcp_timeout_seconds: u64) -> Deadlines {
+        let idle = Duration::from_secs(mcp_timeout_seconds.saturating_mul(2).saturating_add(60));
+        Deadlines {
+            start: Some(Deadlines::START),
+            idle: Some(idle.max(Deadlines::MINIMUM_IDLE)),
+        }
+    }
+
+    /// An explicit ceiling, as `[run] timeout-seconds` or `--timeout` states it.
+    /// Zero means no deadline at all.
+    pub fn explicit(seconds: u64) -> Deadlines {
+        if seconds == 0 {
+            return Deadlines {
+                start: None,
+                idle: None,
+            };
+        }
+        let ceiling = Duration::from_secs(seconds);
+        Deadlines {
+            start: Some(ceiling.min(Deadlines::START)),
+            idle: Some(ceiling),
+        }
+    }
+}
+
+impl Default for Deadlines {
+    fn default() -> Deadlines {
+        Deadlines::derived(0)
+    }
+}
+
+/// Where the host's next line comes from, and how long it may take to arrive.
+///
+/// A trait because a child's pipe has no read timeout on any platform this runs
+/// on, so the bounded implementation needs a thread and a channel — while the
+/// tests, which drive the protocol from a string, need neither.
+pub trait GuestLines {
+    /// The next line, or `None` when the guest's output ended.
+    ///
+    /// `within` is a ceiling on the wait, not a schedule: an implementation that
+    /// cannot be interrupted may ignore it, and one that can must report
+    /// [`HostError::Wedged`] when it expires.
+    fn next_line(&mut self, within: Option<Duration>) -> Result<Option<String>, HostError>;
+}
+
+/// Lines from anything already in memory. Deadlines do not apply: there is
+/// nothing to wait for.
+pub struct ReadLines<R: BufRead> {
+    lines: std::io::Lines<R>,
+}
+
+impl<R: BufRead> ReadLines<R> {
+    pub fn new(reader: R) -> ReadLines<R> {
+        ReadLines {
+            lines: reader.lines(),
+        }
+    }
+}
+
+impl<R: BufRead> GuestLines for ReadLines<R> {
+    fn next_line(&mut self, _within: Option<Duration>) -> Result<Option<String>, HostError> {
+        self.lines
+            .next()
+            .transpose()
+            .map_err(|error| HostError::Io(format!("reading the run's output: {error}")))
+    }
+}
+
+/// Lines from a child process, read on their own thread so a wait can end.
+struct ChannelLines {
+    lines: Receiver<Result<String, String>>,
+    /// What the host is waiting for, for the message a timeout produces.
+    what: &'static str,
+}
+
+impl ChannelLines {
+    fn spawn(reader: impl BufRead + Send + 'static) -> ChannelLines {
+        // Bounded, so a guest that narrates faster than the host reads cannot
+        // grow this without limit. The same bargain `ingot-mcp` strikes.
+        let (sender, lines) = sync_channel::<Result<String, String>>(64);
+        std::thread::spawn(move || {
+            for line in reader.lines() {
+                let message = line.map_err(|error| error.to_string());
+                let failed = message.is_err();
+                if sender.send(message).is_err() || failed {
+                    return;
+                }
+            }
+        });
+        ChannelLines {
+            lines,
+            what: "the run to start",
+        }
+    }
+}
+
+impl GuestLines for ChannelLines {
+    fn next_line(&mut self, within: Option<Duration>) -> Result<Option<String>, HostError> {
+        let received = match within {
+            Some(timeout) => self
+                .lines
+                .recv_timeout(timeout)
+                .map_err(|error| match error {
+                    RecvTimeoutError::Timeout => Some(HostError::Wedged {
+                        waited: timeout,
+                        what: self.what,
+                    }),
+                    // The reader thread ended, which means the guest's output did.
+                    RecvTimeoutError::Disconnected => None,
+                }),
+            None => self.lines.recv().map_err(|_| None),
+        };
+
+        match received {
+            Ok(Ok(line)) => {
+                self.what = "the next message";
+                Ok(Some(line))
+            }
+            Ok(Err(error)) => Err(HostError::Io(format!("reading the run's output: {error}"))),
+            Err(Some(wedged)) => Err(wedged),
+            Err(None) => Ok(None),
         }
     }
 }
@@ -91,16 +267,25 @@ impl fmt::Debug for Supervisor<'_> {
 /// testable in memory — the interesting half of this feature needs no container
 /// runtime to exercise.
 pub fn serve(
-    reader: impl BufRead,
+    lines: &mut dyn GuestLines,
     mut writer: impl Write,
     supervisor: &mut Supervisor<'_>,
     on_event: &mut dyn FnMut(&RunEvent),
+    deadlines: Deadlines,
 ) -> Result<Outcome, HostError> {
     let mut configured = false;
 
-    for line in reader.lines() {
-        let line =
-            line.map_err(|error| HostError::Io(format!("reading the run's output: {error}")))?;
+    loop {
+        // Before `config` the guest may not exist yet; after it, the guest is
+        // working and owes the host its next step.
+        let within = if configured {
+            deadlines.idle
+        } else {
+            deadlines.start
+        };
+        let Some(line) = lines.next_line(within)? else {
+            break;
+        };
         if line.trim().is_empty() {
             continue;
         }
@@ -285,6 +470,7 @@ pub fn supervise(
     command: &mut Command,
     supervisor: &mut Supervisor<'_>,
     on_event: &mut dyn FnMut(&RunEvent),
+    deadlines: Deadlines,
 ) -> Result<Outcome, HostError> {
     command
         .stdin(Stdio::piped())
@@ -324,7 +510,14 @@ pub fn supervise(
         kept
     });
 
-    let outcome = serve(BufReader::new(stdout), stdin, supervisor, on_event);
+    let mut lines = ChannelLines::spawn(BufReader::new(stdout));
+    let outcome = serve(&mut lines, stdin, supervisor, on_event, deadlines);
+
+    // A wedged guest will not exit on its own, and waiting for it is the bug.
+    // The container is `--rm`, so killing it leaves nothing behind.
+    if matches!(outcome, Err(HostError::Wedged { .. })) {
+        let _ = child.kill();
+    }
 
     let status = child.wait();
     let diagnostics = relay.join().unwrap_or_default();
@@ -439,13 +632,132 @@ mod tests {
             provider,
             approval,
         };
+        let mut lines = ReadLines::new(std::io::Cursor::new(script.into_bytes()));
         let outcome = serve(
-            std::io::Cursor::new(script.into_bytes()),
+            &mut lines,
             &mut written,
             &mut supervisor,
             &mut |event| events.push(event.clone()),
+            Deadlines::default(),
         );
         (outcome, String::from_utf8(written).unwrap(), events)
+    }
+
+    #[test]
+    fn a_derived_deadline_clears_the_bound_the_guest_already_honours() {
+        // The longest a guest can legitimately be silent is one tool call, and
+        // the guest's own MCP timeout bounds that. A ceiling below it would cut
+        // off exactly the wait the operator configured.
+        for tool_timeout in [1u64, 30, 300, 3_600] {
+            let deadlines = Deadlines::derived(tool_timeout);
+            let idle = deadlines.idle.expect("a derived deadline is bounded");
+            assert!(
+                idle > Duration::from_secs(tool_timeout),
+                "tool timeout {tool_timeout}s, idle {}s",
+                idle.as_secs()
+            );
+            assert!(idle >= Deadlines::MINIMUM_IDLE);
+        }
+        assert_eq!(Deadlines::derived(300).idle, Some(Duration::from_secs(660)));
+        assert_eq!(Deadlines::derived(0).start, Some(Deadlines::START));
+    }
+
+    #[test]
+    fn zero_means_wait_indefinitely_and_says_so_by_being_explicit() {
+        let none = Deadlines::explicit(0);
+        assert_eq!(none.start, None);
+        assert_eq!(none.idle, None);
+        // A stated ceiling is taken as stated, and never lengthens the wait for a
+        // guest that has not started.
+        let tight = Deadlines::explicit(10);
+        assert_eq!(tight.idle, Some(Duration::from_secs(10)));
+        assert_eq!(tight.start, Some(Duration::from_secs(10)));
+    }
+
+    #[test]
+    fn a_wedged_contained_run_is_ended_rather_than_waited_on() {
+        // A guest that says hello, is answered, and then never speaks again.
+        // Without a deadline this call does not return.
+        let (sender, lines) = sync_channel::<Result<String, String>>(4);
+        sender
+            .send(Ok(hello(1)))
+            .expect("the channel accepts a line");
+        let mut source = ChannelLines {
+            lines,
+            what: "the run to start",
+        };
+        // Keep the sender alive: a dropped one is an ended stream, which is a
+        // different failure and already reported.
+        let _hold = sender;
+
+        let mut provider = Fixed("unused");
+        let mut approval = ApprovalMode::Deny;
+        let mut written: Vec<u8> = Vec::new();
+        let mut supervisor = Supervisor {
+            config: config(),
+            provider: &mut provider,
+            approval: &mut approval,
+        };
+        let outcome = serve(
+            &mut source,
+            &mut written,
+            &mut supervisor,
+            &mut |_| {},
+            Deadlines {
+                start: Some(Duration::from_millis(50)),
+                idle: Some(Duration::from_millis(50)),
+            },
+        );
+
+        let Err(HostError::Wedged { what, .. }) = outcome else {
+            panic!("expected a wedged run, got {outcome:?}");
+        };
+        assert_eq!(
+            what, "the next message",
+            "the guest had already started, so the wait was for its next step"
+        );
+        let message = HostError::Wedged {
+            waited: Duration::from_secs(120),
+            what,
+        }
+        .to_string();
+        assert!(message.contains("stopped responding"), "{message}");
+        assert!(message.contains("waited 120s"), "{message}");
+        assert!(message.contains("--timeout"), "{message}");
+    }
+
+    #[test]
+    fn a_guest_that_never_starts_is_reported_against_the_start_deadline() {
+        let (sender, lines) = sync_channel::<Result<String, String>>(1);
+        let mut source = ChannelLines {
+            lines,
+            what: "the run to start",
+        };
+        let _hold = sender;
+
+        let mut provider = Fixed("unused");
+        let mut approval = ApprovalMode::Deny;
+        let mut written: Vec<u8> = Vec::new();
+        let mut supervisor = Supervisor {
+            config: config(),
+            provider: &mut provider,
+            approval: &mut approval,
+        };
+        let outcome = serve(
+            &mut source,
+            &mut written,
+            &mut supervisor,
+            &mut |_| {},
+            Deadlines {
+                start: Some(Duration::from_millis(50)),
+                idle: None,
+            },
+        );
+
+        let Err(HostError::Wedged { what, .. }) = outcome else {
+            panic!("expected a wedged run, got {outcome:?}");
+        };
+        assert_eq!(what, "the run to start");
     }
 
     fn hello(seq: u64) -> String {
@@ -725,7 +1037,13 @@ mod tests {
             provider: &mut provider,
             approval: &mut approval,
         };
-        let error = supervise(&mut command, &mut supervisor, &mut |_| {}).unwrap_err();
+        let error = supervise(
+            &mut command,
+            &mut supervisor,
+            &mut |_| {},
+            Deadlines::default(),
+        )
+        .unwrap_err();
         assert!(
             error.to_string().contains("ingot-no-such-program-exists"),
             "{error}"

@@ -84,13 +84,26 @@ pub struct Run {
     /// this remains the deliberate way to select a custom deployment image.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image: Option<String>,
+
+    /// How long a contained run may go without a word from inside, in seconds.
+    ///
+    /// Absent, the ceiling is derived from `[mcp] timeout-seconds`, because the
+    /// longest a guest can legitimately be silent is one tool call and that is
+    /// the bound it already has. Set this when a project knows better; `0`
+    /// waits indefinitely, which is a choice rather than a default.
+    #[serde(
+        default,
+        rename = "timeout-seconds",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub timeout_seconds: Option<u64>,
 }
 
 impl Run {
     /// Whether the section carries anything, so an untouched manifest has no
     /// empty `[run]` table.
     pub fn is_default(&self) -> bool {
-        self.workspace.is_none() && self.image.is_none()
+        self.workspace.is_none() && self.image.is_none() && self.timeout_seconds.is_none()
     }
 }
 
@@ -176,6 +189,13 @@ impl Target {
             Some(relative) => self.root.join(relative),
             None => self.root.clone(),
         }
+    }
+
+    /// The contained-run ceiling this project declares, if it declares one.
+    pub fn timeout_seconds(&self) -> Option<u64> {
+        self.manifest
+            .as_ref()
+            .and_then(|manifest| manifest.run.timeout_seconds)
     }
 
     /// The image a contained run uses. None without a manifest.

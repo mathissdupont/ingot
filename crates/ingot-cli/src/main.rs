@@ -453,6 +453,14 @@ struct RunArgs {
     /// Stop after this many steps, whatever the artifact's own budget allows.
     #[arg(long, default_value_t = 1000, value_name = "N")]
     max_steps: u32,
+
+    /// Seconds a contained run may go without a word from inside.
+    ///
+    /// Overrides `[run] timeout-seconds`. Absent, the ceiling is derived from
+    /// the tool timeout the guest already honours. `0` waits indefinitely, which
+    /// is a choice rather than a default.
+    #[arg(long, value_name = "SECONDS")]
+    timeout: Option<u64>,
 }
 
 #[derive(Args, Debug)]
@@ -1797,6 +1805,7 @@ fn run_run(args: &RunArgs, color: RenderColor) -> Result<u8> {
                 .clone()
                 .or_else(|| target.image())
                 .or_else(|| args.contained.then(image::reference_image)),
+            timeout_seconds: args.timeout.or_else(|| target.timeout_seconds()),
         },
     )
 }
