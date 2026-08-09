@@ -436,6 +436,91 @@ fn a_template_project_checks_builds_and_replays_without_a_key() {
 }
 
 #[test]
+fn model_assistance_leaves_a_project_that_works_without_the_model() {
+    let dir = TempDir::new("new-offline-project");
+    let project = dir.path().join("audience-brief");
+
+    let output = run(&[
+        "new",
+        "--out-dir",
+        &project.display().to_string(),
+        "summarise",
+        "documents",
+        "for",
+        "project",
+        "leads",
+    ]);
+    assert_eq!(code(&output), EXIT_OK, "{}", stderr(&output));
+    let out = stdout(&output);
+    assert!(
+        out.contains("Created compiler-verified agent project"),
+        "{out}"
+    );
+    assert!(out.contains("Template: document-workflow"), "{out}");
+
+    for path in [
+        "ingot.toml",
+        "main.ing",
+        "README.md",
+        ".gitignore",
+        "examples/document.txt",
+        "tests/cassettes/example.json",
+    ] {
+        assert!(project.join(path).is_file(), "missing {path}");
+    }
+
+    let manifest = std::fs::read_to_string(project.join("ingot.toml")).expect("manifest");
+    assert!(
+        manifest.contains("Authored from workflow: summarise documents for project leads"),
+        "{manifest}"
+    );
+    assert!(
+        !manifest.contains("api") && !manifest.contains("key") && !manifest.contains("token"),
+        "generated manifest must not contain credential-shaped fields:\n{manifest}"
+    );
+
+    for args in [&["check"][..], &["build"][..], &["test"][..]] {
+        let output = run_in(&project, args);
+        assert_eq!(
+            code(&output),
+            EXIT_OK,
+            "generated project command `{}` must work without a provider key:\n{}",
+            args.join(" "),
+            stderr(&output)
+        );
+    }
+
+    assert!(
+        project
+            .join("target/ingot/DocumentWorkflow.ir.json")
+            .is_file(),
+        "build must leave a normal IR artifact"
+    );
+
+    let replay = run_in(
+        &project,
+        &[
+            "run",
+            "--provider",
+            "replay",
+            "--cassette",
+            "tests/cassettes/example.json",
+            "--input",
+            "document=@examples/document.txt",
+            "--input",
+            "audience=project leads",
+        ],
+    );
+    assert_eq!(
+        code(&replay),
+        EXIT_OK,
+        "generated project replay must work without a provider key:\n{}",
+        stderr(&replay)
+    );
+    assert!(!stdout(&replay).trim().is_empty());
+}
+
+#[test]
 fn new_review_separates_policy_from_automatic_repair() {
     let dir = TempDir::new("new-review-policy");
     let previous = dir.path().join("previous.ing");

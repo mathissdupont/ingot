@@ -180,6 +180,7 @@ export CARGO_TARGET_DIR=/c/build/ingot
 | Command | Purpose |
 |---------|---------|
 | `ingot init <name> [--template brief\|document-workflow]` | create a tested starter project |
+| `ingot new [--out-dir dir] "workflow words..."` | create a compiler-verified project from a workflow description |
 | `ingot new --previous old.ing --candidate proposed.ing [--repair-candidate fixed.ing]` | review model-proposed source, run bounded compiler repair and separate policy requests |
 | `ingot check` | parse, type-check, validate policy and budgets |
 | `ingot fmt [--check]` | canonical formatting |

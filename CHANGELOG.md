@@ -20,6 +20,10 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
   `--repair-candidate PATH` supplies compiler-repair proposals, `--max-repairs`
   caps how many are consumed, and a failed ceiling leaves the last source plus
   compiler diagnostics visible for manual continuation.
+- `ingot new --out-dir DIR WORKFLOW...` now creates ordinary project files from
+  a workflow description using maintained offline templates, including source,
+  manifest, README, example inputs and replay cassettes that continue to
+  check, build and test without an authoring model.
 - Automatic repair is blocked when a candidate adds policy. The candidate can
   still explain the request, but policy acceptance remains an explicit operator
   decision.

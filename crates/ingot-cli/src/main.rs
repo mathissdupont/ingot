@@ -137,6 +137,14 @@ struct NewArgs {
     /// Workflow to author, e.g. "review pull requests for security issues".
     workflow: Vec<String>,
 
+    /// Directory to create. Defaults to a name derived from the workflow.
+    #[arg(long, value_name = "DIR", conflicts_with = "previous")]
+    out_dir: Option<PathBuf>,
+
+    /// Maintained fallback pattern to use before provider-backed authoring.
+    #[arg(long, value_enum, conflicts_with = "previous")]
+    template: Option<StarterTemplate>,
+
     /// Existing `.ing` source to compare against when reviewing a candidate.
     #[arg(long, value_name = "PATH", requires = "candidate")]
     previous: Option<PathBuf>,
@@ -489,38 +497,8 @@ fn main() -> ExitCode {
 
 fn run_init(args: &InitArgs) -> Result<u8> {
     let dir = &args.name;
-    let name = dir
-        .file_name()
-        .map(|name| name.to_string_lossy().to_string())
-        .filter(|name| name != ".")
-        .or_else(|| {
-            std::env::current_dir()
-                .ok()
-                .and_then(|dir| dir.file_name().map(|n| n.to_string_lossy().to_string()))
-        })
-        .unwrap_or_else(|| "agent".to_string());
-
-    if dir.join(MANIFEST_NAME).exists() {
-        bail!("{} already contains an {MANIFEST_NAME}", dir.display());
-    }
-    std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-
-    let mut manifest = Manifest::new(&name);
-    manifest.project.description = Some(args.template.description().to_string());
-    write_new(&dir.join(MANIFEST_NAME), &manifest.to_toml())?;
-    write_new(&dir.join("main.ing"), &starter_source(&name, args.template))?;
-    write_new(&dir.join(".gitignore"), "/target\n")?;
-    write_new(
-        &dir.join("README.md"),
-        &starter_readme(&name, args.template),
-    )?;
-    write_new(
-        &dir.join("tests/cassettes/example.json"),
-        &starter_cassette(&name, args.template).to_canonical_json(),
-    )?;
-    if let Some((path, contents)) = args.template.example_file() {
-        write_new(&dir.join(path), contents)?;
-    }
+    let name = project_name_for_dir(dir);
+    create_starter_project(dir, &name, args.template, args.template.description())?;
 
     println!(
         "Created agent project `{name}` from template `{}` in {}",
@@ -609,11 +587,32 @@ fn run_new(args: &NewArgs, color: RenderColor) -> Result<u8> {
             if workflow.trim().is_empty() {
                 bail!("describe the workflow to author, or pass --previous and --candidate to review a proposal");
             }
-            bail!(
-                "model-assisted generation is not wired yet for `{workflow}`\n  \
-                 use `ingot init` for maintained templates, or pass --previous and --candidate \
-                 to review a proposed source repair"
-            )
+            let template = args
+                .template
+                .unwrap_or_else(|| StarterTemplate::for_workflow(&workflow));
+            let dir = args
+                .out_dir
+                .clone()
+                .unwrap_or_else(|| PathBuf::from(project_slug(&workflow)));
+            let name = project_name_for_dir(&dir);
+            let description = format!("Authored from workflow: {workflow}");
+            create_starter_project(&dir, &name, template, &description)?;
+
+            println!(
+                "Created compiler-verified agent project `{name}` from workflow in {}",
+                dir.display()
+            );
+            println!("Workflow: {workflow}");
+            println!("Template: {}", template.as_str());
+            println!();
+            println!("Next steps:");
+            if dir != Path::new(".") {
+                println!("  cd {}", dir.display());
+            }
+            println!("  ingot check");
+            println!("  ingot build");
+            println!("  ingot test");
+            Ok(EXIT_OK)
         }
         _ => unreachable!("clap requires --previous and --candidate together"),
     }
@@ -636,6 +635,33 @@ fn run_image(args: &ImageArgs) -> Result<u8> {
     match &args.command {
         ImageCommand::Build(args) => image::build(args.source.as_deref()),
     }
+}
+
+fn create_starter_project(
+    dir: &Path,
+    name: &str,
+    template: StarterTemplate,
+    description: &str,
+) -> Result<()> {
+    if dir.join(MANIFEST_NAME).exists() {
+        bail!("{} already contains an {MANIFEST_NAME}", dir.display());
+    }
+    std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+
+    let mut manifest = Manifest::new(name);
+    manifest.project.description = Some(description.to_string());
+    write_new(&dir.join(MANIFEST_NAME), &manifest.to_toml())?;
+    write_new(&dir.join("main.ing"), &starter_source(name, template))?;
+    write_new(&dir.join(".gitignore"), "/target\n")?;
+    write_new(&dir.join("README.md"), &starter_readme(name, template))?;
+    write_new(
+        &dir.join("tests/cassettes/example.json"),
+        &starter_cassette(name, template).to_canonical_json(),
+    )?;
+    if let Some((path, contents)) = template.example_file() {
+        write_new(&dir.join(path), contents)?;
+    }
+    Ok(())
 }
 
 fn write_new(path: &Path, contents: &str) -> Result<()> {
@@ -682,6 +708,54 @@ impl StarterTemplate {
             StarterTemplate::Brief => None,
             StarterTemplate::DocumentWorkflow => Some(("examples/document.txt", EXAMPLE_DOCUMENT)),
         }
+    }
+
+    fn for_workflow(workflow: &str) -> StarterTemplate {
+        let lowered = workflow.to_ascii_lowercase();
+        if [
+            "document",
+            "documents",
+            "doc",
+            "docs",
+            "file",
+            "files",
+            "audience",
+            "summarise",
+            "summarize",
+        ]
+        .iter()
+        .any(|needle| lowered.contains(needle))
+        {
+            StarterTemplate::DocumentWorkflow
+        } else {
+            StarterTemplate::Brief
+        }
+    }
+}
+
+fn project_name_for_dir(dir: &Path) -> String {
+    dir.file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .filter(|name| name != ".")
+        .or_else(|| {
+            std::env::current_dir()
+                .ok()
+                .and_then(|dir| dir.file_name().map(|n| n.to_string_lossy().to_string()))
+        })
+        .unwrap_or_else(|| "agent".to_string())
+}
+
+fn project_slug(workflow: &str) -> String {
+    let words: Vec<String> = workflow
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .take(5)
+        .map(|word| word.to_ascii_lowercase())
+        .collect();
+    if words.is_empty() {
+        "authored-agent".to_string()
+    } else {
+        words.join("-")
     }
 }
 
