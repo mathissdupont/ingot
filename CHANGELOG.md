@@ -16,6 +16,10 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
   `ingot new --previous OLD.ing --candidate PROPOSED.ing` compares a proposed
   source repair against the previous source and separates new policy rules from
   ordinary compiler repair.
+- Added a bounded offline repair loop for reviewed candidates:
+  `--repair-candidate PATH` supplies compiler-repair proposals, `--max-repairs`
+  caps how many are consumed, and a failed ceiling leaves the last source plus
+  compiler diagnostics visible for manual continuation.
 - Automatic repair is blocked when a candidate adds policy. The candidate can
   still explain the request, but policy acceptance remains an explicit operator
   decision.

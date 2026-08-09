@@ -14,7 +14,7 @@ use std::process::ExitCode;
 
 use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use ingot_compiler::{compile_path, format_source, Compilation};
+use ingot_compiler::{compile_path, compile_source, format_source, Compilation};
 use ingot_diagnostics::{codes, ColorChoice as RenderColor};
 
 mod authoring;
@@ -144,6 +144,14 @@ struct NewArgs {
     /// Model-proposed `.ing` source to review before any repair loop applies it.
     #[arg(long, value_name = "PATH", requires = "previous")]
     candidate: Option<PathBuf>,
+
+    /// Follow-up `.ing` source proposals to try after compiler diagnostics.
+    #[arg(long = "repair-candidate", value_name = "PATH", requires = "candidate")]
+    repair_candidates: Vec<PathBuf>,
+
+    /// Maximum number of repair proposals the authoring loop may consume.
+    #[arg(long, value_name = "N", default_value_t = 2)]
+    max_repairs: usize,
 }
 
 #[derive(Args, Debug)]
@@ -452,7 +460,7 @@ fn main() -> ExitCode {
 
     let result = match &cli.command {
         Command::Init(args) => run_init(args),
-        Command::New(args) => run_new(args),
+        Command::New(args) => run_new(args, color),
         Command::Check(args) => run_check(args, color),
         Command::Fmt(args) => run_fmt(args, color),
         Command::Build(args) => run_build(args, color),
@@ -530,34 +538,73 @@ fn run_init(args: &InitArgs) -> Result<u8> {
     Ok(EXIT_OK)
 }
 
-fn run_new(args: &NewArgs) -> Result<u8> {
+fn run_new(args: &NewArgs, color: RenderColor) -> Result<u8> {
     match (&args.previous, &args.candidate) {
         (Some(previous), Some(candidate)) => {
             let previous_source = std::fs::read_to_string(previous)
                 .with_context(|| format!("reading {}", previous.display()))?;
             let candidate_source = std::fs::read_to_string(candidate)
                 .with_context(|| format!("reading {}", candidate.display()))?;
-            let review = authoring::review_candidate(&previous_source, &candidate_source);
+            let repair_sources = args
+                .repair_candidates
+                .iter()
+                .map(|path| {
+                    std::fs::read_to_string(path)
+                        .with_context(|| format!("reading {}", path.display()))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let repair = authoring::repair_with_candidates(
+                &previous_source,
+                &candidate_source,
+                &repair_sources,
+                args.max_repairs,
+            );
 
-            if review.automatic_repair_source().is_some() {
-                println!("candidate source contains no new policy proposal");
-                println!("automatic compiler repair may continue with this source");
-                return Ok(EXIT_OK);
+            match repair.outcome() {
+                authoring::RepairOutcome::Compiled { source } => {
+                    println!("candidate source contains no new policy proposal");
+                    println!(
+                        "compiler-verified authoring completed after {} attempt(s)",
+                        repair.attempts().len()
+                    );
+                    print_authoring_attempts(&repair);
+                    println!("accepted source:");
+                    println!("{source}");
+                    Ok(EXIT_OK)
+                }
+                authoring::RepairOutcome::PolicyProposals { proposals } => {
+                    println!("candidate source requests policy changes");
+                    println!("these are not part of automatic compiler repair:");
+                    for proposal in proposals {
+                        println!(
+                            "  agent {}: {} {}",
+                            proposal.agent, proposal.subject, proposal.action
+                        );
+                    }
+                    println!();
+                    println!("review and accept policy changes explicitly before continuing");
+                    Ok(EXIT_DIAGNOSTICS)
+                }
+                authoring::RepairOutcome::RetryCeilingReached => {
+                    print_authoring_attempts(&repair);
+                    println!(
+                        "compiler repair reached retry ceiling after {} attempt(s)",
+                        repair.attempts().len()
+                    );
+                    if let Some(last) = repair.attempts().last() {
+                        println!("last source:");
+                        println!("{}", last.source);
+                        let compilation = compile_source("candidate.ing", &last.source);
+                        eprint!("{}", compilation.render_diagnostics(color));
+                    }
+                    Ok(EXIT_DIAGNOSTICS)
+                }
             }
-
-            println!("candidate source requests policy changes");
-            println!("these are not part of automatic compiler repair:");
-            for proposal in review.policy_proposals() {
-                println!(
-                    "  agent {}: {} {}",
-                    proposal.agent, proposal.subject, proposal.action
-                );
-            }
-            println!();
-            println!("review and accept policy changes explicitly before continuing");
-            Ok(EXIT_DIAGNOSTICS)
         }
         (None, None) => {
+            if !args.repair_candidates.is_empty() {
+                bail!("--repair-candidate requires --previous and --candidate");
+            }
             let workflow = args.workflow.join(" ");
             if workflow.trim().is_empty() {
                 bail!("describe the workflow to author, or pass --previous and --candidate to review a proposal");
@@ -569,6 +616,19 @@ fn run_new(args: &NewArgs) -> Result<u8> {
             )
         }
         _ => unreachable!("clap requires --previous and --candidate together"),
+    }
+}
+
+fn print_authoring_attempts(repair: &authoring::RepairLoop) {
+    for attempt in repair.attempts() {
+        if attempt.has_errors() {
+            println!("attempt {} failed compiler verification", attempt.number);
+            for diagnostic in &attempt.diagnostics {
+                println!("  {}: {}", diagnostic.code, diagnostic.message);
+            }
+        } else {
+            println!("attempt {} passed compiler verification", attempt.number);
+        }
     }
 }
 

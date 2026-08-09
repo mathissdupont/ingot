@@ -7,6 +7,7 @@
 use std::collections::BTreeSet;
 
 use ingot_compiler::compile_source;
+use ingot_diagnostics::Severity;
 use ingot_syntax::{PolicyAction, Program};
 
 /// A reviewed candidate source revision.
@@ -21,6 +22,7 @@ impl AuthoringReview {
     ///
     /// Policy proposals force an operator-visible stop. The authoring model may
     /// explain them, but it cannot silently fold them into its own repair.
+    #[cfg(test)]
     pub(crate) fn automatic_repair_source(&self) -> Option<&str> {
         if self.policy_proposals.is_empty() {
             Some(&self.candidate_source)
@@ -42,6 +44,62 @@ pub(crate) struct PolicyProposal {
     pub(crate) action: String,
 }
 
+/// Result of a bounded compiler-verified authoring repair loop.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RepairLoop {
+    attempts: Vec<RepairAttempt>,
+    outcome: RepairOutcome,
+}
+
+impl RepairLoop {
+    pub(crate) fn attempts(&self) -> &[RepairAttempt] {
+        &self.attempts
+    }
+
+    pub(crate) fn outcome(&self) -> &RepairOutcome {
+        &self.outcome
+    }
+
+    #[cfg(test)]
+    pub(crate) fn accepted_source(&self) -> Option<&str> {
+        match &self.outcome {
+            RepairOutcome::Compiled { source } => Some(source),
+            RepairOutcome::PolicyProposals { .. } | RepairOutcome::RetryCeilingReached => None,
+        }
+    }
+}
+
+/// One source revision checked by the repair loop.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RepairAttempt {
+    pub(crate) number: usize,
+    pub(crate) source: String,
+    pub(crate) diagnostics: Vec<AuthoringDiagnostic>,
+}
+
+impl RepairAttempt {
+    pub(crate) fn has_errors(&self) -> bool {
+        self.diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == Severity::Error)
+    }
+}
+
+/// A compact, model-safe diagnostic summary for repair prompts and logs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AuthoringDiagnostic {
+    pub(crate) code: &'static str,
+    pub(crate) severity: Severity,
+    pub(crate) message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum RepairOutcome {
+    Compiled { source: String },
+    PolicyProposals { proposals: Vec<PolicyProposal> },
+    RetryCeilingReached,
+}
+
 /// Compare a model-proposed source revision against the previous source.
 pub(crate) fn review_candidate(previous_source: &str, candidate_source: &str) -> AuthoringReview {
     let previous = compile_source("previous.ing", previous_source);
@@ -61,6 +119,66 @@ pub(crate) fn review_candidate(previous_source: &str, candidate_source: &str) ->
     AuthoringReview {
         candidate_source: candidate_source.to_string(),
         policy_proposals,
+    }
+}
+
+/// Run compiler-verified repair attempts without allowing automatic policy widening.
+///
+/// `initial_source` is the model's first proposal. `repair_sources` are the
+/// follow-up proposals a provider would normally generate after seeing
+/// diagnostics. The loop is deliberately bounded and deterministic: it never
+/// invents another candidate after `max_repairs` have been consumed.
+pub(crate) fn repair_with_candidates(
+    previous_source: &str,
+    initial_source: &str,
+    repair_sources: &[String],
+    max_repairs: usize,
+) -> RepairLoop {
+    let mut attempts = Vec::new();
+    let sources = std::iter::once(initial_source)
+        .chain(repair_sources.iter().take(max_repairs).map(String::as_str));
+
+    for (index, source) in sources.enumerate() {
+        let review = review_candidate(previous_source, source);
+        if !review.policy_proposals().is_empty() {
+            return RepairLoop {
+                attempts,
+                outcome: RepairOutcome::PolicyProposals {
+                    proposals: review.policy_proposals().to_vec(),
+                },
+            };
+        }
+
+        let compilation = compile_source("candidate.ing", source);
+        let diagnostics: Vec<AuthoringDiagnostic> = compilation
+            .diagnostics
+            .iter()
+            .map(|diagnostic| AuthoringDiagnostic {
+                code: diagnostic.code,
+                severity: diagnostic.severity,
+                message: diagnostic.message.clone(),
+            })
+            .collect();
+        let has_errors = compilation.has_errors();
+        attempts.push(RepairAttempt {
+            number: index + 1,
+            source: source.to_string(),
+            diagnostics,
+        });
+
+        if !has_errors {
+            return RepairLoop {
+                attempts,
+                outcome: RepairOutcome::Compiled {
+                    source: source.to_string(),
+                },
+            };
+        }
+    }
+
+    RepairLoop {
+        attempts,
+        outcome: RepairOutcome::RetryCeilingReached,
     }
 }
 
@@ -183,5 +301,40 @@ agent Research(topic: string) -> report<markdown> {
 
         assert!(review.policy_proposals().is_empty());
         assert_eq!(review.automatic_repair_source(), Some(candidate.as_str()));
+    }
+
+    #[test]
+    fn bounded_repair_stops_at_the_first_compiling_candidate() {
+        let broken = PREVIOUS.replace(
+            "emit report = ask<markdown>(\"draft ${topic}\")",
+            "emit report = missing",
+        );
+        let fixed = PREVIOUS.replace("draft ${topic}", "repaired draft ${topic}");
+
+        let repair = repair_with_candidates(PREVIOUS, &broken, std::slice::from_ref(&fixed), 1);
+
+        assert_eq!(repair.accepted_source(), Some(fixed.as_str()));
+        assert_eq!(repair.attempts().len(), 2);
+        assert!(repair.attempts()[0].has_errors());
+        assert!(!repair.attempts()[1].has_errors());
+    }
+
+    #[test]
+    fn bounded_repair_keeps_source_and_structured_diagnostics_at_the_ceiling() {
+        let broken = PREVIOUS.replace(
+            "emit report = ask<markdown>(\"draft ${topic}\")",
+            "emit report = missing",
+        );
+
+        let repair = repair_with_candidates(PREVIOUS, &broken, &[], 0);
+
+        assert!(repair.accepted_source().is_none());
+        assert_eq!(repair.outcome(), &RepairOutcome::RetryCeilingReached);
+        assert_eq!(repair.attempts().len(), 1);
+        assert_eq!(repair.attempts()[0].source, broken);
+        assert!(repair.attempts()[0]
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == ingot_diagnostics::codes::UNRESOLVED_NAME));
     }
 }

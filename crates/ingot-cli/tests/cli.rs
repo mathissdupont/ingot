@@ -506,6 +506,109 @@ agent Research(topic: string) -> report<markdown> {
 }
 
 #[test]
+fn new_repair_loop_stops_at_the_first_compiling_candidate() {
+    let dir = TempDir::new("new-repair-success");
+    let previous = dir.path().join("previous.ing");
+    let candidate = dir.path().join("candidate.ing");
+    let repaired = dir.path().join("repaired.ing");
+    let source = r#"
+language 0.1
+package demo
+
+agent Brief(topic: string) -> report<markdown> {
+  flow {
+    emit report = ask<markdown>("draft ${topic}")
+  }
+}
+"#;
+    std::fs::write(&previous, source).expect("writing previous source");
+    std::fs::write(
+        &candidate,
+        source.replace("ask<markdown>(\"draft ${topic}\")", "missing"),
+    )
+    .expect("writing broken candidate source");
+    std::fs::write(
+        &repaired,
+        source.replace("draft ${topic}", "repaired draft ${topic}"),
+    )
+    .expect("writing repaired source");
+
+    let output = run(&[
+        "new",
+        "--previous",
+        &previous.display().to_string(),
+        "--candidate",
+        &candidate.display().to_string(),
+        "--repair-candidate",
+        &repaired.display().to_string(),
+        "--max-repairs",
+        "1",
+        "draft",
+        "a",
+        "brief",
+    ]);
+
+    assert_eq!(code(&output), EXIT_OK, "{}", stderr(&output));
+    let out = stdout(&output);
+    assert!(
+        out.contains("compiler-verified authoring completed after 2 attempt(s)"),
+        "{out}"
+    );
+    assert!(
+        out.contains("attempt 1 failed compiler verification"),
+        "{out}"
+    );
+    assert!(
+        out.contains("attempt 2 passed compiler verification"),
+        "{out}"
+    );
+    assert!(out.contains("repaired draft ${topic}"), "{out}");
+}
+
+#[test]
+fn new_repair_loop_stops_with_source_and_diagnostics_at_the_ceiling() {
+    let dir = TempDir::new("new-repair-ceiling");
+    let previous = dir.path().join("previous.ing");
+    let candidate = dir.path().join("candidate.ing");
+    let source = r#"
+language 0.1
+package demo
+
+agent Brief(topic: string) -> report<markdown> {
+  flow {
+    emit report = ask<markdown>("draft ${topic}")
+  }
+}
+"#;
+    let broken = source.replace("ask<markdown>(\"draft ${topic}\")", "missing");
+    std::fs::write(&previous, source).expect("writing previous source");
+    std::fs::write(&candidate, &broken).expect("writing broken candidate source");
+
+    let output = run(&[
+        "new",
+        "--previous",
+        &previous.display().to_string(),
+        "--candidate",
+        &candidate.display().to_string(),
+        "--max-repairs",
+        "0",
+        "draft",
+        "a",
+        "brief",
+    ]);
+
+    assert_eq!(code(&output), EXIT_DIAGNOSTICS);
+    let out = stdout(&output);
+    assert!(
+        out.contains("compiler repair reached retry ceiling after 1 attempt(s)"),
+        "{out}"
+    );
+    assert!(out.contains("last source:"), "{out}");
+    assert!(out.contains("emit report = missing"), "{out}");
+    assert!(stderr(&output).contains("ING2001"), "{}", stderr(&output));
+}
+
+#[test]
 fn init_refuses_to_overwrite_an_existing_project() {
     let dir = TempDir::new("init-twice");
     let project = dir.path().join("agent");

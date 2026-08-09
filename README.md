@@ -180,7 +180,7 @@ export CARGO_TARGET_DIR=/c/build/ingot
 | Command | Purpose |
 |---------|---------|
 | `ingot init <name> [--template brief\|document-workflow]` | create a tested starter project |
-| `ingot new --previous old.ing --candidate proposed.ing` | review model-proposed source and separate policy requests from repairs |
+| `ingot new --previous old.ing --candidate proposed.ing [--repair-candidate fixed.ing]` | review model-proposed source, run bounded compiler repair and separate policy requests |
 | `ingot check` | parse, type-check, validate policy and budgets |
 | `ingot fmt [--check]` | canonical formatting |
 | `ingot build [--target ir\|python] [--out-dir]` | compile to Agent IR or self-contained Python 3 |
