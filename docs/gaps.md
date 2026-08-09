@@ -430,8 +430,9 @@ say so.
 *Draft fixes.* Optionals and unions are specified in
 [RFC-0009](../rfcs/0009-language-v0.2-optionals-and-unions.md). Pure helper
 functions are specified in
-[RFC-0010](../rfcs/0010-language-v0.2-pure-helper-functions.md). Generics
-remain open.
+[RFC-0010](../rfcs/0010-language-v0.2-pure-helper-functions.md). Generics are
+deferred until repeated real source demonstrates the need in
+[RFC-0011](../rfcs/0011-language-v0.2-generics-decision.md).
 
 *Recorded in.* [Language 0.1 §4 and §9](../specs/language/v0.1.md).
 

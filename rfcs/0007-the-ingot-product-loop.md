@@ -308,6 +308,8 @@ Tracking issue: [#7](https://github.com/mathissdupont/ingot/issues/7).
   ([RFC-0009](0009-language-v0.2-optionals-and-unions.md)).
 - Specify pure helper functions separately from agent calls
   ([RFC-0010](0010-language-v0.2-pure-helper-functions.md)).
+- Defer generics until repeated real source demonstrates the same reusable
+  pattern ([RFC-0011](0011-language-v0.2-generics-decision.md)).
 - Require lowering and both-backend portability reports for every addition.
 
 **Done when:** shared types, tool declarations and pure transformations no
