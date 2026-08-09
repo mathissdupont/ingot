@@ -148,6 +148,52 @@ pub fn inspect(
     })
 }
 
+/// The tools this project routes, keyed by the name Ingot source declares them
+/// under.
+///
+/// Model-assisted authoring writes against these or against nothing, so the map
+/// is what discovery reported, renamed through the manifest's aliases: together
+/// those are exactly the names a `tool` declaration can be routed to.
+///
+/// A server that will not start is an error rather than an empty map. Authoring
+/// against "this project has no tools" when it has several would produce a
+/// plausible file that quietly ignores them.
+pub fn routed(config: &ToolsConfig) -> Result<BTreeMap<String, ToolDescriptor>> {
+    if config.mcp.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+
+    let mut host = McpToolHost::connect_all(&config.mcp, &config.root)
+        .map_err(|error| anyhow::anyhow!("{error}"))?;
+    let inventory = host.inventory();
+    host.close();
+
+    let mut routed = BTreeMap::new();
+    for (server, _, tools) in inventory {
+        let aliases: BTreeMap<&str, &str> = config
+            .mcp
+            .servers
+            .iter()
+            .find(|configured| configured.name == server)
+            .map(|configured| {
+                configured
+                    .tools
+                    .iter()
+                    .map(|(local, remote)| (remote.as_str(), local.as_str()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        for descriptor in tools {
+            let name = aliases
+                .get(descriptor.name.as_str())
+                .map(|alias| (*alias).to_string())
+                .unwrap_or_else(|| descriptor.name.clone());
+            routed.insert(name, descriptor);
+        }
+    }
+    Ok(routed)
+}
+
 fn build_report(compilation: &Compilation, config: &ToolsConfig) -> PreflightReport {
     let declared = declared_tools(compilation);
     let required_environment = sorted_unique(

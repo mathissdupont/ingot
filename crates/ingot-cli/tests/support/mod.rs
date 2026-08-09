@@ -239,3 +239,39 @@ pub fn fs_server() -> PathBuf {
 pub fn toml_string(value: &str) -> String {
     format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
 }
+
+/// A recorded authoring session: one reply per proposal, in order.
+///
+/// Authoring replays leniently, so a fixture stays valid when the authoring
+/// prompt changes. What it pins is the source a model proposed — which the
+/// compiler and the routing table then judge — not the prompt that asked.
+pub fn authoring_cassette(dir: &Path, name: &str, replies: &[&str]) -> PathBuf {
+    let interactions: Vec<Value> = replies
+        .iter()
+        .enumerate()
+        .map(|(index, reply)| {
+            json!({
+                "index": index,
+                "node": format!("authoring.{index}"),
+                "requestDigest": "0".repeat(64),
+                "responseType": "text",
+                "value": format!("```ingot\n{reply}```"),
+                "usage": { "inputTokens": 800, "outputTokens": 200 },
+                "model": "test/authoring",
+            })
+        })
+        .collect();
+    let cassette = json!({
+        "cassetteVersion": "0.1",
+        "agent": "ingot.authoring",
+        "interactions": interactions,
+    });
+
+    let path = dir.join(name);
+    std::fs::write(
+        &path,
+        serde_json::to_string_pretty(&cassette).expect("a cassette is serializable"),
+    )
+    .expect("writing the authoring cassette");
+    path
+}

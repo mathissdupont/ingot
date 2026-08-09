@@ -11,8 +11,8 @@ mod support;
 use std::path::Path;
 
 use support::{
-    code, fs_server, repo_root, run, run_env, stderr, stdout, stub_provider, text_reply,
-    toml_string, TempDir, EXIT_DIAGNOSTICS, EXIT_OK,
+    authoring_cassette, code, fs_server, repo_root, run, run_env, stderr, stdout, stub_provider,
+    text_reply, toml_string, TempDir, EXIT_DIAGNOSTICS, EXIT_OK,
 };
 
 const DIGEST_SOURCE: &str = include_str!("../../../examples/repo-digest/main.ing");
@@ -528,5 +528,76 @@ fn a_program_without_tools_needs_no_servers() {
         stdout(&output).contains("declares no tools"),
         "{}",
         stdout(&output)
+    );
+}
+
+#[test]
+fn model_assisted_authoring_writes_against_routed_tool_schemas() {
+    let project = Project::new("authoring-routed-tools", DIGEST_SOURCE, true);
+
+    // A proposal that keeps the tools the server actually publishes is a normal
+    // diff: discovery ran, and every declaration is routed.
+    let kept = DIGEST_SOURCE.replace(
+        "Write a digest of this directory for someone seeing it for the first time.",
+        "Write a short digest of this directory.",
+    );
+    let cassette = authoring_cassette(project.workspace(), "kept.json", &[&kept]);
+    let output = run(
+        &[
+            "new",
+            "--project",
+            &project.path(),
+            "--provider",
+            "replay",
+            "--cassette",
+            &cassette.display().to_string(),
+            "--max-repairs",
+            "0",
+            "shorten",
+            "the",
+            "digest",
+        ],
+        None,
+    );
+    assert_eq!(code(&output), EXIT_OK, "{}", stderr(&output));
+    assert!(stdout(&output).contains("@@ "), "{}", stdout(&output));
+
+    // Inventing one the server does not publish is refused by name — even
+    // though it compiles, needs no capability the policy has not already
+    // granted, and would only fail once someone ran it.
+    let invented = DIGEST_SOURCE.replace(
+        "/// Summarises a directory",
+        "/// Removes a file from the workspace.\n\
+         tool fs.delete_file(path: string) -> bool !filesystem_write\n\n\
+         /// Summarises a directory",
+    );
+    let cassette = authoring_cassette(project.workspace(), "invented.json", &[&invented]);
+    let output = run(
+        &[
+            "new",
+            "--project",
+            &project.path(),
+            "--provider",
+            "replay",
+            "--cassette",
+            &cassette.display().to_string(),
+            "--max-repairs",
+            "0",
+            "allow",
+            "deleting",
+            "a",
+            "file",
+        ],
+        None,
+    );
+    assert_eq!(code(&output), EXIT_DIAGNOSTICS, "{}", stderr(&output));
+    let out = stdout(&output);
+    assert!(out.contains("AUTHORING_UNROUTED_TOOL"), "{out}");
+    assert!(out.contains("fs.delete_file"), "{out}");
+    assert!(out.contains("run `ingot tools` to see them"), "{out}");
+    assert_eq!(
+        std::fs::read_to_string(project.workspace().join("main.ing")).expect("source"),
+        DIGEST_SOURCE,
+        "a refused proposal must leave the project alone"
     );
 }

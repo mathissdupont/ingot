@@ -27,6 +27,35 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
 - Automatic repair is blocked when a candidate adds policy. The candidate can
   still explain the request, but policy acceptance remains an explicit operator
   decision.
+- `ingot new --provider auto|anthropic|openai|replay` hands authoring to a real
+  model provider. The model writes source, the compiler verifies it, and the
+  diagnostics of a failed attempt become the next prompt. `--cassette` replays a
+  recorded authoring session and `--record` writes one — including a session
+  that ended in a refusal. Without `--provider`, nothing reaches a model and the
+  maintained templates are still what `ingot new` writes.
+- `ingot new --project DIR WORKFLOW...` proposes a change to an existing project
+  as a unified diff of its entry source and writes nothing. `--apply` is the
+  separate step that writes it. The candidate review path prints a diff too,
+  rather than a wall of accepted source.
+- Policy comparison is now per grant rather than per rule: only an `allow` that
+  widens what the previous source granted is a proposal. Narrowing — a removed
+  host, a `deny`, a `require approval` — asks for nothing and is no longer
+  listed. Replacing `allow ["host"]` with a bare `allow` is a proposal, because
+  it grants more without adding a string. `--accept-policy` accepts the listed
+  grants in a second, explicit run and still prints every grant it carried.
+- Authored source is checked against the tools the project actually routes,
+  discovered through the same MCP path `ingot tools` uses. A `tool` declaration
+  nothing can serve is a repairable diagnostic rather than a file that compiles
+  and fails at run time.
+- A credential-shaped value in proposed source ends the authoring loop: nothing
+  is written and the source is not sent back to the model. The report names the
+  shape and the line, never the value. The same scan runs on the workflow
+  description before it can reach a prompt, a manifest or a terminal history.
+- A model-authored project is deliberately given no cassette
+  ([GAP-028](docs/gaps.md#gap-028)). A recorded answer no model produced would be
+  a test that proves nothing, so the generated README carries the one
+  `ingot run --record` command that creates a real one, with example input files
+  written for the agent's prose inputs.
 
 **Agent IR 0.2 source provenance**
 ([RFC-0007](rfcs/0007-the-ingot-product-loop.md),

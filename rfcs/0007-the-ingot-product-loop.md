@@ -364,18 +364,19 @@ M11 product loop foundation
   → IR 0.2 source spans
 ```
 
+M10 has since landed on top of that foundation rather than in place of it: model
+assistance writes the same ordinary source the loop was already built around.
 The remaining proposed order is:
 
 ```text
-M10 optional model assistance
-  → M6 packaging and distribution
+M6 packaging and distribution
   → M8 third-party backend conformance
 ```
 
 P1–P5 established the path before broadening the language or adding a generator.
 P6 and P7 made direct `.ing` authoring pleasant and reusable. The source-span
-follow-up now gives traces and future authoring repairs portable provenance
-before P9 accelerates the workflow with a model. P10 packages something people
+follow-up gave traces and authoring repairs portable provenance before P9
+accelerated the workflow with a model. P10 packages something people
 have already created, tested and run.
 
 ## Security and policy impact
@@ -464,6 +465,6 @@ turning a deliberately small agent language into a general-purpose one by guess.
 - [x] `ingot_tools_proposes_typed_source_without_writing_project_files`
 - [x] `ingot_tools_proposes_an_unambiguous_manifest_alias`
 - [ ] `editor_and_cli_diagnostics_are_identical`
-- [ ] `an_authoring_repair_cannot_accept_its_own_policy_widening`
-- [ ] `model_assistance_leaves_a_project_that_works_without_the_model`
+- [x] `an_authoring_repair_cannot_accept_its_own_policy_widening`
+- [x] `model_assistance_leaves_a_project_that_works_without_the_model`
 - [ ] `the_packaged_ir_is_the_same_bytes_that_the_tested_build_produced`

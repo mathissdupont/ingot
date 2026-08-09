@@ -26,8 +26,9 @@ agent process itself. The editor-facing authoring stack is usable through the
 shared language service, `ingot-lsp`, and a reference VS Code extension.
 Language 0.2 adds project-local imports, optional/union type expressions and
 expression-only pure helper functions; generics are deliberately deferred until
-real source shows the need. OCI packaging and model-assisted authoring remain
-planned. See [the roadmap](#roadmap).
+real source shows the need. `ingot new` can hand authoring to a model and have
+the compiler verify what comes back, on a new project or as a diff against an
+existing one. OCI packaging remains planned. See [the roadmap](#roadmap).
 
 ---
 
@@ -181,6 +182,8 @@ export CARGO_TARGET_DIR=/c/build/ingot
 |---------|---------|
 | `ingot init <name> [--template brief\|document-workflow]` | create a tested starter project |
 | `ingot new [--out-dir dir] "workflow words..."` | create a compiler-verified project from a workflow description |
+| `ingot new --provider auto "workflow words..."` | the same, with a model writing the source and the compiler verifying it |
+| `ingot new --project dir --provider auto "what to change" [--apply]` | propose a source diff for an existing project; writes nothing without `--apply` |
 | `ingot new --previous old.ing --candidate proposed.ing [--repair-candidate fixed.ing]` | review model-proposed source, run bounded compiler repair and separate policy requests |
 | `ingot check` | parse, type-check, validate policy and budgets |
 | `ingot fmt [--check]` | canonical formatting |
@@ -246,6 +249,58 @@ ingot dev --run --provider replay --cassette tests/cassettes/example.json \
 The compact status identifies each source revision and says when an older good
 artifact was kept. Run `ingot doctor` first when a live provider or configured
 tool is not ready.
+
+### Authoring with a model
+
+`ingot new` turns a workflow description into a project. Without `--provider` it
+writes a maintained offline template and makes no model call at all. With one, a
+model writes the source and the compiler decides whether it is any good:
+
+```bash
+ingot new --out-dir audience-brief --provider auto \
+  "summarise a document for a named audience"
+```
+
+What comes out is an ordinary project — `main.ing`, `ingot.toml`, a README,
+example inputs — and the authoring model has no further part in it. `check`,
+`build`, `test` and `run --provider replay` never call one.
+
+On a project that already exists, the model proposes rather than edits. The
+change is printed as a diff and nothing is written until you say so:
+
+```bash
+ingot new --project . --provider auto "cap the summary at five bullet points"
+ingot new --project . --provider auto "cap the summary at five bullet points" --apply
+```
+
+Four rules hold on both paths, and they are what makes the result reviewable:
+
+* **The compiler verifies, not the model.** A proposal that does not compile
+  becomes a repair prompt carrying the actual diagnostics. The loop is bounded
+  by `--max-repairs`, and reaching the ceiling stops with the last source and its
+  diagnostics on screen rather than trying again.
+* **A model cannot approve its own permissions.** New `policy` grants are listed
+  separately from ordinary source repair and stop the command. `--accept-policy`
+  is a second, explicit run, and the grants it accepted are printed with the
+  result. Restrictions — `deny`, `require approval`, a removed host — are not
+  proposals: the language is default-deny, so narrowing asks for nothing.
+* **Tools are routed, not invented.** A `tool` declaration is checked against
+  what discovery actually reports from the project's MCP servers — so proposing
+  into a project starts the servers the manifest already names, exactly as
+  `ingot tools` does. A tool nothing can serve is a diagnostic, not a file that
+  compiles and fails at run time.
+* **No credential goes anywhere.** A credential-shaped value in the proposed
+  source ends the loop without writing a file and without sending the source
+  back to the model; the report names the shape and the line, never the value.
+  The same scan runs on the workflow description before it reaches a prompt.
+
+`--provider replay --cassette FILE` replays a recorded authoring session, and
+`--record FILE` writes one — including for a session that ended in a refusal,
+which is the one most worth reading again.
+
+An authored project gets no cassette. A recorded answer that no model produced
+would be a test proving nothing, so the generated README carries the one
+`ingot run --record` command that creates a real one.
 
 ### Choosing a model
 
@@ -624,11 +679,11 @@ With `--sandbox` the MCP servers move inside a policy-derived boundary
 | M7 | language server and editor support | done |
 | M8 | conformance suite and backend author guide | planned |
 | M9 | Ingot Containers — the policy block as an enforced boundary | done |
-| M10 | `ingot new` — authoring with a model, verified by the compiler | planned |
+| M10 | `ingot new` — authoring with a model, verified by the compiler | done |
 | M11 | integrated `.ing` product loop: templates, `dev`, trace, readiness and safe-run UX | done |
 
 A number is an identity, not a position in a queue; things get referenced by it,
-so they keep it. The remaining proposed order is **M10 → M6 → M8**.
+so they keep it. The remaining proposed order is **M6 → M8**.
 [RFC-0007](rfcs/0007-the-ingot-product-loop.md) explains why the
 usable language loop comes before generation and packaging.
 
@@ -644,7 +699,12 @@ M11 and the Language 0.2 reuse slice are complete: first-use templates,
 typed tool onboarding, imports, optional/union types and pure helpers all now
 exist. [Issue #11](https://github.com/mathissdupont/ingot/issues/11) is now
 implemented by Agent IR 0.2: human traces can resolve runtime nodes to portable
-`.ing` source ranges when local source is available.
+`.ing` source ranges when local source is available. M10 followed M11 rather
+than preceding it, which was the point: model assistance accelerates a product
+loop that already worked, and produces the same ordinary source that loop was
+built around. What it deliberately does not do is grow: policy acceptance, tool
+routing and credential handling stayed where they were, and the authoring model
+is refused at each of them.
 
 ## What is missing
 

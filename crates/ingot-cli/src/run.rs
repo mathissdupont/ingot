@@ -98,6 +98,66 @@ impl RunConfig {
             (false, false) => None,
         }
     }
+
+    fn selection(&self) -> ProviderSelection {
+        ProviderSelection {
+            choice: self.provider,
+            cassette: self.cassette.clone(),
+            model: self.model.clone(),
+            effort: self.effort.clone(),
+            models: self.models.clone(),
+            strict_replay: true,
+        }
+    }
+}
+
+/// Everything provider construction needs, with no run attached.
+///
+/// `ingot run` executes an artifact and `ingot new` writes one; both need a
+/// model and neither should have to learn the other's configuration to get one.
+pub struct ProviderSelection {
+    pub choice: ProviderChoice,
+    pub cassette: Option<PathBuf>,
+    /// Read only by the HTTP providers, so unused in a build without them.
+    #[cfg_attr(not(any(feature = "anthropic", feature = "openai")), allow(dead_code))]
+    pub model: Option<String>,
+    #[cfg_attr(not(any(feature = "anthropic", feature = "openai")), allow(dead_code))]
+    pub effort: Option<String>,
+    pub models: ModelConfig,
+    /// Whether a replayed interaction must match the request that recorded it.
+    ///
+    /// A run replays strictly: an edited prompt must fail loudly rather than be
+    /// answered from a stale recording. Authoring replays leniently, because
+    /// what an authoring cassette pins is the source a model proposed — which
+    /// the compiler then verifies from scratch — and not the toolchain-derived
+    /// prompt that asked for it. A cassette that stopped replaying every time
+    /// the authoring prompt gained a sentence would test the prompt, not the
+    /// guardrails.
+    pub strict_replay: bool,
+}
+
+/// Build the provider a command asked for.
+pub fn build_model_provider(selection: &ProviderSelection) -> Result<Box<dyn ModelProvider>> {
+    match selection.choice {
+        ProviderChoice::Replay => {
+            let Some(path) = &selection.cassette else {
+                bail!(
+                    "`--provider replay` needs `--cassette <FILE>`\n\
+                     record one first with: ingot run --record <FILE>"
+                );
+            };
+            let cassette = Cassette::load(path).map_err(anyhow::Error::msg)?;
+            let provider = ReplayProvider::new(cassette);
+            Ok(Box::new(if selection.strict_replay {
+                provider
+            } else {
+                provider.lenient()
+            }))
+        }
+        ProviderChoice::Anthropic => anthropic(selection),
+        ProviderChoice::Openai => openai(selection),
+        ProviderChoice::Auto => auto(selection),
+    }
 }
 
 /// Compile, execute, and write the artifacts.
@@ -460,20 +520,29 @@ fn tool_host(compilation: &Compilation, config: &RunConfig) -> Result<Box<dyn To
 }
 
 /// A provider plus, optionally, the recorder wrapped around it.
-enum Provider {
+pub(crate) enum Provider {
     Plain(Box<dyn ModelProvider>),
     Recording(RecordingProvider<Box<dyn ModelProvider>>),
 }
 
 impl Provider {
-    fn as_mut(&mut self) -> &mut dyn ModelProvider {
+    /// Wrap a provider, recording its exchanges under `agent` when asked.
+    pub(crate) fn new(inner: Box<dyn ModelProvider>, record: bool, agent: &str) -> Provider {
+        if record {
+            Provider::Recording(RecordingProvider::new(inner, agent))
+        } else {
+            Provider::Plain(inner)
+        }
+    }
+
+    pub(crate) fn as_mut(&mut self) -> &mut dyn ModelProvider {
         match self {
             Provider::Plain(inner) => inner.as_mut(),
             Provider::Recording(inner) => inner,
         }
     }
 
-    fn finish_recording(self) -> Option<Cassette> {
+    pub(crate) fn finish_recording(self) -> Option<Cassette> {
         match self {
             Provider::Plain(_) => None,
             Provider::Recording(inner) => Some(inner.finish()),
@@ -486,21 +555,7 @@ fn build_provider(
     agent: &str,
     inputs: &BTreeMap<String, Value>,
 ) -> Result<Provider> {
-    let inner: Box<dyn ModelProvider> = match config.provider {
-        ProviderChoice::Replay => {
-            let Some(path) = &config.cassette else {
-                bail!(
-                    "`--provider replay` needs `--cassette <FILE>`\n\
-                     record one first with: ingot run --record <FILE>"
-                );
-            };
-            let cassette = Cassette::load(path).map_err(anyhow::Error::msg)?;
-            Box::new(ReplayProvider::new(cassette))
-        }
-        ProviderChoice::Anthropic => anthropic(config)?,
-        ProviderChoice::Openai => openai(config)?,
-        ProviderChoice::Auto => auto(config)?,
-    };
+    let inner = build_model_provider(&config.selection())?;
 
     Ok(if config.record.is_some() {
         Provider::Recording(RecordingProvider::new(inner, agent).with_inputs(inputs.clone()))
@@ -519,13 +574,13 @@ pub const BUILT_IN_PROVIDERS: &[&str] = &["anthropic", "openai"];
 /// the artifact asks for it, and then the router says so by name. A declared
 /// provider replaces a built-in of the same name, so `[[model.provider]] name =
 /// "openai"` points the familiar name somewhere else.
-fn available(config: &RunConfig) -> Result<Vec<(String, Box<dyn ModelProvider>)>> {
-    config
+fn available(selection: &ProviderSelection) -> Result<Vec<(String, Box<dyn ModelProvider>)>> {
+    selection
         .models
         .validate(BUILT_IN_PROVIDERS)
         .map_err(|reason| anyhow::anyhow!("{reason}"))?;
 
-    let declared: BTreeSet<&str> = config
+    let declared: BTreeSet<&str> = selection
         .models
         .providers
         .iter()
@@ -545,8 +600,8 @@ fn available(config: &RunConfig) -> Result<Vec<(String, Box<dyn ModelProvider>)>
                 ingot_runtime::anthropic::PROVIDER.to_string(),
                 Box::new(
                     provider
-                        .with_model(config.model.clone())
-                        .with_effort(config.effort.clone()),
+                        .with_model(selection.model.clone())
+                        .with_effort(selection.effort.clone()),
                 ),
             ));
         }
@@ -559,8 +614,8 @@ fn available(config: &RunConfig) -> Result<Vec<(String, Box<dyn ModelProvider>)>
                 ingot_runtime::openai::PROVIDER.to_string(),
                 Box::new(
                     provider
-                        .with_model(config.model.clone())
-                        .with_effort(config.effort.clone()),
+                        .with_model(selection.model.clone())
+                        .with_effort(selection.effort.clone()),
                 ),
             ));
         }
@@ -569,11 +624,11 @@ fn available(config: &RunConfig) -> Result<Vec<(String, Box<dyn ModelProvider>)>
     // A declared provider is a stated intention, so a missing key for one is an
     // error rather than a quiet absence.
     #[cfg(any(feature = "anthropic", feature = "openai"))]
-    for declaration in &config.models.providers {
+    for declaration in &selection.models.providers {
         let provider = ingot_runtime::catalogue::build(
             declaration,
-            config.model.clone(),
-            config.effort.clone(),
+            selection.model.clone(),
+            selection.effort.clone(),
         )
         .map_err(|error| anyhow::anyhow!("{error}"))?;
         providers.push((declaration.name.clone(), provider));
@@ -584,7 +639,7 @@ fn available(config: &RunConfig) -> Result<Vec<(String, Box<dyn ModelProvider>)>
     // `tools/ingot.Dockerfile` has: the contained half asks its supervisor for
     // completions, so it carries no provider and no TLS stack at all.
     #[cfg(not(any(feature = "anthropic", feature = "openai")))]
-    if let Some(declaration) = config.models.providers.first() {
+    if let Some(declaration) = selection.models.providers.first() {
         bail!(
             "the manifest declares the model provider `{}`, and this build has no HTTP provider \
              to reach it with\n  \
@@ -604,8 +659,8 @@ fn available(config: &RunConfig) -> Result<Vec<(String, Box<dyn ModelProvider>)>
 /// The point of the default: an artifact that says `model exact "openai/…"`
 /// should just run, without the operator having to repeat that on the command
 /// line — and must never be answered by a vendor it did not name.
-fn auto(config: &RunConfig) -> Result<Box<dyn ModelProvider>> {
-    let mut providers = available(config)?;
+fn auto(selection: &ProviderSelection) -> Result<Box<dyn ModelProvider>> {
+    let mut providers = available(selection)?;
     if providers.is_empty() {
         bail!(
             "no model provider is available\n  \
@@ -618,7 +673,7 @@ fn auto(config: &RunConfig) -> Result<Box<dyn ModelProvider>> {
     // `default = "…"` in the manifest, else the only one there is. With several
     // and no default, an artifact that names no vendor is asked to pick, rather
     // than being answered by whichever happened to sort first.
-    let chosen_default = config
+    let chosen_default = selection
         .models
         .default
         .clone()
@@ -639,19 +694,19 @@ fn auto(config: &RunConfig) -> Result<Box<dyn ModelProvider>> {
     Ok(Box::new(router))
 }
 
-fn anthropic(config: &RunConfig) -> Result<Box<dyn ModelProvider>> {
+fn anthropic(selection: &ProviderSelection) -> Result<Box<dyn ModelProvider>> {
     #[cfg(feature = "anthropic")]
     {
         Ok(Box::new(
             ingot_runtime::anthropic::AnthropicProvider::from_env()
                 .map_err(anyhow::Error::msg)?
-                .with_model(config.model.clone())
-                .with_effort(config.effort.clone()),
+                .with_model(selection.model.clone())
+                .with_effort(selection.effort.clone()),
         ))
     }
     #[cfg(not(feature = "anthropic"))]
     {
-        let _ = config;
+        let _ = selection;
         bail!(
             "this build has no Anthropic provider\n\
              rebuild with `cargo build --features anthropic`, or use \
@@ -660,19 +715,19 @@ fn anthropic(config: &RunConfig) -> Result<Box<dyn ModelProvider>> {
     }
 }
 
-fn openai(config: &RunConfig) -> Result<Box<dyn ModelProvider>> {
+fn openai(selection: &ProviderSelection) -> Result<Box<dyn ModelProvider>> {
     #[cfg(feature = "openai")]
     {
         Ok(Box::new(
             ingot_runtime::openai::OpenAiProvider::from_env()
                 .map_err(anyhow::Error::msg)?
-                .with_model(config.model.clone())
-                .with_effort(config.effort.clone()),
+                .with_model(selection.model.clone())
+                .with_effort(selection.effort.clone()),
         ))
     }
     #[cfg(not(feature = "openai"))]
     {
-        let _ = config;
+        let _ = selection;
         bail!(
             "this build has no OpenAI provider\n\
              rebuild with `cargo build --features openai`, or use \

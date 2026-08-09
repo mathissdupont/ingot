@@ -20,6 +20,7 @@ use ingot_diagnostics::{codes, ColorChoice as RenderColor};
 mod authoring;
 mod contained;
 mod dev;
+mod diff;
 mod doctor;
 mod image;
 mod manifest;
@@ -138,12 +139,26 @@ struct NewArgs {
     workflow: Vec<String>,
 
     /// Directory to create. Defaults to a name derived from the workflow.
-    #[arg(long, value_name = "DIR", conflicts_with = "previous")]
+    #[arg(long, value_name = "DIR", conflicts_with_all = ["previous", "project"])]
     out_dir: Option<PathBuf>,
 
-    /// Maintained fallback pattern to use before provider-backed authoring.
-    #[arg(long, value_enum, conflicts_with = "previous")]
+    /// Maintained offline pattern to start from.
+    ///
+    /// Without `--provider` this is what `ingot new` writes, and no model call
+    /// is made at all.
+    #[arg(long, value_enum, conflicts_with_all = ["previous", "project", "provider"])]
     template: Option<StarterTemplate>,
+
+    /// Propose a change to an existing project instead of creating one.
+    ///
+    /// Nothing is written: the proposal is printed as a diff of the entry
+    /// source, and `--apply` is what writes it.
+    #[arg(long, value_name = "DIR", conflicts_with = "previous")]
+    project: Option<PathBuf>,
+
+    /// Write the proposed source over the project's entry file.
+    #[arg(long, requires = "project")]
+    apply: bool,
 
     /// Existing `.ing` source to compare against when reviewing a candidate.
     #[arg(long, value_name = "PATH", requires = "candidate")]
@@ -160,6 +175,36 @@ struct NewArgs {
     /// Maximum number of repair proposals the authoring loop may consume.
     #[arg(long, value_name = "N", default_value_t = 2)]
     max_repairs: usize,
+
+    /// Where authored source comes from.
+    ///
+    /// Omitted, nothing reaches a model: `ingot new` writes a maintained
+    /// offline template, and reviewing a candidate reads it from disk.
+    #[arg(long, value_enum, conflicts_with = "previous")]
+    provider: Option<ProviderChoice>,
+
+    /// Authoring exchanges to replay, for `--provider replay`.
+    #[arg(long, value_name = "FILE", requires = "provider")]
+    cassette: Option<PathBuf>,
+
+    /// Record the authoring exchanges, so the session can be reviewed or replayed.
+    #[arg(long, value_name = "FILE", requires = "provider")]
+    record: Option<PathBuf>,
+
+    /// Override the model the provider would otherwise choose.
+    #[arg(long, value_name = "MODEL", requires = "provider")]
+    model: Option<String>,
+
+    /// Reasoning effort: low, medium, high, xhigh or max.
+    #[arg(long, value_name = "LEVEL", requires = "provider")]
+    effort: Option<String>,
+
+    /// Accept the policy grants the proposal asks for.
+    ///
+    /// Run once without it to see them. An acceptance given before the list was
+    /// printed is not one, so this never applies to a proposal you have not read.
+    #[arg(long)]
+    accept_policy: bool,
 }
 
 #[derive(Args, Debug)]
@@ -516,105 +561,396 @@ fn run_init(args: &InitArgs) -> Result<u8> {
     Ok(EXIT_OK)
 }
 
+/// The cassette agent name for a recorded authoring session.
+///
+/// Not an agent in the language — authoring happens before there is one — but a
+/// recorded session sits next to run cassettes and has to be identifiable.
+const AUTHORING_AGENT: &str = "ingot.authoring";
+
 fn run_new(args: &NewArgs, color: RenderColor) -> Result<u8> {
-    match (&args.previous, &args.candidate) {
-        (Some(previous), Some(candidate)) => {
-            let previous_source = std::fs::read_to_string(previous)
-                .with_context(|| format!("reading {}", previous.display()))?;
-            let candidate_source = std::fs::read_to_string(candidate)
-                .with_context(|| format!("reading {}", candidate.display()))?;
-            let repair_sources = args
-                .repair_candidates
-                .iter()
-                .map(|path| {
-                    std::fs::read_to_string(path)
-                        .with_context(|| format!("reading {}", path.display()))
-                })
-                .collect::<Result<Vec<_>>>()?;
-            let repair = authoring::repair_with_candidates(
-                &previous_source,
-                &candidate_source,
-                &repair_sources,
-                args.max_repairs,
-            );
+    if args.previous.is_some() {
+        return review_candidate_files(args, color);
+    }
+    if let Some(project) = &args.project {
+        return propose_into_project(args, project, color);
+    }
+    if !args.repair_candidates.is_empty() {
+        bail!("--repair-candidate requires --previous and --candidate");
+    }
+    create_from_workflow(args, color)
+}
 
-            match repair.outcome() {
-                authoring::RepairOutcome::Compiled { source } => {
-                    println!("candidate source contains no new policy proposal");
-                    println!(
-                        "compiler-verified authoring completed after {} attempt(s)",
-                        repair.attempts().len()
-                    );
-                    print_authoring_attempts(&repair);
-                    println!("accepted source:");
-                    println!("{source}");
-                    Ok(EXIT_OK)
-                }
-                authoring::RepairOutcome::PolicyProposals { proposals } => {
-                    println!("candidate source requests policy changes");
-                    println!("these are not part of automatic compiler repair:");
-                    for proposal in proposals {
-                        println!(
-                            "  agent {}: {} {}",
-                            proposal.agent, proposal.subject, proposal.action
-                        );
-                    }
-                    println!();
-                    println!("review and accept policy changes explicitly before continuing");
-                    Ok(EXIT_DIAGNOSTICS)
-                }
-                authoring::RepairOutcome::RetryCeilingReached => {
-                    print_authoring_attempts(&repair);
-                    println!(
-                        "compiler repair reached retry ceiling after {} attempt(s)",
-                        repair.attempts().len()
-                    );
-                    if let Some(last) = repair.attempts().last() {
-                        println!("last source:");
-                        println!("{}", last.source);
-                        let compilation = compile_source("candidate.ing", &last.source);
-                        eprint!("{}", compilation.render_diagnostics(color));
-                    }
-                    Ok(EXIT_DIAGNOSTICS)
-                }
-            }
+/// The workflow as one string, refused when it is empty or carries a secret.
+///
+/// The scan happens before the words reach a prompt, a manifest or a log: a key
+/// pasted into a workflow description is the likeliest way one would enter this
+/// command, and the only useful moment to stop it is the first one.
+fn workflow_words(args: &NewArgs) -> Result<String> {
+    let workflow = args.workflow.join(" ");
+    if workflow.trim().is_empty() {
+        bail!(
+            "describe the workflow to author, or pass --previous and --candidate to review a \
+             proposal"
+        );
+    }
+    if let Some(finding) = authoring::scan_for_credentials(&workflow) {
+        bail!(
+            "the workflow description contains {} and was not sent anywhere\n  \
+             remove it and describe the credential by name instead; a value in a workflow \
+             would reach the prompt, the manifest and this terminal's history",
+            finding.shape
+        );
+    }
+    Ok(workflow)
+}
+
+// --- new: reviewing candidate files ----------------------------------------
+
+fn review_candidate_files(args: &NewArgs, color: RenderColor) -> Result<u8> {
+    let previous = args.previous.as_ref().expect("checked by the caller");
+    let candidate = args
+        .candidate
+        .as_ref()
+        .expect("clap requires --candidate with --previous");
+
+    let previous_source = std::fs::read_to_string(previous)
+        .with_context(|| format!("reading {}", previous.display()))?;
+    let candidate_source = std::fs::read_to_string(candidate)
+        .with_context(|| format!("reading {}", candidate.display()))?;
+    let repair_sources = args
+        .repair_candidates
+        .iter()
+        .map(|path| {
+            std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let mut candidates = authoring::FixedCandidates::new(&candidate_source, &repair_sources);
+    // Two loose files are not a project, so there is no routing table to hold a
+    // tool declaration against and none is invented.
+    let repair = authoring::author(
+        &previous_source,
+        &mut candidates,
+        &authoring::ToolContext::Unchecked,
+        limits(args),
+    )?;
+
+    if let Some(code) = report_authoring(&repair, 0, color) {
+        return Ok(code);
+    }
+
+    let source = repair
+        .accepted_source()
+        .expect("a compiled loop has source");
+    println!("candidate source contains no new policy proposal");
+    println!(
+        "compiler-verified authoring completed after {} attempt(s)",
+        repair.attempts().len()
+    );
+    print_authoring_attempts(&repair);
+    print_proposed_diff(&previous.display().to_string(), &previous_source, source);
+    Ok(EXIT_OK)
+}
+
+// --- new: proposing into an existing project -------------------------------
+
+fn propose_into_project(args: &NewArgs, project: &Path, color: RenderColor) -> Result<u8> {
+    if args.provider.is_none() {
+        bail!(
+            "--project needs --provider: a maintained template can start a project, but only a \
+             model can propose a change to one that already exists\n  \
+             use `--provider auto` with a key exported, or `--provider replay --cassette <FILE>`"
+        );
+    }
+    let workflow = workflow_words(args)?;
+    let target = resolve_target(Some(project))?;
+    let previous_source = std::fs::read_to_string(&target.entry)
+        .with_context(|| format!("reading {}", target.entry.display()))?;
+
+    // Real schemas or none: a proposal written against invented tools compiles
+    // and cannot run, and the failure would arrive at run time in front of
+    // whoever trusted the generator.
+    let mcp = target.mcp();
+    let tools = if mcp.is_empty() {
+        authoring::ToolContext::NoServers
+    } else {
+        authoring::ToolContext::Routed(tools::routed(&tools::ToolsConfig {
+            root: target.root.clone(),
+            mcp,
+        })?)
+    };
+
+    let package = target
+        .manifest
+        .as_ref()
+        .and_then(|manifest| package_name(&manifest.project.name));
+    let session = author_with_model(args, &workflow, &previous_source, package, &tools)?;
+
+    if let Some(code) = report_authoring(&session.repair, session.calls, color) {
+        return Ok(code);
+    }
+    let source = session
+        .repair
+        .accepted_source()
+        .expect("a compiled loop has source");
+
+    let entry = target.entry.display().to_string();
+    if !print_proposed_diff(&entry, &previous_source, source) {
+        println!("the proposal makes no change to {entry}");
+        return Ok(EXIT_OK);
+    }
+
+    if !args.apply {
+        println!();
+        println!("nothing was written; re-run with --apply to write this to {entry}");
+        return Ok(EXIT_OK);
+    }
+
+    std::fs::write(&target.entry, source).with_context(|| format!("writing {entry}"))?;
+    println!();
+    println!("wrote {entry}");
+    println!("check the result and re-record any cassette the change invalidates:");
+    println!("  ingot check");
+    println!("  ingot test");
+    Ok(EXIT_OK)
+}
+
+// --- new: creating a project ------------------------------------------------
+
+fn create_from_workflow(args: &NewArgs, color: RenderColor) -> Result<u8> {
+    let workflow = workflow_words(args)?;
+    let dir = args
+        .out_dir
+        .clone()
+        .unwrap_or_else(|| PathBuf::from(project_slug(&workflow)));
+    let name = project_name_for_dir(&dir);
+    let description = format!("Authored from workflow: {workflow}");
+
+    let Some(_) = args.provider else {
+        let template = args
+            .template
+            .unwrap_or_else(|| StarterTemplate::for_workflow(&workflow));
+        create_starter_project(&dir, &name, template, &description)?;
+
+        println!(
+            "Created compiler-verified agent project `{name}` from workflow in {}",
+            dir.display()
+        );
+        println!("Workflow: {workflow}");
+        println!("Template: {}", template.as_str());
+        println!();
+        println!("Next steps:");
+        if dir != Path::new(".") {
+            println!("  cd {}", dir.display());
         }
-        (None, None) => {
-            if !args.repair_candidates.is_empty() {
-                bail!("--repair-candidate requires --previous and --candidate");
-            }
-            let workflow = args.workflow.join(" ");
-            if workflow.trim().is_empty() {
-                bail!("describe the workflow to author, or pass --previous and --candidate to review a proposal");
-            }
-            let template = args
-                .template
-                .unwrap_or_else(|| StarterTemplate::for_workflow(&workflow));
-            let dir = args
-                .out_dir
-                .clone()
-                .unwrap_or_else(|| PathBuf::from(project_slug(&workflow)));
-            let name = project_name_for_dir(&dir);
-            let description = format!("Authored from workflow: {workflow}");
-            create_starter_project(&dir, &name, template, &description)?;
+        println!("  ingot check");
+        println!("  ingot build");
+        println!("  ingot test");
+        return Ok(EXIT_OK);
+    };
 
-            println!(
-                "Created compiler-verified agent project `{name}` from workflow in {}",
-                dir.display()
-            );
-            println!("Workflow: {workflow}");
-            println!("Template: {}", template.as_str());
+    // Settled before the model is asked for anything: a run that would refuse to
+    // write its result should not spend a call finding that out.
+    if dir.join(MANIFEST_NAME).exists() {
+        bail!("{} already contains an {MANIFEST_NAME}", dir.display());
+    }
+
+    // A project that does not exist yet configures no tool server, so an
+    // authored `tool` declaration cannot be routed by anything.
+    let tools = authoring::ToolContext::NoServers;
+    let session = author_with_model(args, &workflow, "", package_name(&name), &tools)?;
+
+    if let Some(code) = report_authoring(&session.repair, session.calls, color) {
+        return Ok(code);
+    }
+    let source = session
+        .repair
+        .accepted_source()
+        .expect("a compiled loop has source");
+
+    let compilation = compile_source("main.ing", source);
+    let inputs = compilation
+        .agents
+        .first()
+        .map(|agent| agent.inputs.clone())
+        .unwrap_or_default();
+
+    let mut manifest = Manifest::new(&name);
+    manifest.project.description = Some(description);
+    std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+    write_new(&dir.join(MANIFEST_NAME), &manifest.to_toml())?;
+    write_new(&dir.join("main.ing"), source)?;
+    write_new(&dir.join(".gitignore"), "/target\n")?;
+    for (input, ty) in &inputs {
+        if let Some(path) = example_input_path(input, ty) {
+            write_new(&dir.join(&path), &example_input(input, &workflow))?;
+        }
+    }
+    write_new(
+        &dir.join("README.md"),
+        &authored_readme(&name, &workflow, &inputs),
+    )?;
+
+    println!(
+        "Created compiler-verified agent project `{name}` from workflow in {}",
+        dir.display()
+    );
+    println!("Workflow: {workflow}");
+    println!("Authored by: {}", provider_label(args));
+    println!();
+    println!("Next steps:");
+    if dir != Path::new(".") {
+        println!("  cd {}", dir.display());
+    }
+    println!("  ingot check");
+    println!("  ingot build");
+    println!("  ingot test");
+    println!();
+    println!(
+        "`ingot test` has no cassette to replay yet, and one is not invented: a recorded \
+         answer nothing produced would be a test that proves nothing."
+    );
+    println!("Record the offline test once, against a configured provider:");
+    println!("  {}", record_command(&inputs));
+    Ok(EXIT_OK)
+}
+
+fn provider_label(args: &NewArgs) -> &'static str {
+    match args.provider {
+        Some(ProviderChoice::Replay) => "a replayed authoring cassette",
+        Some(_) => "a model, verified by the compiler",
+        None => "a maintained template",
+    }
+}
+
+// --- new: the shared authoring loop ----------------------------------------
+
+struct AuthoringSession {
+    repair: authoring::RepairLoop,
+    calls: usize,
+}
+
+fn limits(args: &NewArgs) -> authoring::Limits {
+    authoring::Limits {
+        max_repairs: args.max_repairs,
+        accept_policy: args.accept_policy,
+    }
+}
+
+/// Ask a provider for source and run it through the same bounded loop the
+/// file-backed review uses.
+fn author_with_model(
+    args: &NewArgs,
+    workflow: &str,
+    previous_source: &str,
+    package: Option<String>,
+    tools: &authoring::ToolContext,
+) -> Result<AuthoringSession> {
+    let selection = run::ProviderSelection {
+        choice: args.provider.expect("checked by the caller"),
+        cassette: args.cassette.clone(),
+        model: args.model.clone(),
+        effort: args.effort.clone(),
+        // Authoring reads no manifest-declared provider: it may be creating the
+        // manifest, and a proposal into an existing project must not depend on
+        // one having been declared.
+        models: ingot_runtime::ModelConfig::default(),
+        strict_replay: false,
+    };
+    let mut provider = run::Provider::new(
+        run::build_model_provider(&selection)?,
+        args.record.is_some(),
+        AUTHORING_AGENT,
+    );
+
+    let (repair, calls) = {
+        let request = authoring::AuthoringRequest {
+            workflow: workflow.to_string(),
+            previous_source: previous_source.to_string(),
+            package,
+        };
+        let mut model = authoring::ModelAuthor::new(provider.as_mut(), request, tools);
+        let repair = authoring::author(previous_source, &mut model, tools, limits(args));
+        (repair, model.calls())
+    };
+
+    // The recording is saved whatever the loop decided. A session that ended in
+    // a refusal is the one most worth being able to read again.
+    if let Some(path) = &args.record {
+        if let Some(cassette) = provider.finish_recording() {
+            cassette.save(path).map_err(anyhow::Error::msg)?;
+            eprintln!("recorded the authoring session to {}", path.display());
+        }
+    }
+
+    Ok(AuthoringSession {
+        repair: repair?,
+        calls,
+    })
+}
+
+/// Print what the loop did. `Some(code)` when the outcome stops the command.
+fn report_authoring(
+    repair: &authoring::RepairLoop,
+    calls: usize,
+    color: RenderColor,
+) -> Option<u8> {
+    if calls > 0 {
+        let usage = repair.usage();
+        eprintln!(
+            "authoring made {calls} model call(s), using {} input and {} output token(s)",
+            usage.input_tokens, usage.output_tokens
+        );
+    }
+    for proposal in repair.accepted_proposals() {
+        println!(
+            "accepted policy grant: agent {}: {} {}",
+            proposal.agent, proposal.subject, proposal.action
+        );
+    }
+
+    match repair.outcome() {
+        authoring::RepairOutcome::Compiled { .. } => None,
+        authoring::RepairOutcome::PolicyProposals { proposals } => {
+            println!("candidate source requests policy changes");
+            println!("these are not part of automatic compiler repair:");
+            for proposal in proposals {
+                println!(
+                    "  agent {}: {} {}",
+                    proposal.agent, proposal.subject, proposal.action
+                );
+            }
             println!();
-            println!("Next steps:");
-            if dir != Path::new(".") {
-                println!("  cd {}", dir.display());
-            }
-            println!("  ingot check");
-            println!("  ingot build");
-            println!("  ingot test");
-            Ok(EXIT_OK)
+            println!("review and accept policy changes explicitly before continuing");
+            println!("re-run with --accept-policy to accept exactly these grants");
+            Some(EXIT_DIAGNOSTICS)
         }
-        _ => unreachable!("clap requires --previous and --candidate together"),
+        authoring::RepairOutcome::RetryCeilingReached => {
+            print_authoring_attempts(repair);
+            println!(
+                "compiler repair reached retry ceiling after {} attempt(s)",
+                repair.attempts().len()
+            );
+            if let Some(last) = repair.attempts().last() {
+                println!("last source:");
+                println!("{}", last.source);
+                let compilation = compile_source("candidate.ing", &last.source);
+                eprint!("{}", compilation.render_diagnostics(color));
+            }
+            Some(EXIT_DIAGNOSTICS)
+        }
+        authoring::RepairOutcome::CredentialRefused { finding } => {
+            println!(
+                "the proposed source contains {} on line {}",
+                finding.shape, finding.line
+            );
+            println!("nothing was written, and the source was not sent back to the model");
+            println!(
+                "a credential belongs in the environment, named by `pass-env` in {MANIFEST_NAME}, \
+                 never in source"
+            );
+            Some(EXIT_DIAGNOSTICS)
+        }
     }
 }
 
@@ -628,6 +964,17 @@ fn print_authoring_attempts(repair: &authoring::RepairLoop) {
         } else {
             println!("attempt {} passed compiler verification", attempt.number);
         }
+    }
+}
+
+/// Show the change rather than the result. Returns whether there was one.
+fn print_proposed_diff(label: &str, previous: &str, proposed: &str) -> bool {
+    match diff::unified(label, previous, "proposed", proposed, diff::CONTEXT) {
+        Some(rendered) => {
+            print!("{rendered}");
+            true
+        }
+        None => false,
     }
 }
 
@@ -907,6 +1254,130 @@ target-neutral artifact consumed by every backend.
 "#,
         template.as_str(),
         template.agent()
+    )
+}
+
+// --- files for a model-authored project ------------------------------------
+
+/// Where an example value for this input belongs, when a file is the natural
+/// way to pass one.
+///
+/// Prose inputs get a file because `--input document=@examples/document.txt` is
+/// how anyone would really pass a document. A scalar goes on the command line,
+/// where it is easier to change than in a file nobody remembers exists.
+fn example_input_path(name: &str, ty: &str) -> Option<PathBuf> {
+    matches!(ty, "text" | "markdown").then(|| PathBuf::from(format!("examples/{name}.txt")))
+}
+
+fn example_input(name: &str, workflow: &str) -> String {
+    format!(
+        "Example `{name}` for: {workflow}\n\n\
+         Replace this with real content. It exists so the first run has something \
+         to read, and so the recorded cassette is made against a value you chose.\n"
+    )
+}
+
+/// The `--input` flag for one declared input, with a value of the right shape.
+fn input_flag(name: &str, ty: &str) -> String {
+    let value = match ty {
+        "text" | "markdown" => format!("@examples/{name}.txt"),
+        "string" => "\"...\"".to_string(),
+        "int" => "0".to_string(),
+        "float" => "0.0".to_string(),
+        "bool" => "true".to_string(),
+        ty if ty.ends_with("[]") => "[]".to_string(),
+        _ => "{}".to_string(),
+    };
+    format!("--input {name}={value}")
+}
+
+fn input_flags(inputs: &std::collections::BTreeMap<String, String>) -> String {
+    inputs
+        .iter()
+        .map(|(name, ty)| input_flag(name, ty))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The one command that turns an authored project into a project with an
+/// offline test.
+fn record_command(inputs: &std::collections::BTreeMap<String, String>) -> String {
+    let flags = input_flags(inputs);
+    let separator = if flags.is_empty() { "" } else { " " };
+    format!("ingot run --record tests/cassettes/example.json{separator}{flags}")
+}
+
+fn authored_readme(
+    name: &str,
+    workflow: &str,
+    inputs: &std::collections::BTreeMap<String, String>,
+) -> String {
+    let record = record_command(inputs);
+    let replay = {
+        let flags = input_flags(inputs);
+        let separator = if flags.is_empty() { "" } else { " " };
+        format!(
+            "ingot run --provider replay --cassette tests/cassettes/example.json{separator}{flags}"
+        )
+    };
+    format!(
+        r#"# {name}
+
+An agent written in Ingot, authored from this workflow:
+
+> {workflow}
+
+`main.ing` is the source of truth. The authoring model wrote it once and has no
+further part in this project: the compiler, tests and runtime never call it, and
+every command below works without one.
+
+## First run
+
+These commands need no model API key:
+
+```bash
+ingot check
+ingot build
+```
+
+`ingot build` writes the canonical, target-neutral Agent IR under
+`target/ingot/`.
+
+## The offline test
+
+There is no cassette yet, and one was not invented for you: a recorded answer
+that no model produced would be a test that proves nothing. Record one against a
+configured provider, review the answer it captured, and commit it:
+
+```bash
+{record}
+```
+
+After that, the project replays with no key and no network:
+
+```bash
+ingot test
+{replay}
+```
+
+## Develop
+
+```bash
+ingot dev
+```
+
+Keeps `check` and the IR build current while you edit. Running is opt-in, so
+saving a prompt never silently calls a model. When you change a prompt, the
+recorded cassette stops matching on purpose — re-record it and review the diff.
+
+## Changing it with the model again
+
+```bash
+ingot new --project . --provider auto "what you want changed"
+```
+
+That prints a diff and writes nothing until you pass `--apply`.
+"#
     )
 }
 

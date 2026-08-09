@@ -520,6 +520,443 @@ fn model_assistance_leaves_a_project_that_works_without_the_model() {
     assert!(!stdout(&replay).trim().is_empty());
 }
 
+// --- provider-backed authoring ---------------------------------------------
+
+/// A recorded authoring session: one reply per proposal, in order.
+///
+/// Authoring replays leniently, so a fixture stays valid when the authoring
+/// prompt gains a sentence. What it pins is the source a model proposed — which
+/// the compiler then verifies from scratch — and not the prompt that asked.
+fn authoring_cassette(dir: &Path, name: &str, replies: &[&str]) -> PathBuf {
+    let interactions: Vec<serde_json::Value> = replies
+        .iter()
+        .enumerate()
+        .map(|(index, reply)| {
+            serde_json::json!({
+                "index": index,
+                "node": format!("authoring.{index}"),
+                "requestDigest": "0".repeat(64),
+                "responseType": "text",
+                "value": format!("```ingot\n{reply}```"),
+                "usage": { "inputTokens": 800, "outputTokens": 200 },
+                "model": "test/authoring",
+            })
+        })
+        .collect();
+    let cassette = serde_json::json!({
+        "cassetteVersion": "0.1",
+        "agent": "ingot.authoring",
+        "interactions": interactions,
+    });
+
+    let path = dir.join(name);
+    std::fs::write(
+        &path,
+        serde_json::to_string_pretty(&cassette).expect("a cassette is serializable"),
+    )
+    .expect("writing the authoring cassette");
+    path
+}
+
+/// What a well-behaved authoring model returns: ordinary source, no tool it
+/// cannot route, and the default-deny policy left alone.
+const AUTHORED_SOURCE: &str = r#"language 0.1
+package audience_brief
+
+/// Summarises a document for a named audience.
+agent DocumentBrief(document: text, audience: string) -> summary<markdown> {
+  model requires {
+    structured_output
+  }
+
+  budget {
+    steps <= 4
+    tokens <= 20000
+  }
+
+  policy {
+    network deny
+  }
+
+  flow {
+    emit summary = ask<markdown>("Summarise ${document} for ${audience}.")
+  }
+}
+"#;
+
+#[test]
+fn a_model_authored_project_is_ordinary_source_that_needs_no_model_afterwards() {
+    let dir = TempDir::new("new-model-authored");
+    let cassette = authoring_cassette(dir.path(), "authoring.json", &[AUTHORED_SOURCE]);
+    let project = dir.path().join("audience-brief");
+
+    let output = run(&[
+        "new",
+        "--out-dir",
+        &project.display().to_string(),
+        "--provider",
+        "replay",
+        "--cassette",
+        &cassette.display().to_string(),
+        "summarise",
+        "a",
+        "document",
+        "for",
+        "an",
+        "audience",
+    ]);
+    assert_eq!(code(&output), EXIT_OK, "{}", stderr(&output));
+
+    for path in [
+        "ingot.toml",
+        "main.ing",
+        "README.md",
+        ".gitignore",
+        "examples/document.txt",
+    ] {
+        assert!(project.join(path).is_file(), "missing {path}");
+    }
+
+    // The authored source is what was written — not a template wearing its name.
+    let source = std::fs::read_to_string(project.join("main.ing")).expect("authored source");
+    assert_eq!(source, AUTHORED_SOURCE);
+
+    let manifest = std::fs::read_to_string(project.join("ingot.toml")).expect("manifest");
+    assert!(
+        manifest.contains("Authored from workflow: summarise a document for an audience"),
+        "{manifest}"
+    );
+    assert!(
+        !manifest.contains("key") && !manifest.contains("token"),
+        "a generated manifest must carry no credential-shaped field:\n{manifest}"
+    );
+
+    // Every command the project needs from here works with no provider at all.
+    for args in [&["check"][..], &["build"][..], &["test"][..]] {
+        let output = run_in(&project, args);
+        assert_eq!(
+            code(&output),
+            EXIT_OK,
+            "authored project command `{}` must work without a provider key:\n{}",
+            args.join(" "),
+            stderr(&output)
+        );
+    }
+    assert!(
+        project.join("target/ingot/DocumentBrief.ir.json").is_file(),
+        "build must leave a normal IR artifact"
+    );
+
+    // No cassette is fabricated, so the README has to say how to make a real one.
+    let readme = std::fs::read_to_string(project.join("README.md")).expect("authored README");
+    let record = "ingot run --record tests/cassettes/example.json \
+                  --input audience=\"...\" --input document=@examples/document.txt";
+    assert!(
+        readme.lines().any(|line| line.trim() == record),
+        "the README must print the one command that creates the offline test:\n{readme}"
+    );
+    assert!(
+        !project.join("tests/cassettes/example.json").exists(),
+        "a recorded answer no model produced would be a test that proves nothing"
+    );
+}
+
+#[test]
+fn a_model_repair_is_bounded_and_driven_by_compiler_diagnostics() {
+    let dir = TempDir::new("new-model-repair");
+    let broken = AUTHORED_SOURCE.replace(
+        "ask<markdown>(\"Summarise ${document} for ${audience}.\")",
+        "missing",
+    );
+    let cassette = authoring_cassette(dir.path(), "authoring.json", &[&broken, AUTHORED_SOURCE]);
+    let project = dir.path().join("repaired");
+
+    let output = run(&[
+        "new",
+        "--out-dir",
+        &project.display().to_string(),
+        "--provider",
+        "replay",
+        "--cassette",
+        &cassette.display().to_string(),
+        "--max-repairs",
+        "1",
+        "summarise",
+        "a",
+        "document",
+    ]);
+    assert_eq!(code(&output), EXIT_OK, "{}", stderr(&output));
+    assert_eq!(
+        std::fs::read_to_string(project.join("main.ing")).expect("authored source"),
+        AUTHORED_SOURCE
+    );
+
+    // The same cassette with no repair allowance stops, showing its work.
+    let stopped = dir.path().join("stopped");
+    let output = run(&[
+        "new",
+        "--out-dir",
+        &stopped.display().to_string(),
+        "--provider",
+        "replay",
+        "--cassette",
+        &cassette.display().to_string(),
+        "--max-repairs",
+        "0",
+        "summarise",
+        "a",
+        "document",
+    ]);
+    assert_eq!(code(&output), EXIT_DIAGNOSTICS, "{}", stderr(&output));
+    let out = stdout(&output);
+    assert!(
+        out.contains("compiler repair reached retry ceiling after 1 attempt(s)"),
+        "{out}"
+    );
+    assert!(out.contains("ING2001"), "{out}");
+    assert!(!stopped.exists(), "a stopped loop must write no project");
+}
+
+#[test]
+fn a_model_authored_policy_grant_is_refused_until_the_operator_accepts_it() {
+    let dir = TempDir::new("new-model-policy");
+    let source = r#"language 0.1
+
+/// Fetches and summarises a page.
+agent Fetcher(url: string) -> summary<markdown> {
+  policy {
+    network allow ["example.com"]
+  }
+
+  flow {
+    emit summary = ask<markdown>("Summarise ${url}.")
+  }
+}
+"#;
+    let cassette = authoring_cassette(dir.path(), "authoring.json", &[source, source]);
+    let refused = dir.path().join("refused");
+
+    let output = run(&[
+        "new",
+        "--out-dir",
+        &refused.display().to_string(),
+        "--provider",
+        "replay",
+        "--cassette",
+        &cassette.display().to_string(),
+        "fetch",
+        "and",
+        "summarise",
+        "a",
+        "page",
+    ]);
+    assert_eq!(code(&output), EXIT_DIAGNOSTICS, "{}", stderr(&output));
+    let out = stdout(&output);
+    assert!(
+        out.contains("agent Fetcher: network allow [\"example.com\"]"),
+        "the grant must be named before it can be accepted:\n{out}"
+    );
+    assert!(out.contains("--accept-policy"), "{out}");
+    assert!(
+        !refused.exists(),
+        "a grant the operator has not accepted must write nothing"
+    );
+
+    // Accepting is a separate, explicit decision — and is still recorded.
+    let accepted = dir.path().join("accepted");
+    let output = run(&[
+        "new",
+        "--out-dir",
+        &accepted.display().to_string(),
+        "--provider",
+        "replay",
+        "--cassette",
+        &cassette.display().to_string(),
+        "--accept-policy",
+        "fetch",
+        "and",
+        "summarise",
+        "a",
+        "page",
+    ]);
+    assert_eq!(code(&output), EXIT_OK, "{}", stderr(&output));
+    assert!(
+        stdout(&output).contains("accepted policy grant: agent Fetcher: network allow"),
+        "{}",
+        stdout(&output)
+    );
+    assert!(accepted.join("main.ing").is_file());
+}
+
+#[test]
+fn authoring_refuses_a_credential_before_it_reaches_a_file_or_a_prompt() {
+    let dir = TempDir::new("new-model-credential");
+    let key = "sk-live-4f9ac1d3b7e25a86";
+    let source = format!(
+        r#"language 0.1
+
+agent Leaky(topic: string) -> brief<markdown> {{
+  policy {{
+    network deny
+  }}
+
+  flow {{
+    emit brief = ask<markdown>("Use api_key=\"{key}\" and brief ${{topic}}.")
+  }}
+}}
+"#
+    );
+    let cassette = authoring_cassette(dir.path(), "authoring.json", &[&source, &source, &source]);
+    let project = dir.path().join("leaky");
+
+    let output = run(&[
+        "new",
+        "--out-dir",
+        &project.display().to_string(),
+        "--provider",
+        "replay",
+        "--cassette",
+        &cassette.display().to_string(),
+        "brief",
+        "a",
+        "topic",
+    ]);
+    assert_eq!(code(&output), EXIT_DIAGNOSTICS, "{}", stderr(&output));
+    let out = stdout(&output);
+    assert!(out.contains("a vendor-prefixed API key"), "{out}");
+    assert!(
+        !out.contains(key) && !stderr(&output).contains(key),
+        "the report must name the shape, never repeat the value"
+    );
+    assert!(
+        !project.exists(),
+        "a candidate carrying a credential must reach no file"
+    );
+
+    // And the same rule applies to the words the operator typed, before they
+    // reach a prompt, a manifest or this terminal's history.
+    let pasted = dir.path().join("pasted");
+    let output = run(&[
+        "new",
+        "--out-dir",
+        &pasted.display().to_string(),
+        &format!("brief a topic with api_key={key}"),
+    ]);
+    assert_eq!(code(&output), EXIT_FAILURE, "{}", stdout(&output));
+    assert!(!stderr(&output).contains(key), "{}", stderr(&output));
+    assert!(!pasted.exists());
+}
+
+#[test]
+fn an_authored_change_to_an_existing_project_is_a_diff_until_it_is_applied() {
+    let dir = TempDir::new("new-model-diff");
+    let project = dir.path().join("brief-agent");
+    let output = run(&["init", &project.display().to_string()]);
+    assert_eq!(code(&output), EXIT_OK, "{}", stderr(&output));
+
+    let before = std::fs::read_to_string(project.join("main.ing")).expect("template source");
+    let after = before.replace(
+        "Use headings and bullet points.",
+        "Use headings, and at most five bullet points.",
+    );
+    assert_ne!(before, after, "the fixture must actually change something");
+    let cassette = authoring_cassette(dir.path(), "authoring.json", &[&after]);
+
+    let propose = [
+        "new",
+        "--project",
+        &project.display().to_string(),
+        "--provider",
+        "replay",
+        "--cassette",
+        &cassette.display().to_string(),
+        "keep",
+        "the",
+        "brief",
+        "shorter",
+    ];
+    let output = run(&propose);
+    assert_eq!(code(&output), EXIT_OK, "{}", stderr(&output));
+    let out = stdout(&output);
+    assert!(
+        out.contains("@@ "),
+        "a proposal must be shown as a diff:\n{out}"
+    );
+    assert!(
+        out.contains("-      \"Write a short, factual brief about ${topic}. Use headings and bullet points.\""),
+        "{out}"
+    );
+    assert!(out.contains("nothing was written"), "{out}");
+    assert_eq!(
+        std::fs::read_to_string(project.join("main.ing")).expect("source"),
+        before,
+        "a proposal must not mutate the project"
+    );
+
+    let mut apply = propose.to_vec();
+    apply.insert(1, "--apply");
+    let output = run(&apply);
+    assert_eq!(code(&output), EXIT_OK, "{}", stderr(&output));
+    assert!(stdout(&output).contains("wrote"), "{}", stdout(&output));
+    assert_eq!(
+        std::fs::read_to_string(project.join("main.ing")).expect("source"),
+        after
+    );
+    assert_eq!(
+        code(&run_in(&project, &["check"])),
+        EXIT_OK,
+        "the applied source must still compile"
+    );
+}
+
+#[test]
+fn an_authoring_model_cannot_invent_a_tool_the_project_does_not_route() {
+    let dir = TempDir::new("new-model-tool");
+    let source = r#"language 0.1
+
+tool web.search(query: string) -> string[] !network
+
+agent Research(topic: string) -> report<markdown> {
+  tools { mcp web.search }
+  policy {
+    network allow ["example.com"]
+  }
+  flow {
+    hits = call web.search(topic)
+    emit report = ask<markdown>("Draft", context: hits)
+  }
+}
+"#;
+    let cassette = authoring_cassette(dir.path(), "authoring.json", &[source]);
+    let project = dir.path().join("research");
+
+    // `--accept-policy` so the run gets past the grant and reaches the tool
+    // check: the point here is the tool, not the policy.
+    let output = run(&[
+        "new",
+        "--out-dir",
+        &project.display().to_string(),
+        "--provider",
+        "replay",
+        "--cassette",
+        &cassette.display().to_string(),
+        "--accept-policy",
+        "--max-repairs",
+        "0",
+        "research",
+        "a",
+        "topic",
+    ]);
+    assert_eq!(code(&output), EXIT_DIAGNOSTICS, "{}", stderr(&output));
+    let out = stdout(&output);
+    assert!(
+        out.contains("AUTHORING_UNROUTED_TOOL"),
+        "an invented tool must be a named diagnostic:\n{out}"
+    );
+    assert!(out.contains("configures no MCP server"), "{out}");
+    assert!(!project.exists(), "nothing may be written for it");
+}
+
 #[test]
 fn new_review_separates_policy_from_automatic_repair() {
     let dir = TempDir::new("new-review-policy");

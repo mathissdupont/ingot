@@ -58,6 +58,7 @@ to you*.
 | [GAP-023](#gap-023) | A contained run cannot cross a boundary to a sub-agent | Refused | a box per agent, over the supervisor |
 | [GAP-024](#gap-024) | A wedged contained run is not timed out | Degraded | a deadline on the supervisor channel |
 | [GAP-025](#gap-025) | The product loop is fragmented across commands and raw output | Degraded | M11 |
+| [GAP-028](#gap-028) | A model-authored project has no offline test until one run is recorded | Degraded | cassette synthesis, or nothing |
 
 ---
 
@@ -343,6 +344,36 @@ never starts is reported quickly.
 
 *Recorded in.* [RFC-0005](../rfcs/0005-the-contained-run.md),
 `crates/ingot-supervisor/src/host.rs`.
+
+### GAP-028
+
+**A model-authored project has no offline test until one run is recorded.**
+
+`ingot new --provider …` writes source, a manifest, a README and example inputs.
+It does not write a cassette, so `ingot test` has nothing to replay until the
+operator runs `ingot run --record …` once against a configured provider. The
+template path is unaffected: `ingot init` and `ingot new` without a provider ship
+a reviewed cassette, because the prompt they generate is one the maintainers
+wrote and can record against.
+
+*How it shows up.* A freshly authored project passes `check`, `build` and `test`
+with no key — but `test` passes by having nothing to run, and the generated
+README says so and prints the command that fixes it.
+
+*Why not yet.* A cassette pairs a request digest with the answer a model gave.
+The digest depends on the prompt after interpolation, which is only known by
+executing the flow; the answer is only known by asking a model. Writing a
+plausible answer for an authored prompt would produce a green `ingot test` that
+demonstrates nothing, which is worse than an empty one — the same reason
+[GAP-002](#gap-002) is on this list.
+
+*What closing it needs.* Either recording the first run as part of authoring,
+which makes `ingot new` execute the agent it just wrote and needs its own
+consent step, or nothing: the one recorded run may simply be the right price for
+a test that means something.
+
+*Recorded in.* [README](../README.md#authoring-with-a-model), the generated
+project README, [RFC-0007](../rfcs/0007-the-ingot-product-loop.md).
 
 ### GAP-010
 
