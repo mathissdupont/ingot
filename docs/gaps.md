@@ -415,6 +415,8 @@ A compilation unit is a single `.ing` file. There is no `import`. A shared
 *How it shows up.* `ingot fmt` formats the entry file only, and a project cannot
 be split by concern.
 
+*Draft fix.* [RFC-0008](../rfcs/0008-language-v0.2-modules-and-imports.md).
+
 *Recorded in.* [Language 0.1 §3 and §9](../specs/language/v0.1.md).
 
 ### GAP-012

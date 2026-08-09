@@ -17,6 +17,7 @@ desktop.ini
 # JavaScript editor-extension dependencies
 node_modules/
 editors/vscode/package-lock.json
+*.vsix
 
 # Local environment
 .env
