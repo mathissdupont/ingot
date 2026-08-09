@@ -807,6 +807,9 @@ as an issue.
 
 Apache-2.0. See [LICENSE](LICENSE).
 
-`Ingot` is a working name. Trademark, domain and package-registry clearance has
-not been carried out, and must be completed with legal review before any public
-release under this name.
+Ingot is an open-source toolchain, not a brand. The project **claims no rights in
+the name** and is not seeking a trademark; it is used descriptively. `ingot` on
+crates.io is an unrelated packet-parsing library — it publishes no binary, and
+this CLI is distributed as `ingot-cli` and as prebuilt archives, so nothing
+collides. The reasoning, and what would reopen the question, is
+[GAP-019](docs/gaps.md#gap-019).

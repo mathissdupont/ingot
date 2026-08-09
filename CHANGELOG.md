@@ -8,6 +8,17 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
 
 ## [Unreleased]
 
+**The name is a description, not a claim**
+(closes [GAP-019](docs/gaps.md#gap-019))
+
+- Ingot claims no rights in its name and is not seeking a trademark. The
+  clearance that release was waiting on is closed by a decision rather than by a
+  search: the registry question is a checkable fact with no conflict — `ingot` on
+  crates.io is an unrelated library that publishes no binary — and the trademark
+  question is a rename risk that is knowingly accepted.
+- This unblocks [GAP-022](docs/gaps.md#gap-022): what remains before a first
+  release is choosing the moment, not a decision.
+
 **Packaging: the checked artifact, made movable**
 ([RFC-0012](rfcs/0012-the-ingot-package.md),
 [#10](https://github.com/mathissdupont/ingot/issues/10);

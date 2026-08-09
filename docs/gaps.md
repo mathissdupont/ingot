@@ -50,7 +50,6 @@ to you*.
 | [GAP-013](#gap-013) | A capability cannot be scoped to an endpoint or a path | Absent | a policy subject for resources (RFC) |
 | [GAP-014](#gap-014) | No persistent memory or state migration | Absent | a memory model (RFC) |
 | [GAP-017](#gap-017) | No conformance suite or backend author guide | Absent | M8 |
-| [GAP-019](#gap-019) | The name has had no trademark or registry clearance | Absent | legal review |
 | [GAP-020](#gap-020) | The boundary needs Linux containers | Refused | a second expression of the boundary |
 | [GAP-022](#gap-022) | Nothing has been released; you build from source | Absent | one tag |
 | [GAP-023](#gap-023) | A contained run cannot cross a boundary to a sub-agent | Refused | a box per agent, over the supervisor |
@@ -498,9 +497,10 @@ deciding whether the idea is worth ten minutes.
 refuses a tag that disagrees with the workspace version; runs each archived
 binary before shipping it; and publishes one `SHA256SUMS` covering all of them.
 
-*Not closed yet on purpose.* Publishing is outward-facing and
-[GAP-019](#gap-019) — no trademark or registry clearance for the name — is still
-open. That is a decision for the maintainer, not a build step.
+*What was blocking it.* [GAP-019](#gap-019) — no clearance for the name — which
+is now closed by a decision rather than by a search: Ingot claims no rights in
+the name. Publishing is still outward-facing, so what remains is the maintainer
+choosing the moment.
 
 ### GAP-017
 
@@ -517,26 +517,40 @@ remain.
 
 ---
 
-## Non-technical
-
-### GAP-019
-
-**The name has had no trademark, domain or registry clearance.**
-
-"Ingot" was chosen for fit, not availability. No trademark search, no domain
-check, no crates.io reservation. This is not something the maintainers can
-resolve by reading; it needs a professional search before any release under the
-name.
-
-*Recorded in.* [README](../README.md), [CHANGELOG](../CHANGELOG.md).
-
----
-
 ## Closed
 
 When a gap closes it moves here with the release that closed it, and its section
 stays where a link can find it. Identifiers are never reused: a link to GAP-007
 must keep meaning what it meant.
+
+### GAP-019
+
+**The name has had no trademark, domain or registry clearance.**
+*Closed by decision, 2026-08-09.*
+
+Ingot is an open-source toolchain, not a brand. The project **claims no rights in
+the name** and is not seeking a trademark: "Ingot" was chosen because it fits
+what the tool does, and it is used descriptively rather than as an assertion of
+ownership.
+
+*What the search would have been for.* Two different things, and separating them
+is what let this close. A *registry* collision is a fact anyone can check, and
+there is one: `ingot` on crates.io belongs to an unrelated packet-parsing
+library. It costs nothing, because that crate publishes no binary and Ingot's CLI
+is distributed as `ingot-cli` and as prebuilt archives — `cargo install
+ingot-cli` installs a binary called `ingot` either way. What is left is discovery
+confusion, not a conflict.
+
+A *trademark* search is the other thing, and it protects against being made to
+rename after adoption. That risk is real and is **knowingly accepted**: the cost
+of a rename is a maintainer's problem, and holding a release for a search nobody
+had commissioned was holding it for a decision that had already been made.
+
+*What would reopen this.* Commercial use of the name, a registered mark asserted
+by someone else, or a hosted service under it. Any of those needs professional
+legal review; this entry is a record of a maintainer's decision, not advice.
+
+*Recorded in.* [README](../README.md#licence), [GAP-022](#gap-022).
 
 ### GAP-015
 
