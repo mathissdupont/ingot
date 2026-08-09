@@ -1369,6 +1369,24 @@ impl<'a> Checker<'a> {
             &verifier.name,
             "verifier",
         );
+        // The declaration is correct, and nothing can carry it out. Agent IR
+        // records a verifier's name and signature and has no representation for
+        // the check itself, so this is the last moment before the run where the
+        // gap can be pointed at — which is the whole reason the compiler exists.
+        // A warning rather than an error: the source keeps its meaning when
+        // verifiers gain an execution model.
+        self.diagnostics.push(
+            Diagnostic::warning(
+                codes::VERIFIER_NOT_PERFORMED,
+                format!(
+                    "`{}` names a verifier this toolchain cannot perform",
+                    verifier.name
+                ),
+            )
+            .with_primary(span, "no backend can carry out this check")
+            .with_note("the run reports it as `notPerformed` rather than claiming it passed"),
+        );
+
         self.verifies.insert(
             span,
             VerifyInfo {

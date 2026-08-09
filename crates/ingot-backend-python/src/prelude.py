@@ -86,9 +86,15 @@ class Events:
         if kind == "stateWritten":
             return "        state.%s written" % event["field"]
         if kind == "verified":
+            # Three outcomes, not a boolean: a check that never ran has neither
+            # passed nor failed. Runtime 0.2 section 1.
             return "        verify %s: %s" % (
                 event["verifier"],
-                "passed" if event["passed"] else "FAILED",
+                {
+                    "notPerformed": "not performed",
+                    "passed": "passed",
+                    "failed": "FAILED",
+                }[event["outcome"]],
             )
         if kind == "checkpoint":
             return '        checkpoint "%s"' % event["label"]

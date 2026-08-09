@@ -89,6 +89,7 @@ pub const UNUSED_BINDING: &str = "ING6002";
 pub const UNREACHABLE_STATEMENT: &str = "ING6003";
 pub const OUTPUT_NOT_ON_ALL_PATHS: &str = "ING6004";
 pub const INVALID_IN_PARALLEL: &str = "ING6005";
+pub const VERIFIER_NOT_PERFORMED: &str = "ING6006";
 
 /// Long-form explanation shown by `ingot explain <CODE>`.
 ///
@@ -194,6 +195,17 @@ pub fn explain(code: &str) -> Option<&'static str> {
              `emit` after the branch. Loops never count as guaranteed, because a \
              bounded loop may run zero times."
         }
+        VERIFIER_NOT_PERFORMED => {
+            "The flow names a verifier, and nothing can carry one out.\n\n\
+             Agent IR records a verifier's name and signature. It has no \
+             representation for the check itself, so a backend has nothing to \
+             run: the reference interpreter reports the node as `notPerformed` \
+             rather than claiming it passed.\n\n\
+             This is a warning rather than an error because the declaration is \
+             correct and keeps its meaning when verifiers gain an execution \
+             model. Until then, treat the property as unchecked — or check it \
+             with a tool call, which does execute."
+        }
         INVALID_IN_PARALLEL => {
             "`emit`, `checkpoint` and writes to `state` are not allowed inside a \
              `parallel map` body.\n\nIterations run concurrently and in an \
@@ -248,6 +260,7 @@ pub const EXPLAINED_CODES: &[&str] = &[
     OUTPUT_NEVER_EMITTED,
     UNUSED_BINDING,
     OUTPUT_NOT_ON_ALL_PATHS,
+    VERIFIER_NOT_PERFORMED,
     INVALID_IN_PARALLEL,
     RECURSIVE_AGENT,
     FUNCTION_NOT_PURE,

@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 use ingot_ir::{AgentIr, Decision, Node, NodeKind, RefScope, TemplatePart, Value as IrValue};
 use serde_json::{json, Value};
 
-use crate::events::{Artifact, EventSink, RunEvent};
+use crate::events::{Artifact, EventSink, RunEvent, VerifyOutcome};
 use crate::provider::{CompletionRequest, ModelProvider, ModelSelection, ProviderError, Usage};
 use crate::schema;
 use crate::tools::{ApprovalMode, ApprovalRequest, ToolError, ToolHost, ToolInvocation};
@@ -675,13 +675,13 @@ impl Interp<'_> {
         for argument in &node.args {
             self.eval(&argument.value)?;
         }
-        // Verifier implementations are not part of IR 0.1: the artifact names a
-        // check but carries no way to perform it. Reporting that plainly beats
-        // pretending the check passed.
+        // Verifier implementations are not part of Agent IR: the artifact names
+        // a check and carries no way to perform it. Saying so is the whole
+        // point — `passed: true` here used to be a pass nothing earned.
         self.sink.emit(RunEvent::Verified {
             node: node.id.clone(),
             verifier: verifier.clone(),
-            passed: true,
+            outcome: VerifyOutcome::NotPerformed,
         });
         Ok(())
     }

@@ -37,7 +37,6 @@ to you*.
 | ID | Gap | Class | Closes with |
 |----|-----|-------|-------------|
 | [GAP-001](#gap-001) | A policy's host allowlist is not enforced | Unenforced | an egress proxy in the runner |
-| [GAP-002](#gap-002) | `verify` reports a check that never ran | Unenforced | a verifier execution model (RFC) |
 | [GAP-003](#gap-003) | `cost` budgets are never charged | Unenforced | per-model pricing in the runtime |
 | [GAP-005](#gap-005) | No streaming; one call, 16k output ceiling | Refused | a streaming provider interface (RFC) |
 | [GAP-006](#gap-006) | Cassettes carry no tool results | Refused | cassette format 0.2 |
@@ -57,6 +56,7 @@ to you*.
 | [GAP-025](#gap-025) | The product loop is fragmented across commands and raw output | Degraded | M11 |
 | [GAP-028](#gap-028) | A model-authored project has no offline test until one run is recorded | Degraded | cassette synthesis, or nothing |
 | [GAP-029](#gap-029) | An image cannot be verified by signature, so acquisition stays manual | Refused | a signature scheme and a trust root |
+| [GAP-030](#gap-030) | A verifier cannot be executed at all | Absent | a verifier execution model (RFC) |
 
 ---
 
@@ -107,31 +107,6 @@ language-side half: expressing a scope per call rather than per agent.
 *Recorded in.* [`examples/research-agent/README.md`](../examples/research-agent/README.md),
 [Runtime 0.1 §7](../specs/runtime/v0.1.md),
 [RFC-0004](../rfcs/0004-ingot-containers.md).
-
-### GAP-002
-
-**`verify` reports a check that never ran.**
-
-`verify CitationCheck(draft, min_sources: 8)` compiles, lowers to a `verify`
-node, and at run time the interpreter evaluates the arguments and emits
-`Verified { passed: true }`.
-
-*How it shows up.* An event stream that says a verification passed, when no
-verifier exists to have performed one. [Runtime 0.1 §5](../specs/runtime/v0.1.md)
-permits a backend to treat `verify` as a no-op, so this is legal; `passed: true`
-is nonetheless the wrong thing to say.
-
-*Why not yet.* IR 0.1 carries a verifier's *name and signature* and no way to
-execute one. A verifier is either a tool call, a model call with a rubric, or
-host-provided code, and choosing between those is a design.
-
-*What closing it needs.* Short term, and cheaply: the event should distinguish
-"not performed" from "passed". That is a change to the documented event stream,
-so it goes with the next runtime revision rather than as a silent edit. Long
-term, an execution model for verifiers.
-
-*Recorded in.* [Runtime 0.1 §5](../specs/runtime/v0.1.md) (as permitted),
-nowhere as a warning — which is part of the problem.
 
 ### GAP-003
 
@@ -377,7 +352,7 @@ The digest depends on the prompt after interpolation, which is only known by
 executing the flow; the answer is only known by asking a model. Writing a
 plausible answer for an authored prompt would produce a green `ingot test` that
 demonstrates nothing, which is worse than an empty one — the same reason
-[GAP-002](#gap-002) is on this list.
+[GAP-002](#gap-002) was worth closing.
 
 *What closing it needs.* Either recording the first run as part of authoring,
 which makes `ingot new` execute the agent it just wrote and needs its own
@@ -472,6 +447,34 @@ statement about *reach* rather than only about *kind*.
 attaches to the policy or the tool declaration, how a backend that cannot
 enforce it must refuse, and how it composes with a sub-agent's own policy.
 
+### GAP-030
+
+**A verifier cannot be executed at all.**
+
+*The half of [GAP-002](#gap-002) that was a design rather than a bug.*
+`verifier CitationCheck(draft: markdown, min_sources: int)` parses, type-checks
+and reaches the IR as a name and a signature. Nothing can carry the check out.
+
+*How it shows up.* `ingot check` warns (`ING6006`) and the run reports the node
+as `notPerformed`, so nothing claims the property holds — but nothing tests it
+either. A `verify` is documentation with a type signature.
+
+*Why not yet.* A verifier is either a tool call, a model call with a rubric, or
+host-provided code, and those have different security stories: the first needs an
+effect, the second needs a budget, the third needs a way to ship code with an
+artifact. Picking one by implementing it would settle the design by accident.
+
+*What closing it needs.* An RFC. At minimum: what a verifier *is*, which effects
+it declares, how a failing check affects a run, and what a backend that cannot
+execute one must do — which [Runtime 0.2 §1](../specs/runtime/v0.2.md) already
+answers for the reporting half.
+
+*The workaround.* A `tool` call does execute, and its effects are checked at the
+call site. A property worth enforcing today should be a tool.
+
+*Recorded in.* [Runtime 0.2 §4](../specs/runtime/v0.2.md),
+[Language 0.1 §6](../specs/language/v0.1.md).
+
 ### GAP-014
 
 **No persistent memory or state migration.**
@@ -522,6 +525,29 @@ remain.
 When a gap closes it moves here with the release that closed it, and its section
 stays where a link can find it. Identifiers are never reused: a link to GAP-007
 must keep meaning what it meant.
+
+### GAP-002
+
+**`verify` reported a check that never ran.**
+*Closed in Unreleased (Runtime 0.2).*
+
+The event carried `passed: true` for a node nothing had performed. A boolean can
+describe two states and there are three, so the field was replaced rather than
+extended: `outcome` is `notPerformed`, `passed` or `failed`, and `passed` is
+gone. Leaving it present and adding `performed` beside it would have kept the
+misleading reading available and made the honest answer the one you get by
+reading two fields in the right order.
+
+The compiler now says it earlier too: `ING6006` warns that a declared verifier is
+one nothing in the toolchain can perform, so the gap is visible at `ingot check`
+rather than in an event stream after the fact.
+
+*What this did not close.* Verifiers still cannot be executed —
+[GAP-030](#gap-030) is that half, and it needs an RFC rather than a fix. What
+changed is that the run no longer claims otherwise.
+
+*Recorded in.* [Runtime 0.2](../specs/runtime/v0.2.md),
+[`ingot explain ING6006`](../crates/ingot-diagnostics/src/codes.rs).
 
 ### GAP-019
 

@@ -788,14 +788,14 @@ The five worth knowing before you write an agent:
 | | |
 |---|---|
 | [GAP-001](docs/gaps.md#gap-001) | `network allow ["arxiv.org"]` does not constrain which hosts a tool reaches. The decision is enforced; the list is not. |
-| [GAP-002](docs/gaps.md#gap-002) | `verify` evaluates its arguments and reports `passed: true` without a verifier existing to have checked anything. |
+| [GAP-030](docs/gaps.md#gap-030) | `verify` cannot be executed by anything. The run reports it as `notPerformed` rather than claiming a pass, so nothing misleads — but nothing checks either. |
 | [GAP-006](docs/gaps.md#gap-006) | Cassettes record model exchanges only, so `ingot test` cannot test a tool-using agent. |
 | [GAP-017](docs/gaps.md#gap-017) | The differential tests are not yet a packaged conformance suite or backend author guide. |
 | [GAP-025](docs/gaps.md#gap-025) | Authoring, checking, tracing, testing and safe execution are separate manual workflows. |
 
-The first two of those are **unenforced**: they look like guarantees and are
-not. Everything else in the register either fails loudly or cannot be expressed
-at all.
+The first is **unenforced**: it looks like a guarantee and is not. Everything
+else in the register either says what it did not do, fails loudly, or cannot be
+expressed at all.
 
 ## Contributing
 

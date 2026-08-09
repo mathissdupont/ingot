@@ -10,6 +10,44 @@ use serde_json::Value;
 
 use crate::provider::Usage;
 
+/// What a `verify` node actually did.
+///
+/// Three states rather than a boolean, because "the check passed" and "there was
+/// no check" are different facts and a boolean can only tell you one of them.
+/// Agent IR records a verifier's name and signature and carries no way to
+/// execute one, so a backend that cannot perform a check says so here instead of
+/// reporting a pass nothing earned.
+///
+/// See [Runtime 0.2 §1](../../../specs/runtime/v0.2.md).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum VerifyOutcome {
+    /// The backend has no implementation for this verifier. Not a failure: the
+    /// property is simply unchecked, and the run says so.
+    NotPerformed,
+    Passed,
+    Failed,
+}
+
+impl VerifyOutcome {
+    pub fn describe(self) -> &'static str {
+        match self {
+            VerifyOutcome::NotPerformed => "not performed",
+            VerifyOutcome::Passed => "passed",
+            VerifyOutcome::Failed => "FAILED",
+        }
+    }
+
+    /// Whether this outcome is a check that ran and said no.
+    ///
+    /// Deliberately not `!passed`: a check that never ran has not failed, and
+    /// treating it as a failure would be the mirror of the bug this type exists
+    /// to fix.
+    pub fn is_failure(self) -> bool {
+        matches!(self, VerifyOutcome::Failed)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "camelCase")]
 pub enum RunEvent {
@@ -53,7 +91,7 @@ pub enum RunEvent {
     Verified {
         node: String,
         verifier: String,
-        passed: bool,
+        outcome: VerifyOutcome,
     },
     Checkpoint {
         node: String,
@@ -123,13 +161,8 @@ impl RunEvent {
             }
             RunEvent::StateWritten { field, .. } => format!("        state.{field} written"),
             RunEvent::Verified {
-                verifier, passed, ..
-            } => {
-                format!(
-                    "        verify {verifier}: {}",
-                    if *passed { "passed" } else { "FAILED" }
-                )
-            }
+                verifier, outcome, ..
+            } => format!("        verify {verifier}: {}", outcome.describe()),
             RunEvent::Checkpoint { label, .. } => format!("        checkpoint \"{label}\""),
             RunEvent::BranchTaken { arm, .. } => format!("        branch: {arm}"),
             RunEvent::LoopIteration { iteration, .. } => format!("        iteration {iteration}"),

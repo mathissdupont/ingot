@@ -8,6 +8,28 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
 
 ## [Unreleased]
 
+**A verification that never ran no longer says it passed** (Runtime 0.2;
+closes [GAP-002](docs/gaps.md#gap-002))
+
+- The `verified` event carries `outcome` — `notPerformed`, `passed` or `failed`
+  — and `passed` is removed. A boolean can describe two states and there are
+  three; leaving the old field in place beside a new `performed` flag would have
+  kept the misleading reading available.
+- `notPerformed` is not a failure. A consumer deciding whether a run met its
+  declared properties must treat it as unknown.
+- `ingot check` now warns with `ING6006` when a flow names a verifier nothing in
+  the toolchain can perform, so the gap is visible before the run rather than in
+  an event stream after it. A warning rather than an error: the declaration is
+  correct and keeps its meaning when verifiers gain an execution model.
+- Added [Runtime 0.2](specs/runtime/v0.2.md). This is a breaking change to a
+  documented event stream, taken at the only point where it is free — nothing has
+  been released, so no consumer of Runtime 0.1's `verified` event exists outside
+  this repository.
+- What this does not do is make verifiers executable. That half is now
+  [GAP-030](docs/gaps.md#gap-030) and needs an RFC: a verifier is a tool call, a
+  model call with a rubric, or host-provided code, and those have different
+  security stories.
+
 **The name is a description, not a claim**
 (closes [GAP-019](docs/gaps.md#gap-019))
 

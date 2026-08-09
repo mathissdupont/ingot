@@ -67,7 +67,7 @@ pub use cassette::{
     CASSETTE_VERSION,
 };
 pub use catalogue::{ModelConfig, ProviderConfig, ProviderKind};
-pub use events::{Artifact, CollectingSink, EventSink, NullSink, RunEvent, TeeSink};
+pub use events::{Artifact, CollectingSink, EventSink, NullSink, RunEvent, TeeSink, VerifyOutcome};
 pub use interp::{run, AgentRegistry, RunOptions};
 pub use provider::{
     CompletionRequest, CompletionResponse, ModelProvider, ModelSelection, ProviderError, Usage,

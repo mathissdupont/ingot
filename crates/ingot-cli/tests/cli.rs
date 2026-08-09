@@ -1131,6 +1131,45 @@ agent Brief(topic: string) -> report<markdown> {
 }
 
 #[test]
+fn a_verifier_nothing_can_perform_is_a_warning_before_the_run() {
+    let dir = TempDir::new("verify-warning");
+    let source = dir.path().join("main.ing");
+    std::fs::write(
+        &source,
+        r#"language 0.1
+
+verifier CitationCheck(draft: markdown, min_sources: int)
+
+agent Brief(topic: string) -> report<markdown> {
+  flow {
+    draft = ask<markdown>("Write about ${topic}")
+    verify CitationCheck(draft, min_sources: 8)
+    emit report = draft
+  }
+}
+"#,
+    )
+    .expect("writing the source");
+
+    let output = run(&["check", &source.display().to_string()]);
+    // A warning, not an error: the declaration is correct and keeps its meaning
+    // when verifiers gain an execution model.
+    assert_eq!(code(&output), EXIT_OK, "{}", stderr(&output));
+    let message = stderr(&output);
+    assert!(message.contains("warning[ING6006]"), "{message}");
+    assert!(message.contains("CitationCheck"), "{message}");
+    assert!(message.contains("notPerformed"), "{message}");
+
+    let explained = run(&["explain", "ING6006"]);
+    assert_eq!(code(&explained), EXIT_OK, "{}", stderr(&explained));
+    assert!(
+        stdout(&explained).contains("nothing can carry one out"),
+        "{}",
+        stdout(&explained)
+    );
+}
+
+#[test]
 fn init_refuses_to_overwrite_an_existing_project() {
     let dir = TempDir::new("init-twice");
     let project = dir.path().join("agent");

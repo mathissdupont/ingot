@@ -9,7 +9,7 @@
 use std::collections::BTreeMap;
 
 use ingot_ir::{AgentIr, Node, RefScope, SourceSpan, TemplatePart, Value};
-use ingot_runtime::RunEvent;
+use ingot_runtime::{RunEvent, VerifyOutcome};
 use ingot_source::{FileId, SourceMap};
 
 const MAX_PROMPT_CHARS: usize = 240;
@@ -163,10 +163,14 @@ impl HumanTrace {
             RunEvent::Verified {
                 node,
                 verifier,
-                passed,
+                outcome,
             } => format!(
-                "verify.{}   {}:{node}  {verifier}",
-                if *passed { "pass" } else { "fail" },
+                "verify.{:<6} {}:{node}  {verifier}",
+                match outcome {
+                    VerifyOutcome::NotPerformed => "none",
+                    VerifyOutcome::Passed => "pass",
+                    VerifyOutcome::Failed => "fail",
+                },
                 self.current_agent()
             ),
             RunEvent::Checkpoint { node, label } => {

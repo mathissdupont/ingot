@@ -1072,3 +1072,80 @@ fn recorded_cassettes_round_trip_through_disk_format() {
     let parsed = Cassette::from_json(&cassette.to_canonical_json()).unwrap();
     assert_eq!(parsed, cassette);
 }
+
+// --- verify ---------------------------------------------------------------
+
+/// One model call, one `verify`, one emission.
+fn verifying() -> AgentIr {
+    let mut ir = base("test.Verifying");
+    ir.inputs.insert("topic".into(), "string".into());
+    ir.outputs
+        .insert("report".into(), "artifact<markdown>".into());
+    ir.entry = Some("n0".into());
+
+    let mut check = Node::new("n1", NodeKind::Verify);
+    check.verifier = Some("CitationCheck".into());
+    check.args = vec![Argument {
+        name: "draft".into(),
+        value: IrValue::Ref {
+            scope: RefScope::Binding,
+            path: vec!["draft".into()],
+        },
+    }];
+    check.next = Some("n2".into());
+
+    ir.nodes = vec![
+        llm("n0", Some("draft"), "Write it", "markdown", Some("n1")),
+        check,
+        emit("n2", "report", "draft", None),
+    ];
+    ir
+}
+
+#[test]
+fn a_verify_that_cannot_run_is_reported_as_not_performed() {
+    let mut provider = ScriptedProvider::new(vec![json!("# Draft")]);
+    let mut tools = StaticToolHost::default();
+    let inputs = BTreeMap::from([("topic".to_string(), json!("compiler design"))]);
+    let (result, events) = run_with(&verifying(), &mut provider, &mut tools, inputs);
+    assert!(result.is_ok(), "{:?}", result.err());
+
+    let verified = events
+        .iter()
+        .find_map(|event| match event {
+            RunEvent::Verified {
+                verifier, outcome, ..
+            } => Some((verifier.clone(), *outcome)),
+            _ => None,
+        })
+        .expect("a verify node emits an event");
+    assert_eq!(verified.0, "CitationCheck");
+    assert_eq!(
+        verified.1,
+        crate::VerifyOutcome::NotPerformed,
+        "the artifact names a check this runtime cannot carry out, and saying it \
+         passed would be a pass nothing earned"
+    );
+    assert!(
+        !verified.1.is_failure(),
+        "a check that never ran has not failed either"
+    );
+}
+
+#[test]
+fn a_not_performed_verify_never_serialises_as_a_pass() {
+    let event = RunEvent::Verified {
+        node: "n1".into(),
+        verifier: "CitationCheck".into(),
+        outcome: crate::VerifyOutcome::NotPerformed,
+    };
+    let line = event.to_json_line();
+    assert!(line.contains("\"outcome\":\"notPerformed\""), "{line}");
+    assert!(
+        !line.contains("passed"),
+        "the field a consumer used to read must be gone, not merely false: {line}"
+    );
+    assert!(event
+        .to_line()
+        .contains("verify CitationCheck: not performed"));
+}
