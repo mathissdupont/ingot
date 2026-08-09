@@ -24,6 +24,7 @@ mod diff;
 mod doctor;
 mod image;
 mod manifest;
+mod package;
 mod run;
 mod sandbox;
 mod tools;
@@ -95,6 +96,8 @@ enum Command {
     Fmt(FmtArgs),
     /// Compile to Agent IR and write it to the output directory.
     Build(BuildArgs),
+    /// Package the checked Agent IR as an OCI artifact with a lockfile.
+    Package(PackageArgs),
     /// Print the Agent IR to standard output.
     Ir(IrArgs),
     /// Compile and execute the agent.
@@ -293,6 +296,42 @@ struct BuildArgs {
     /// deployment gate.
     #[arg(long)]
     json: bool,
+}
+
+#[derive(Args, Debug)]
+struct PackageArgs {
+    #[command(flatten)]
+    target: PathArgs,
+
+    /// Write the package here instead of `<out-dir>/package`.
+    #[arg(long, value_name = "DIR")]
+    out_dir: Option<PathBuf>,
+
+    /// Carry this target's portability report in the package. Repeatable.
+    ///
+    /// Omitted, the package makes no portability claim at all, which is the
+    /// honest default: a report is a statement about a target, and a package
+    /// should not make one nobody asked for.
+    #[arg(long = "report", value_enum, value_name = "TARGET")]
+    reports: Vec<ReportTarget>,
+
+    /// Compare the written package with the project instead of writing one.
+    ///
+    /// Reports every blob, source and agent that moved. Repairs nothing: what
+    /// it is for is saying that the artifact and the working tree diverged.
+    #[arg(long)]
+    verify: bool,
+
+    /// Print one stable JSON report for CI.
+    #[arg(long)]
+    json: bool,
+}
+
+/// A target whose portability report a package can carry.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+enum ReportTarget {
+    /// The self-contained Python 3 backend.
+    Python,
 }
 
 /// What `ingot build` compiles to.
@@ -517,6 +556,7 @@ fn main() -> ExitCode {
         Command::Check(args) => run_check(args, color),
         Command::Fmt(args) => run_fmt(args, color),
         Command::Build(args) => run_build(args, color),
+        Command::Package(args) => run_package(args, color),
         Command::Ir(args) => run_ir(args, color),
         Command::Run(args) => run_run(args, color),
         Command::Test(args) => run_test(args, color),
@@ -593,7 +633,7 @@ fn workflow_words(args: &NewArgs) -> Result<String> {
              proposal"
         );
     }
-    if let Some(finding) = authoring::scan_for_credentials(&workflow) {
+    if let Some(finding) = ingot_package::secrets::scan(&workflow) {
         bail!(
             "the workflow description contains {} and was not sent anywhere\n  \
              remove it and describe the credential by name instead; a value in a workflow \
@@ -1080,7 +1120,7 @@ impl StarterTemplate {
     }
 }
 
-fn project_name_for_dir(dir: &Path) -> String {
+pub(crate) fn project_name_for_dir(dir: &Path) -> String {
     dir.file_name()
         .map(|name| name.to_string_lossy().to_string())
         .filter(|name| name != ".")
@@ -1540,6 +1580,11 @@ fn run_build(args: &BuildArgs, color: RenderColor) -> Result<u8> {
         return Ok(EXIT_OK);
     }
 
+    // Before anything is written. A build is the last moment a credential is
+    // still only in the working tree, and the first moment it would be in an
+    // artifact somebody moves.
+    package::scan_project(&compilation, &target)?;
+
     std::fs::create_dir_all(&target.out_dir)
         .with_context(|| format!("creating {}", target.out_dir.display()))?;
 
@@ -1621,6 +1666,36 @@ fn build_python(compilation: &Compilation, target: &Target, args: &BuildArgs) ->
         }
     }
     Ok(EXIT_OK)
+}
+
+// --- package ---------------------------------------------------------------
+
+fn run_package(args: &PackageArgs, color: RenderColor) -> Result<u8> {
+    let target = resolve_target(args.target.path.as_deref())?;
+    let compilation = compile(&target)?;
+    if !args.json {
+        report(&compilation, color);
+    }
+    if compilation.has_errors() {
+        if args.json {
+            report(&compilation, color);
+        }
+        return Ok(EXIT_DIAGNOSTICS);
+    }
+    // A package distributes what was checked. Packaging an unchecked revision is
+    // the one thing this command must never make easy.
+    package::scan_project(&compilation, &target)?;
+
+    package::run(
+        &compilation,
+        &target,
+        &package::PackageConfig {
+            out_dir: args.out_dir.clone(),
+            reports: args.reports.clone(),
+            verify: args.verify,
+            json: args.json,
+        },
+    )
 }
 
 /// The last segment of a dotted agent name, which is what a file is named after.

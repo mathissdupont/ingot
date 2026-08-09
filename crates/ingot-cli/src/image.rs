@@ -58,6 +58,50 @@ pub fn build(source: Option<&Path>) -> Result<u8> {
     }
 }
 
+/// The digest an image reference pins, when it pins one.
+///
+/// `ingot/run@sha256:…` names bytes; `ingot/run:0.3.0` names a tag, which is a
+/// label somebody can move. Both are legitimate — this only says which one you
+/// wrote.
+pub fn pinned_digest(image: &str) -> Option<&str> {
+    let (_, digest) = image.rsplit_once('@')?;
+    let hex = digest.strip_prefix("sha256:")?;
+    (hex.len() == 64 && hex.chars().all(|ch| ch.is_ascii_hexdigit())).then_some(digest)
+}
+
+/// Check a pinned reference against the image actually present.
+///
+/// The check is on the digests the local copy carries, which a registry
+/// assigned. A locally built image has none, so a pinned reference cannot be
+/// satisfied by one — and saying so is the point: a pin that silently accepted
+/// whatever was lying around would be worse than no pin at all.
+///
+/// [Ingot Package 0.1 §9](../../../specs/image/v0.1.md).
+pub fn verify_pin(image: &str, present: &[String]) -> Result<()> {
+    let Some(pin) = pinned_digest(image) else {
+        return Ok(());
+    };
+    if present.iter().any(|reference| reference.ends_with(pin)) {
+        return Ok(());
+    }
+
+    if present.is_empty() {
+        bail!(
+            "`{image}` pins a digest, and the image present locally carries none\n  \
+             a locally built image has no registry digest, so a pin cannot be checked against \
+             it\n  \
+             pull the pinned image, or drop the digest and refer to it by tag"
+        );
+    }
+    bail!(
+        "`{image}` does not match the image present locally\n  \
+         pinned:  {pin}\n  \
+         present: {}\n  \
+         Ingot will not run an image other than the one named",
+        present.join(", ")
+    )
+}
+
 /// Explain an absent image without allowing a runtime to pull it implicitly.
 pub fn missing_image(image: &str) -> String {
     if image == reference_image() {
@@ -181,6 +225,59 @@ mod tests {
         assert_eq!(args[3], "-t");
         assert_eq!(args[4], "ingot/run:0.3.0");
         assert_eq!(PathBuf::from(&args[5]), root);
+    }
+
+    #[test]
+    fn a_reference_pins_a_digest_only_when_it_carries_a_well_formed_one() {
+        let hex = "a".repeat(64);
+        assert_eq!(
+            pinned_digest(&format!("ingot/run@sha256:{hex}")),
+            Some(format!("sha256:{hex}").as_str())
+        );
+        for unpinned in [
+            "ingot/run:0.3.0",
+            "ingot/run",
+            "ingot/run@sha256:short",
+            "ingot/run@md5:0123456789abcdef0123456789abcdef",
+            "ingot/run@sha256:../../etc/passwd",
+        ] {
+            assert_eq!(pinned_digest(unpinned), None, "{unpinned}");
+        }
+    }
+
+    #[test]
+    fn an_unpinned_reference_is_not_checked_against_anything() {
+        assert!(verify_pin("ingot/run:0.3.0", &[]).is_ok());
+    }
+
+    #[test]
+    fn a_pin_matches_the_digest_the_local_image_carries() {
+        let hex = "b".repeat(64);
+        let image = format!("ingot/run@sha256:{hex}");
+        assert!(verify_pin(&image, &[format!("ingot/run@sha256:{hex}")]).is_ok());
+    }
+
+    #[test]
+    fn a_digest_pinned_image_that_does_not_match_refuses_the_run() {
+        let wanted = "c".repeat(64);
+        let present = format!("ingot/run@sha256:{}", "d".repeat(64));
+        let error = verify_pin(
+            &format!("ingot/run@sha256:{wanted}"),
+            std::slice::from_ref(&present),
+        )
+        .expect_err("a mismatch must refuse");
+        let message = error.to_string();
+        assert!(message.contains(&wanted), "{message}");
+        assert!(message.contains(&present), "{message}");
+    }
+
+    #[test]
+    fn a_pin_is_not_satisfied_by_a_locally_built_image() {
+        // A local build carries no registry digest. Accepting it would make the
+        // pin decorative, which is worse than not offering one.
+        let error = verify_pin(&format!("ingot/run@sha256:{}", "e".repeat(64)), &[])
+            .expect_err("an unverifiable pin must refuse");
+        assert!(error.to_string().contains("carries none"), "{error}");
     }
 
     #[test]

@@ -174,6 +174,47 @@ pub fn image_exists(runtime: &Runtime, image: &str) -> Result<bool, ExecutorErro
     })
 }
 
+/// The registry digests the local copy of `image` was pulled under.
+///
+/// Empty for an image built locally: a build produces no repository digest,
+/// because a digest is what a registry assigned to the manifest it accepted.
+/// That distinction matters — an unpinned local build is a legitimate state, and
+/// a pinned reference that cannot be checked is not.
+pub fn image_digests(runtime: &Runtime, image: &str) -> Result<Vec<String>, ExecutorError> {
+    let output = Command::new(&runtime.program)
+        .args([
+            "image",
+            "inspect",
+            image,
+            "--format",
+            "{{range .RepoDigests}}{{println .}}{{end}}",
+        ])
+        .output()
+        .map_err(|error| ExecutorError::RuntimeUnavailable {
+            runtime: runtime.program.clone(),
+            reason: error.to_string(),
+        })?;
+
+    if !output.status.success() {
+        let reason = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(ExecutorError::RuntimeUnavailable {
+            runtime: runtime.program.clone(),
+            reason: if reason.is_empty() {
+                format!("could not inspect image `{image}`")
+            } else {
+                reason
+            },
+        });
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect())
+}
+
 /// The arguments that ask a runtime for this plan.
 ///
 /// Returns everything after the runtime's own name, so the caller spawns

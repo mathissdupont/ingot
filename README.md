@@ -28,7 +28,9 @@ Language 0.2 adds project-local imports, optional/union type expressions and
 expression-only pure helper functions; generics are deliberately deferred until
 real source shows the need. `ingot new` can hand authoring to a model and have
 the compiler verify what comes back, on a new project or as a diff against an
-existing one. OCI packaging remains planned. See [the roadmap](#roadmap).
+existing one. `ingot package` writes the checked artifact as a reproducible OCI
+package with a lockfile, and a build-time scan refuses a credential before it can
+leave the machine. See [the roadmap](#roadmap).
 
 ---
 
@@ -188,6 +190,8 @@ export CARGO_TARGET_DIR=/c/build/ingot
 | `ingot check` | parse, type-check, validate policy and budgets |
 | `ingot fmt [--check]` | canonical formatting |
 | `ingot build [--target ir\|python] [--out-dir]` | compile to Agent IR or self-contained Python 3 |
+| `ingot package [--report python] [--out-dir]` | write the checked artifact as an OCI package with a lockfile and a reproducible digest |
+| `ingot package --verify` | report every source, agent and field that moved since the package was written |
 | `ingot ir [--agent]` | print the IR to stdout |
 | `ingot run [--input k=v]` | execute the agent |
 | `ingot run --sandbox` | execute it with each tool server inside a boundary |
@@ -301,6 +305,69 @@ which is the one most worth reading again.
 An authored project gets no cassette. A recorded answer that no model produced
 would be a test proving nothing, so the generated README carries the one
 `ingot run --record` command that creates a real one.
+
+### Packaging the checked artifact
+
+`ingot package` writes what was compiled and tested as a standard
+[OCI image layout][oci-layout], so an existing client moves it and Ingot invents
+no transport:
+
+```bash
+ingot package --report python
+oras cp --from-oci-layout target/ingot/package:latest ghcr.io/you/research-agent:0.1.0
+```
+
+[oci-layout]: https://github.com/opencontainers/image-spec/blob/main/image-layout.md
+
+What comes out is one artifact manifest whose layers are the Agent IR documents
+themselves — **the bytes `ingot build` wrote**, not a re-encoding — plus
+`ingot.lock` and, when asked, a portability report per target. The printed digest
+is `sha256` of the manifest, and it is reproducible: the same source, manifest
+and compiler give the same digest on Linux, macOS and Windows, because there is
+no timestamp, no build-machine path and no compression anywhere in it.
+
+The lockfile records **identity, not content** — source and agent digests, the
+compiler version, and the declared tool servers and model services by name. It is
+written into the project as well as into the package, so it can be committed and
+reviewed:
+
+```json
+{
+  "agents": [{ "agent": "packaged.Brief", "digest": "sha256:…" }],
+  "ingot": "0.3.0",
+  "sources": [{ "digest": "sha256:…", "path": "main.ing" }],
+  "toolServers": [{ "command": "ingot-mcp-fs", "name": "workspace", "passEnv": ["GITHUB_TOKEN"] }]
+}
+```
+
+`passEnv` and `apiKeyEnv` hold variable **names**. There is no field anywhere in
+a lockfile that can hold a value, which is the same rule `[[mcp.server]]` already
+follows and for the same reason: a lockfile is committed.
+
+Source text does not travel; its digest does. `ingot package --verify` recompiles
+the project and names every source, agent and metadata field that moved since the
+package was written, repairing nothing:
+
+```bash
+ingot package --verify
+ingot package --verify --json | jq -e '.matches'
+```
+
+`ingot build` and `ingot package` also scan source, the compiled IR and every
+cassette for credential-shaped **values**, and refuse rather than warn. The
+message names the file, the line and the shape, and never the value. It is a
+check on the author rather than a security boundary: what makes
+[SECURITY.md](SECURITY.md)'s commitment hold is that there is no path from the
+environment into an artifact at all.
+
+A contained-run image may be pinned by digest — `ingot/run@sha256:…` in
+`[run] image` or `--image` — and a run refuses when the image present is not the
+one named. Acquisition stays manual: a pull becomes automatic only once there is
+a signature and a trust root to check it against
+([GAP-029](docs/gaps.md#gap-029)).
+
+The normative rules are [Ingot Package 0.1](specs/image/v0.1.md); the reasoning
+is [RFC-0012](rfcs/0012-the-ingot-package.md).
 
 ### Choosing a model
 
@@ -558,7 +625,10 @@ workspace version matches the running binary, and builds `ingot/run:<version>`
 with the available Docker or Podman daemon. A contained run selects that exact
 local tag when neither `[run] image` nor `--image` deliberately names a custom
 deployment image. It never pulls an image automatically and a missing boundary
-never falls back to a host run. Verified remote acquisition remains part of M6.
+never falls back to a host run. An image may be pinned by digest —
+`ingot/run@sha256:…` — and a run refuses when the image present is not the one
+named; automatic acquisition waits for a signature and a trust root
+([GAP-029](docs/gaps.md#gap-029)).
 
 Everything is inside: the interpreter, its tool servers, and the mounts the policy
 named. Nothing else. The model call and the approval gate leave through a
@@ -675,7 +745,7 @@ With `--sandbox` the MCP servers move inside a policy-derived boundary
 | M3 | reference interpreter, `ingot run`, end-to-end execution | done |
 | M4 | cassette record and replay, `ingot test`, MCP tool host | done |
 | M5 | a second backend and the portability report | done |
-| M6 | OCI artifact, lockfile, reproducible digest | planned |
+| M6 | OCI artifact, lockfile, reproducible digest | done |
 | M7 | language server and editor support | done |
 | M8 | conformance suite and backend author guide | planned |
 | M9 | Ingot Containers — the policy block as an enforced boundary | done |
@@ -683,7 +753,7 @@ With `--sandbox` the MCP servers move inside a policy-derived boundary
 | M11 | integrated `.ing` product loop: templates, `dev`, trace, readiness and safe-run UX | done |
 
 A number is an identity, not a position in a queue; things get referenced by it,
-so they keep it. The remaining proposed order is **M6 → M8**.
+so they keep it. The remaining milestone is **M8**.
 [RFC-0007](rfcs/0007-the-ingot-product-loop.md) explains why the
 usable language loop comes before generation and packaging.
 

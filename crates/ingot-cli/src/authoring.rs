@@ -16,6 +16,7 @@ use anyhow::{Context, Result};
 use ingot_compiler::compile_source;
 use ingot_diagnostics::Severity;
 use ingot_mcp::ToolDescriptor;
+use ingot_package::secrets;
 use ingot_runtime::schema::ResponseShape;
 use ingot_runtime::{CompletionRequest, ModelProvider, ModelSelection, Usage};
 use ingot_syntax::{PolicyAction, Program};
@@ -119,7 +120,7 @@ pub(crate) enum RepairOutcome {
     /// offending source back to the model would put the value in a second
     /// place. The report names where it was, never what it was.
     CredentialRefused {
-        finding: CredentialFinding,
+        finding: secrets::Finding,
     },
 }
 
@@ -184,7 +185,7 @@ pub(crate) fn author(
 
         // Before the compiler, before the policy comparison, and before the
         // source is written anywhere: a credential must not travel further.
-        if let Some(finding) = scan_for_credentials(&candidate) {
+        if let Some(finding) = secrets::scan(&candidate) {
             return Ok(RepairLoop {
                 attempts,
                 outcome: RepairOutcome::CredentialRefused { finding },
@@ -621,93 +622,6 @@ fn compact_json(value: &serde_json::Value) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| "{}".to_string())
 }
 
-// --- credentials ------------------------------------------------------------
-
-/// Where a credential-shaped value was found, and what shape it had.
-///
-/// It never carries the value. The point of finding it is to stop it being
-/// copied, and a report that quotes it copies it into a terminal and a CI log.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct CredentialFinding {
-    /// 1-based line of the source the candidate proposed.
-    pub(crate) line: usize,
-    pub(crate) shape: &'static str,
-}
-
-/// Refuse anything shaped like a credential value.
-///
-/// Deliberately about *values*, not words: a workflow may legitimately be about
-/// password resets or API keys, and refusing the word would make the check
-/// something operators route around. A long opaque run of characters after a
-/// credential-ish marker is not something an authored agent has any reason to
-/// contain.
-pub(crate) fn scan_for_credentials(text: &str) -> Option<CredentialFinding> {
-    for (index, line) in text.lines().enumerate() {
-        if let Some(shape) = credential_shape(line) {
-            return Some(CredentialFinding {
-                line: index + 1,
-                shape,
-            });
-        }
-    }
-    None
-}
-
-fn credential_shape(line: &str) -> Option<&'static str> {
-    let lowered = line.to_ascii_lowercase();
-
-    // Vendor-prefixed keys are unambiguous, so they are matched on their own.
-    for prefix in ["sk-", "sk_live_", "ghp_", "github_pat_", "xoxb-", "aiza"] {
-        if let Some(position) = lowered.find(prefix) {
-            if opaque_run(&line[position + prefix.len()..]) >= 16 {
-                return Some("a vendor-prefixed API key");
-            }
-        }
-    }
-
-    if let Some(position) = lowered.find("bearer ") {
-        if opaque_run(line[position + "bearer ".len()..].trim_start()) >= 16 {
-            return Some("a bearer token");
-        }
-    }
-
-    // `api_key = "…"`, `token: "…"`, `password="…"`: a marker, a separator, and
-    // an opaque value long enough to be a real one.
-    for marker in [
-        "api_key", "apikey", "api-key", "secret", "password", "passwd", "token",
-    ] {
-        let mut from = 0usize;
-        while let Some(offset) = lowered[from..].find(marker) {
-            let after = from + offset + marker.len();
-            from = after;
-            let rest = line[after..].trim_start();
-            let Some(rest) = rest
-                .strip_prefix('=')
-                .or_else(|| rest.strip_prefix(':'))
-                .map(str::trim_start)
-            else {
-                continue;
-            };
-            let value = rest.trim_start_matches(['"', '\'']);
-            if opaque_run(value) >= 16 {
-                return Some("an assigned credential value");
-            }
-        }
-    }
-    None
-}
-
-/// The length of the leading run of characters a secret is made of.
-///
-/// Letters, digits and the three separators that appear in real tokens. A space
-/// or a quote ends it, so `password: "the user's own words"` is not a finding
-/// and `password: "aG9sZHRoaXNzZWNyZXQ="` is.
-fn opaque_run(text: &str) -> usize {
-    text.chars()
-        .take_while(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '+' | '/' | '='))
-        .count()
-}
-
 // --- policy comparison ------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -1100,42 +1014,6 @@ agent Research(topic: string) -> report<markdown> {
             loop_.attempts().is_empty(),
             "the offending source must not be kept for a repair prompt"
         );
-    }
-
-    #[test]
-    fn ordinary_words_are_not_credentials() {
-        for line in [
-            r#"  emit reply = ask<markdown>("Explain how to reset a password.")"#,
-            r#"  emit reply = ask<markdown>("The token budget is tight.")"#,
-            r#"  emit reply = ask<markdown>("Ask the user for their api key by email.")"#,
-            "tool vault.read_secret(name: string) -> string !network",
-        ] {
-            assert_eq!(scan_for_credentials(line), None, "{line}");
-        }
-    }
-
-    #[test]
-    fn real_credential_values_are_found() {
-        for (line, shape) in [
-            (
-                r#"token: "ghp_16C7e42F292c6912E7710c838347Ae178B4a""#,
-                "a vendor-prefixed API key",
-            ),
-            (
-                r#"header = "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9""#,
-                "a bearer token",
-            ),
-            (
-                r#"password = "aG9sZHRoaXNzZWNyZXR2YWx1ZQ==""#,
-                "an assigned credential value",
-            ),
-        ] {
-            assert_eq!(
-                scan_for_credentials(line).map(|finding| finding.shape),
-                Some(shape),
-                "{line}"
-            );
-        }
     }
 
     #[test]

@@ -1,0 +1,15 @@
+[package]
+name = "ingot-package"
+description = "The Ingot package: checked Agent IR and its identity, as an OCI artifact."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+ingot-ir.workspace = true
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = "0.10"

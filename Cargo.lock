@@ -499,6 +499,7 @@ dependencies = [
  "ingot-ir",
  "ingot-lexer",
  "ingot-mcp",
+ "ingot-package",
  "ingot-runtime",
  "ingot-sandbox",
  "ingot-source",
@@ -581,6 +582,16 @@ dependencies = [
  "serde",
  "serde_json",
  "toml",
+]
+
+[[package]]
+name = "ingot-package"
+version = "0.3.0"
+dependencies = [
+ "ingot-ir",
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]

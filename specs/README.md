@@ -9,7 +9,7 @@ Normative behaviour lives here. Implementation detail does not.
 | [`ir/v0.1.md`](ir/v0.1.md) | Draft, implemented | The original Agent IR backend contract |
 | [`ir/v0.2.md`](ir/v0.2.md) | Draft, implemented | Agent IR 0.1 plus portable node source spans |
 | [`ir/agent-ir.schema.json`](ir/agent-ir.schema.json) | Draft, implemented | Machine-readable IR schema |
-| [`image/`](image/) | Not started (M6) | OCI artifact profile, media types, lockfile |
+| [`image/v0.1.md`](image/v0.1.md) | Draft, implemented | OCI artifact profile, media types, lockfile, digest |
 | [`runtime/v0.1.md`](runtime/v0.1.md) | Draft, implemented | Execution model and the backend interface |
 | [`conformance/`](conformance/) | Started (M5); packaging planned for M8 | Normative tests a backend must pass |
 

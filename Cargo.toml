@@ -9,6 +9,7 @@ members = [
     "crates/ingot-types",
     "crates/ingot-semantic",
     "crates/ingot-ir",
+    "crates/ingot-package",
     "crates/ingot-compiler",
     "crates/ingot-runtime",
     "crates/ingot-mcp",
@@ -38,6 +39,7 @@ ingot-parser = { path = "crates/ingot-parser", version = "0.3.0" }
 ingot-types = { path = "crates/ingot-types", version = "0.3.0" }
 ingot-semantic = { path = "crates/ingot-semantic", version = "0.3.0" }
 ingot-ir = { path = "crates/ingot-ir", version = "0.3.0" }
+ingot-package = { path = "crates/ingot-package", version = "0.3.0" }
 ingot-compiler = { path = "crates/ingot-compiler", version = "0.3.0" }
 ingot-runtime = { path = "crates/ingot-runtime", version = "0.3.0" }
 ingot-mcp = { path = "crates/ingot-mcp", version = "0.3.0" }

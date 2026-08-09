@@ -350,7 +350,7 @@ Tracking issue: [#10](https://github.com/mathissdupont/ingot/issues/10).
 - Connect packages to the contained-run image contract without embedding secrets.
 
 **Done when:** the artifact tested locally is the artifact identified, moved and
-executed elsewhere.
+executed elsewhere. *Delivered by [RFC-0012](0012-the-ingot-package.md).*
 
 ## Delivery order
 
@@ -364,13 +364,13 @@ M11 product loop foundation
   → IR 0.2 source spans
 ```
 
-M10 has since landed on top of that foundation rather than in place of it: model
-assistance writes the same ordinary source the loop was already built around.
-The remaining proposed order is:
+M10 and M6 have since landed on top of that foundation rather than in place of
+it: model assistance writes the same ordinary source the loop was already built
+around, and packaging distributes the same checked bytes it produced. What
+remains is:
 
 ```text
-M6 packaging and distribution
-  → M8 third-party backend conformance
+M8 third-party backend conformance
 ```
 
 P1–P5 established the path before broadening the language or adding a generator.
@@ -388,8 +388,10 @@ This RFC grants nothing new. Its implementation must preserve four boundaries:
 - templates and model assistance cannot write credential values;
 - accepting ordinary generated source cannot implicitly accept a policy change.
 
-Automating image acquisition adds a supply-chain decision. M6 must define digest
-and signature verification before a downloaded image can become the default.
+Automating image acquisition adds a supply-chain decision. M6 defined and
+implemented digest pinning ([RFC-0012](0012-the-ingot-package.md)); signature
+verification and a trust root are still required before a downloaded image can
+become the default.
 Until then, the product loop may build the reference image locally or require an
 explicitly selected image, but must make that one actionable step.
 
@@ -467,4 +469,4 @@ turning a deliberately small agent language into a general-purpose one by guess.
 - [ ] `editor_and_cli_diagnostics_are_identical`
 - [x] `an_authoring_repair_cannot_accept_its_own_policy_widening`
 - [x] `model_assistance_leaves_a_project_that_works_without_the_model`
-- [ ] `the_packaged_ir_is_the_same_bytes_that_the_tested_build_produced`
+- [x] `the_packaged_ir_is_the_same_bytes_that_the_tested_build_produced`

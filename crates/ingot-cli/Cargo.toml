@@ -26,6 +26,7 @@ ingot-sandbox.workspace = true
 ingot-supervisor.workspace = true
 ingot-backend-python.workspace = true
 ingot-ir.workspace = true
+ingot-package.workspace = true
 ingot-source.workspace = true
 ingot-syntax.workspace = true
 ingot-diagnostics.workspace = true
@@ -39,6 +40,9 @@ notify = { workspace = true }
 
 [dev-dependencies]
 ingot-ir.workspace = true
+# The package tests assert on the artifact a person receives, and compute the
+# digests they assert with rather than restating them.
+ingot-package.workspace = true
 serde_json = { workspace = true }
 # `ingot run` is tested against the reference MCP server, so the tests need the
 # binary built alongside the one under test.

@@ -8,6 +8,46 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
 
 ## [Unreleased]
 
+**Packaging: the checked artifact, made movable**
+([RFC-0012](rfcs/0012-the-ingot-package.md),
+[#10](https://github.com/mathissdupont/ingot/issues/10);
+closes [GAP-004](docs/gaps.md#gap-004), [GAP-015](docs/gaps.md#gap-015))
+
+- Added `ingot package`, which writes the compiled project as a standard OCI
+  image layout holding one artifact manifest. Existing clients move it — there is
+  no Ingot registry and no Ingot transport — and the printed digest is `sha256`
+  of the manifest.
+- The packaged Agent IR layers are the bytes `ingot build` wrote, carried
+  verbatim rather than re-encoded, so the artifact that is distributed is the one
+  that was tested.
+- The package digest is reproducible: no timestamp, no build-machine path, no
+  compression, and one canonical JSON encoding for every document it generates.
+  The same inputs produce the same digest on Linux, macOS and Windows.
+- Added `ingot.lock`, written into the project and carried in the package. It
+  records identity rather than content: source and agent digests, the compiler
+  version, and declared tool servers and model services by name. No field in it
+  can hold an environment value.
+- Source text does not travel in a package; its digest does. Cassettes,
+  credentials, absolute paths and editor state are excluded by specification and
+  by test.
+- Added `ingot package --verify`, which recompiles the project and names every
+  blob, source, agent and metadata field that moved since the package was
+  written. It repairs nothing.
+- Added `--report python`, which carries a target's portability report in the
+  package. Omitted, a package makes no portability claim at all.
+- Added the build-time secret scan. `ingot build` and `ingot package` scan
+  source, the compiled IR and every cassette for credential-shaped **values** and
+  refuse rather than warn, naming the file, the line and the shape but never the
+  value. It is the same scanner that guards model-assisted authoring: a generator
+  must not be able to write what the packager would refuse.
+- A contained-run image reference may now be digest-pinned
+  (`ingot/run@sha256:…`), and a run refuses when the image present locally is not
+  the one named. Acquisition stays manual: automatic pulling waits for a
+  signature scheme and a trust root ([GAP-029](docs/gaps.md#gap-029)).
+- Added the normative [Ingot Package 0.1](specs/image/v0.1.md) specification.
+  `lockVersion`, `configVersion` and the media-type versions move independently
+  of the language, the Agent IR and the CLI.
+
 **Model-assisted authoring guardrails**
 ([RFC-0007](rfcs/0007-the-ingot-product-loop.md),
 [#9](https://github.com/mathissdupont/ingot/issues/9))

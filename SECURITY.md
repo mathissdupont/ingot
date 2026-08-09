@@ -58,8 +58,12 @@ actionable regardless of severity.
 absent rule is a denial with its own diagnostic (`ING4007`), never a permission.
 
 **Secrets never enter an artifact.** Secret values do not appear in source, IR,
-lockfiles or OCI layers. Only references and schemas do. The build-time scanner
-that enforces this arrives with M6 packaging.
+lockfiles or OCI layers. Only references and schemas do. `ingot build` and
+`ingot package` scan source, the compiled IR and every cassette for
+credential-shaped values and refuse rather than warn
+([Ingot Package 0.1 §8](specs/image/v0.1.md)). The scan is a check on the author:
+what makes the commitment hold is that there is no *path* from the environment
+into an artifact, and the scanner does not replace that.
 
 **Effects are explicit.** Every tool declares what it can do. A call's effects
 are checked at the call site. A sub-agent cannot exceed the union of the effects

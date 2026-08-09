@@ -39,7 +39,6 @@ to you*.
 | [GAP-001](#gap-001) | A policy's host allowlist is not enforced | Unenforced | an egress proxy in the runner |
 | [GAP-002](#gap-002) | `verify` reports a check that never ran | Unenforced | a verifier execution model (RFC) |
 | [GAP-003](#gap-003) | `cost` budgets are never charged | Unenforced | per-model pricing in the runtime |
-| [GAP-004](#gap-004) | No build-time secret scan | Unenforced | M6 |
 | [GAP-005](#gap-005) | No streaming; one call, 16k output ceiling | Refused | a streaming provider interface (RFC) |
 | [GAP-006](#gap-006) | Cassettes carry no tool results | Refused | cassette format 0.2 |
 | [GAP-007](#gap-007) | MCP over stdio only | Refused | GAP-013, then a transport |
@@ -50,7 +49,6 @@ to you*.
 | [GAP-012](#gap-012) | No optionals, unions, generics or functions | Absent | language 0.2 |
 | [GAP-013](#gap-013) | A capability cannot be scoped to an endpoint or a path | Absent | a policy subject for resources (RFC) |
 | [GAP-014](#gap-014) | No persistent memory or state migration | Absent | a memory model (RFC) |
-| [GAP-015](#gap-015) | No OCI artifact, lockfile or digest addressing | Absent | M6 |
 | [GAP-017](#gap-017) | No conformance suite or backend author guide | Absent | M8 |
 | [GAP-019](#gap-019) | The name has had no trademark or registry clearance | Absent | legal review |
 | [GAP-020](#gap-020) | The boundary needs Linux containers | Refused | a second expression of the boundary |
@@ -59,6 +57,7 @@ to you*.
 | [GAP-024](#gap-024) | A wedged contained run is not timed out | Degraded | a deadline on the supervisor channel |
 | [GAP-025](#gap-025) | The product loop is fragmented across commands and raw output | Degraded | M11 |
 | [GAP-028](#gap-028) | A model-authored project has no offline test until one run is recorded | Degraded | cassette synthesis, or nothing |
+| [GAP-029](#gap-029) | An image cannot be verified by signature, so acquisition stays manual | Refused | a signature scheme and a trust root |
 
 ---
 
@@ -157,22 +156,6 @@ price must not pretend to.
 
 *Recorded in.* [Runtime 0.1 §8](../specs/runtime/v0.1.md).
 
-### GAP-004
-
-**No build-time secret scan.**
-
-[SECURITY.md](../SECURITY.md) commits to secrets never entering an artifact.
-Nothing checks it. The commitment holds today because there is no syntax for a
-secret literal and no path from the environment into the IR, but that is an
-argument, not a test.
-
-*How it shows up.* A prompt with an API key pasted into it compiles and ships.
-
-*What closing it needs.* A scanner over source, IR and cassettes, run by
-`ingot build`. Scheduled with M6, when there is an artifact to sign.
-
-*Recorded in.* [SECURITY.md](../SECURITY.md).
-
 ---
 
 ## Refused
@@ -258,6 +241,36 @@ Sampling — a server asking to use the agent's model — would be an effect not
 declared. Resources have no type in the language.
 
 *Recorded in.* [MCP binding 0.1 §1](../specs/tools/mcp-v0.1.md).
+
+### GAP-029
+
+**An image cannot be verified by signature, so acquisition stays manual.**
+
+*Narrowed by M6.* An image reference may now be digest-pinned —
+`ingot/run@sha256:…` in `[run] image` or `--image` — and a contained run compares
+the pin with the digest the local image carries, refusing when they differ
+([Ingot Package 0.1 §9](../specs/image/v0.1.md)). What a pin cannot yet say is
+*who* produced those bytes.
+
+*How it shows up.* `ingot run --contained` never downloads an image. A missing
+one is an error naming `ingot image build`, and never a pull and never a host-run
+fallback. Getting an image onto a machine is therefore a step the operator takes
+deliberately, with whatever tool they already trust.
+
+*Why not yet.* A signature needs a trust root, a key custody story and a
+revocation story. None of those are a compiler's to invent, and signature
+verification without a trust root is theatre — it would look like a guarantee
+while checking that a file signed itself. Shipping digest pinning, which is a
+complete property on its own, and naming what is missing is better than shipping
+something that resembles both.
+
+*What closing it needs.* A signature over the manifest digest, a documented trust
+root, and a refusal path for an unsigned or unverifiable image. All three, before
+a pull may become automatic.
+
+*Recorded in.* [RFC-0012](../rfcs/0012-the-ingot-package.md),
+[Ingot Package 0.1 §9](../specs/image/v0.1.md),
+`crates/ingot-cli/src/image.rs`.
 
 ### GAP-020
 
@@ -469,17 +482,6 @@ There is no `persistent`, and therefore no question yet of migrating it.
 
 *Recorded in.* [Language 0.1 §9](../specs/language/v0.1.md).
 
-### GAP-015
-
-**No OCI artifact, lockfile or digest addressing.**
-
-`ingot build` writes canonical JSON to a directory. There is no packaging, no
-lockfile pinning what an artifact was built against, and nothing addressed or
-signed by digest — even though the IR encoding was designed for exactly that
-([ADR-0004](adr/0004-canonical-ir-encoding.md)).
-
-*Closes with.* M6.
-
 ### GAP-022
 
 **Nothing has been released; you build from source.**
@@ -536,6 +538,52 @@ When a gap closes it moves here with the release that closed it, and its section
 stays where a link can find it. Identifiers are never reused: a link to GAP-007
 must keep meaning what it meant.
 
+### GAP-015
+
+**No OCI artifact, lockfile or digest addressing.**
+*Closed in Unreleased (M6).*
+
+`ingot package` writes a standard OCI image layout holding one artifact manifest:
+the Agent IR blobs verbatim, a lockfile, and optionally a portability report per
+target. The package digest is `sha256` of the manifest, and it is reproducible —
+no timestamps, no build-machine paths, no compression, one canonical JSON
+encoding throughout — so the same inputs give the same digest on every platform.
+`ingot package --verify` names every source, agent and metadata field that moved
+since the package was written.
+
+There is deliberately no registry client
+([RFC-0012](../rfcs/0012-the-ingot-package.md)): the layout is the interoperable
+thing, and `oras`, `skopeo` and `crane` already move it. Signature verification
+for images is separately open as [GAP-029](#gap-029).
+
+*Recorded in.* [Ingot Package 0.1](../specs/image/v0.1.md),
+[RFC-0012](../rfcs/0012-the-ingot-package.md), [README](../README.md),
+[CHANGELOG](../CHANGELOG.md).
+
+### GAP-004
+
+**No build-time secret scan.**
+*Closed in Unreleased (M6).*
+
+`ingot build` and `ingot package` scan the project's source, the compiled Agent
+IR bytes and every cassette for credential-shaped **values**, and refuse rather
+than warn. The refusal names the file, the line and the shape, and never the
+value: a report that quoted it would have copied the credential into a terminal
+and a CI log.
+
+The scan is about values rather than words, so an agent may legitimately be about
+password resets or key rotation. The same scanner guards model-assisted
+authoring, because a generator must not be able to write what the packager would
+refuse.
+
+*What this does not claim.* It is a check on the author, not a security boundary:
+a credential shaped like an English sentence passes. The property
+[SECURITY.md](../SECURITY.md) states is that the toolchain provides no *path* for
+a secret to reach an artifact, and the scanner does not replace it.
+
+*Recorded in.* [Ingot Package 0.1 §8](../specs/image/v0.1.md),
+[SECURITY.md](../SECURITY.md), `crates/ingot-package/src/secrets.rs`.
+
 ### GAP-027
 
 **Agent IR carried no portable source spans.**
@@ -569,8 +617,8 @@ image when no deliberate `[run] image` or `--image` override exists, and
 
 The command does not weaken the supply-chain boundary: it never downloads an
 image, custom images remain explicit operator choices, and a missing runtime or
-image never falls back to a host run. Signed, digest-addressed remote acquisition
-remains part of M6 rather than being guessed here.
+image never falls back to a host run. M6 added digest pinning for an image
+reference; signed acquisition is separately open as [GAP-029](#gap-029).
 
 *Recorded in.* [README](../README.md#putting-the-agent-in-the-box-too),
 [CHANGELOG](../CHANGELOG.md),

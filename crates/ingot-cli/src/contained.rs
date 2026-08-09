@@ -299,6 +299,17 @@ fn contained_command(config: &RunConfig, plan: &SandboxPlan) -> Result<Command> 
         Err(error) => return Err(anyhow!("{error}")),
     }
 
+    // A pinned reference names bytes rather than a label, so it is checked
+    // before the boundary is built. Acquisition stays manual either way: a pull
+    // becomes automatic only once there is a signature and a trust root to check
+    // it against.
+    if crate::image::pinned_digest(&image).is_some() {
+        let present =
+            ingot_sandbox::image_digests(&runtime, &image).map_err(|error| anyhow!("{error}"))?;
+        crate::image::verify_pin(&image, &present)?;
+        eprintln!("image     {image} (digest verified)");
+    }
+
     // A write grant is how an artifact says "put the output here", so the
     // directory is created rather than the run failing on its absence.
     for directory in plan.directories_to_create() {
