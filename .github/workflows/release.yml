@@ -55,8 +55,14 @@ jobs:
             os: ubuntu-latest
           - target: aarch64-apple-darwin
             os: macos-latest
+          # Cross-compiled from Apple silicon, because the Intel runner image
+          # (`macos-13`) has been retired: a job asking for it queues forever
+          # rather than failing, which is how 0.4.0-rc.1 found this. The Xcode
+          # toolchain targets x86_64 natively, and the runner has Rosetta, so
+          # the archived binary is still executed before it ships — the one
+          # property this job exists to hold.
           - target: x86_64-apple-darwin
-            os: macos-13
+            os: macos-latest
           - target: x86_64-pc-windows-msvc
             os: windows-latest
     steps:
