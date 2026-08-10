@@ -629,6 +629,24 @@ fn tools_per_agent(compilation: &Compilation) -> Vec<AgentTools> {
         .collect()
 }
 
+/// A name for this run's network and proxy.
+///
+/// Derived from the process id rather than a random value, so a leftover object
+/// can be traced back to the run that made it — and so two runs on one machine
+/// never collide on a name.
+fn boundary_name(compilation: &Compilation) -> String {
+    let agent = compilation
+        .agents
+        .first()
+        .map(|agent| agent.agent.as_str())
+        .unwrap_or("run");
+    let slug: String = agent
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+        .collect();
+    format!("{}-{}", slug.to_ascii_lowercase(), std::process::id())
+}
+
 /// Build the host that contains each tool server.
 ///
 /// Refuses before starting anything when a boundary cannot honour a rule the
@@ -636,8 +654,27 @@ fn tools_per_agent(compilation: &Compilation) -> Vec<AgentTools> {
 /// `network allow ["arxiv.org"]` is in force is worse off than one who knows it
 /// is not.
 fn contained_host(compilation: &Compilation, config: &RunConfig) -> Result<McpToolHost> {
-    let plans = crate::sandbox::plan_all(compilation, &config.mcp, &config.workspace)
-        .map_err(|problems| anyhow::anyhow!("{}", problems.join("\n")))?;
+    let runtime = ingot_sandbox::detect().map_err(|error| anyhow::anyhow!("{error}"))?;
+
+    // Whether the allowlist will be kept has to be settled before the plans are
+    // made, because it decides what they report. Settled from what is actually
+    // available: an image that is not there cannot bound anything, and a plan
+    // that assumed it would be would be the lie this whole path avoids.
+    let egress_image = std::env::var("INGOT_EGRESS_IMAGE")
+        .unwrap_or_else(|_| ingot_sandbox::DEFAULT_EGRESS_IMAGE.to_string());
+    let can_filter = ingot_sandbox::image_exists(&runtime, &egress_image).unwrap_or(false);
+
+    let plans =
+        crate::sandbox::plan_all_with(compilation, &config.mcp, &config.workspace, can_filter)
+            .map_err(|problems| anyhow::anyhow!("{}", problems.join("\n")))?;
+
+    let hosts = crate::sandbox::allowed_hosts(&plans);
+    if !hosts.is_empty() && !can_filter {
+        eprintln!(
+            "note: `{egress_image}` is not present, so the host allowlist cannot be kept\n  \
+             build it with: docker build -f tools/egress.Dockerfile -t {egress_image} ."
+        );
+    }
 
     let unenforced: Vec<String> = plans
         .values()
@@ -661,8 +698,18 @@ fn contained_host(compilation: &Compilation, config: &RunConfig) -> Result<McpTo
         eprintln!("warning: proceeding with an unenforced rule\n{note}");
     }
 
-    let runtime = ingot_sandbox::detect().map_err(|error| anyhow::anyhow!("{error}"))?;
-    let launcher = crate::sandbox::ContainerLauncher::new(runtime, config.workspace.clone(), plans);
+    let mut launcher =
+        crate::sandbox::ContainerLauncher::new(runtime.clone(), config.workspace.clone(), plans);
+
+    if can_filter && !hosts.is_empty() {
+        // One name per run, so two runs on one machine do not share a filter
+        // built from one of their policies.
+        let name = boundary_name(compilation);
+        let boundary = ingot_sandbox::EgressBoundary::start(&runtime, &name, &hosts, &egress_image)
+            .map_err(|error| anyhow::anyhow!("{error}"))?;
+        eprintln!("egress    bounded to {} by a proxy", hosts.join(", "));
+        launcher = launcher.through(boundary);
+    }
 
     McpToolHost::connect_agents(
         &config.mcp,

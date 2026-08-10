@@ -846,19 +846,20 @@ Every known limitation has an identifier and an entry in the
 not done, and what closing it would take. Read it before relying on anything
 here.
 
-The five worth knowing before you write an agent:
+The four worth knowing before you write an agent:
 
 | | |
 |---|---|
-| [GAP-001](docs/gaps.md#gap-001) | `network allow ["arxiv.org"]` does not constrain which hosts a tool reaches. The decision is enforced; the list is not. |
 | [GAP-030](docs/gaps.md#gap-030) | `verify` cannot be executed by anything. The run reports it as `notPerformed` rather than claiming a pass, so nothing misleads — but nothing checks either. |
 | [GAP-010](docs/gaps.md#gap-010) | `parallel map` runs its iterations one after another. The result is identical; only the wall clock differs. |
 | [GAP-017](docs/gaps.md#gap-017) | The differential tests are not yet a packaged conformance suite or backend author guide. |
 | [GAP-025](docs/gaps.md#gap-025) | Authoring, checking, tracing, testing and safe execution are separate manual workflows. |
 
-The first is **unenforced**: it looks like a guarantee and is not. Everything
-else in the register either says what it did not do, fails loudly, or cannot be
-expressed at all.
+Nothing in the register is **unenforced** — the class for a limitation that
+looks like a guarantee and is not. Every entry either says what it did not do,
+fails loudly, or cannot be expressed at all. GAP-001 was the last one in that
+class, and closing it is why `network allow ["arxiv.org"]` now bounds a
+contained tool server to that host.
 
 ## Contributing
 

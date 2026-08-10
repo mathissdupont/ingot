@@ -36,7 +36,6 @@ to you*.
 
 | ID | Gap | Class | Closes with |
 |----|-----|-------|-------------|
-| [GAP-001](#gap-001) | A policy's host allowlist is not enforced | Unenforced | an egress proxy in the runner |
 | [GAP-007](#gap-007) | MCP over stdio only | Refused | a transport, now that GAP-013 is closed |
 | [GAP-008](#gap-008) | `checkpoint` cannot be resumed from | Refused | a resumption model (RFC) |
 | [GAP-009](#gap-009) | MCP prompts, resources and sampling unsupported | Refused | language support for each |
@@ -59,90 +58,13 @@ to you*.
 
 ## Unenforced
 
-These are the ones that can mislead. Each is a place where reading the source
-would lead you to believe something the toolchain does not check.
+These are the ones that can mislead: a place where reading the source would lead
+you to believe something the toolchain does not check.
 
-### GAP-001
-
-**A policy's host allowlist is not enforced.**
-
-*Narrowed 2026-08-07.* This entry used to cover paths as well. It no longer
-does: `ingot sandbox` derives a boundary from `filesystem_read allow [...]` and
-`filesystem_write allow [...]`, and paths are now defined relative to the
-workspace so they mean the same thing on two machines
-([Language 0.1 §7.1](../specs/language/v0.1.md),
-[RFC-0004](../rfcs/0004-ingot-containers.md)). What remains is the network.
-
-`network allow ["arxiv.org", "github.com"]` parses, type-checks, and reaches the
-IR as a `values` array. The boundary can give a tool server a network or
-withhold one; it cannot bound egress to named hosts.
-
-*How it shows up.* An agent granted `network allow ["arxiv.org"]` can call a
-tool that contacts anything. `ingot sandbox` says so rather than implying
-otherwise, and `ingot run --sandbox` refuses to start unless the operator
-acknowledges it — but the limit itself is not applied.
-
-*Narrowed again 2026-08-08.* `network deny` used to be enforced for an agent's
-tool servers and not for the agent, because the interpreter ran on the host with
-the host's network. `ingot run --contained` closes that half
-([RFC-0005](../rfcs/0005-the-contained-run.md)): the interpreter runs with
-`--network none` too, and its model call leaves through the supervisor rather than
-through a socket. What is still unenforced is only the *allowlist* — the choice
-between a network and none is now made and kept in both arrangements.
-
-*Why not yet.* An allowlist needs an egress proxy: a component every tool
-container routes through, which resolves and filters by host. That is a real
-piece of infrastructure with its own failure modes — DNS rebinding, IP-literal
-requests, TLS SNI versus Host header — and doing it badly would be worse than
-not doing it, because a sandbox that is trusted and wrong is the bad case.
-
-*Narrowed again 2026-08-10.* The language-side half is done. A tool now declares
-where it goes — `!network("arxiv.org")` — the compiler checks that against the
-grant, and the artifact carries it ([GAP-013], [RFC-0014](../rfcs/0014-a-capabilitys-reach.md)).
-Two things follow. A runner that gains an egress proxy now has something precise
-to enforce, per call rather than per agent. And a program that states a reach no
-longer runs as though it had been kept: it refuses, and takes
-`--allow-unenforced-scopes` to proceed. What is left here is only the
-enforcement, and it can no longer be reached by accident.
-
-*Narrowed again 2026-08-10, the filter half.* The proxy exists:
-[`crates/ingot-egress`](../crates/ingot-egress/), reachable as
-`ingot egress --allow <host>`. It is a forward proxy that speaks `CONNECT` and
-plain HTTP, decides on the host, and terminates no TLS. Each of the failure
-modes named above is closed and has a test that connects a real socket:
-
-* *DNS rebinding* — the client never resolves anything. It hands over a name;
-  the proxy resolves once and dials one of those addresses. The check and the
-  connection cannot disagree because there is one resolution.
-* *IP-literal requests* — refused as their own kind of refusal. A policy grants
-  names, so an address is never in the list, and saying which mistake was made
-  matters when reading a log.
-* *TLS SNI versus Host header* — neither is read. A `CONNECT` tunnel carries
-  bytes to the address the proxy dialled, so the destination holds whatever the
-  client writes afterwards. For plain HTTP the request target decides and the
-  `Host` header is ignored, because two sources for one fact is how a filter and
-  a destination come to disagree.
-* *A granted name pointing inward* — every resolved address is checked against
-  loopback, link-local, private and carrier-grade ranges, not just the one that
-  gets used. `169.254.169.254` is in there by name.
-
-*What is left is the topology.* A filter only bounds what is routed through it.
-Forcing a tool container's traffic through this one needs a second container on
-a Docker `--internal` network with no route out, the proxy bridging that network
-to the outside, and `HTTP_PROXY` pointing the server at the only door — the
-variables are how a client *finds* the door, and the network is what makes it
-the only one. That is container lifecycle work: create a network, start a
-proxy, tear both down on every exit path. Until it lands, `Network::Hosts` is
-still reported as unenforceable and `ingot run --sandbox` still refuses without
-`--sandbox-allow-unenforced`.
-
-*What closing it needs.* That topology, and a container test that a request to
-an ungranted host actually fails from inside the box — the test that turns this
-entry from a claim into a demonstration.
-
-*Recorded in.* [`examples/research-agent/README.md`](../examples/research-agent/README.md),
-[Runtime 0.1 §7](../specs/runtime/v0.1.md),
-[RFC-0004](../rfcs/0004-ingot-containers.md).
+**There are none.** GAP-001 was the last, and it closed on 2026-08-10. That is
+worth saying rather than deleting the heading — the class exists, this project
+has had entries in it, and an empty section is a claim that can be falsified
+next week.
 
 ---
 
@@ -603,6 +525,54 @@ remain.
 When a gap closes it moves here with the release that closed it, and its section
 stays where a link can find it. Identifiers are never reused: a link to GAP-007
 must keep meaning what it meant.
+
+### GAP-001
+
+**A policy's host allowlist is not enforced.**
+*Closed in Unreleased.*
+
+`network allow ["arxiv.org"]` now bounds a contained tool server to that host.
+A request to anywhere else is refused, from inside the box, and there is a
+container test that makes the request and watches it fail.
+
+*The arrangement.* The server joins a container network created `--internal`,
+which has no route out. A proxy — [`crates/ingot-egress`](../crates/ingot-egress/),
+one dependency-free binary in [its own image](../tools/egress.Dockerfile) —
+joins that network and an ordinary one, so it is the only thing on the internal
+side that can reach anything. `HTTP_PROXY` points the server at it.
+
+*Where the enforcement actually lives.* In the network, not the variable. A
+server that reads `HTTP_PROXY` goes through the filter; a server that ignores it
+reaches **nothing**, because there is nowhere for its packets to go. That is the
+difference between this and setting an environment variable and hoping, and it
+is the third of the three container tests: unset every proxy variable inside the
+box and the request still fails.
+
+*The four ways this is written wrongly, and what stops each.* DNS rebinding —
+the client never resolves anything, so the check and the connection cannot
+disagree. Address literals — refused as their own kind of refusal, because a
+policy grants names. TLS SNI against the Host header — neither is read; a
+`CONNECT` tunnel goes to the address the proxy dialled, and for plain HTTP the
+request target decides. A granted name pointing inward — every resolved address
+is checked against loopback, link-local, private and carrier-grade ranges, with
+`169.254.169.254` in the list by name. Each has a test that connects a real
+socket.
+
+*What it costs.* The proxy image must be present, and `ingot run --sandbox` says
+so and falls back to reporting the allowlist as unenforceable when it is not —
+the plan and the arrangement agree, because the plan is made after asking. One
+proxy serves a whole run, so its list is the union of every agent's grant; each
+agent is still bounded to its own by the compiler ([GAP-013](#gap-013)). The
+boundary is Linux containers, as it already was ([GAP-020](#gap-020)).
+
+*What is still true and was not before.* Nothing in this project's register sits
+in the Unenforced class. That is the class that could mislead, and it is empty.
+
+*Recorded in.* [`crates/ingot-egress`](../crates/ingot-egress/),
+[`crates/ingot-sandbox/src/egress.rs`](../crates/ingot-sandbox/src/egress.rs),
+[`crates/ingot-sandbox/tests/container.rs`](../crates/ingot-sandbox/tests/container.rs),
+[RFC-0004](../rfcs/0004-ingot-containers.md),
+[Language 0.1 §7.1](../specs/language/v0.1.md).
 
 ### GAP-013
 

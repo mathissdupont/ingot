@@ -460,6 +460,12 @@ fn sandbox_says_so_when_nothing_would_be_contained() {
 
 #[test]
 fn run_sandbox_refuses_before_starting_anything_it_cannot_enforce() {
+    // A host allowlist is kept by a proxy the boundary starts, so this asserts
+    // the case where that proxy is not available: `INGOT_EGRESS_IMAGE` names an
+    // image nothing built. What is under test is that the plan and the
+    // arrangement agree — the run refuses precisely when the bound would not
+    // hold, rather than refusing on principle or proceeding on optimism.
+    //
     // The refusal happens while planning, so this holds whether or not a
     // container runtime is installed — which is what makes it assertable in CI
     // on three platforms.
@@ -469,13 +475,23 @@ fn run_sandbox_refuses_before_starting_anything_it_cannot_enforce() {
 
     let mut args = digest_args(&project);
     args.push("--sandbox".to_string());
-    let output = run(&as_args(&args), Some(&stub.url));
+    let owned = as_args(&args);
+    let output = run_env(
+        &owned,
+        &[
+            ("ANTHROPIC_API_KEY", "stub-key"),
+            ("INGOT_ANTHROPIC_BASE_URL", &stub.url),
+            ("INGOT_EGRESS_IMAGE", "ingot/egress:nothing-built-this"),
+        ],
+    );
 
     assert_ne!(code(&output), EXIT_OK);
     let message = stderr(&output);
     assert!(message.contains("cannot honour every rule"), "{message}");
     assert!(message.contains("example.org"), "{message}");
     assert!(message.contains("--sandbox-allow-unenforced"), "{message}");
+    // And it says what would fix it, rather than only what is wrong.
+    assert!(message.contains("tools/egress.Dockerfile"), "{message}");
 }
 
 #[test]

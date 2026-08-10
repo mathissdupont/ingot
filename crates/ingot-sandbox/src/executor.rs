@@ -13,6 +13,7 @@ use std::fmt;
 use std::path::Path;
 use std::process::Command;
 
+use crate::egress::EgressRoute;
 use crate::plan::{Network, SandboxPlan};
 
 /// A container runtime, in the order they are looked for.
@@ -224,6 +225,7 @@ pub fn invocation(
     image: &str,
     command: &[String],
     workspace: &Path,
+    egress: Option<&EgressRoute>,
 ) -> Vec<String> {
     let mut args = vec![
         "run".to_string(),
@@ -243,14 +245,32 @@ pub fn invocation(
         "/tmp".to_string(),
     ];
 
-    match &plan.network {
-        Network::None => {
+    match (&plan.network, egress) {
+        (Network::None, _) => {
             args.push("--network".to_string());
             args.push("none".to_string());
         }
+        // An allowlist, and a proxy to keep it. The network is what makes the
+        // bound real: it has no route out, so a server that ignores the proxy
+        // variables reaches nothing rather than reaching everything. The
+        // variables are how a well-behaved client finds the only door.
+        (Network::Hosts { .. }, Some(route)) => {
+            args.push("--network".to_string());
+            args.push(route.network.clone());
+            for name in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"] {
+                args.push("--env".to_string());
+                args.push(format!("{name}=http://{}", route.proxy));
+            }
+            // Emptied rather than left alone: a `NO_PROXY` inherited from the
+            // image would be a list of hosts that skip the filter.
+            for name in ["NO_PROXY", "no_proxy"] {
+                args.push("--env".to_string());
+                args.push(format!("{name}="));
+            }
+        }
         // The plan already recorded that an allowlist is not enforced. Giving
         // the container a network is the honest half of that.
-        Network::Hosts { .. } | Network::Unrestricted => {}
+        (Network::Hosts { .. }, None) | (Network::Unrestricted, _) => {}
     }
 
     if let Some(user) = host_user(workspace) {
@@ -379,6 +399,7 @@ mod tests {
                 ".".to_string(),
             ],
             Path::new("/srv/checkout"),
+            None,
         )
     }
 
@@ -506,7 +527,7 @@ mod tests {
         let mut bare = plan(Network::None);
         bare.mounts.clear();
         bare.env.clear();
-        let args = invocation(&bare, "img", &["srv".to_string()], Path::new("/srv"));
+        let args = invocation(&bare, "img", &["srv".to_string()], Path::new("/srv"), None);
         assert!(values_after(&args, "--volume").is_empty(), "{args:?}");
         assert!(values_after(&args, "--env").is_empty(), "{args:?}");
     }
@@ -520,9 +541,9 @@ mod tests {
             policy: "network allow []".into(),
             reason: "unbounded".into(),
         }];
-        let with = invocation(&noted, "img", &[], Path::new("/srv"));
+        let with = invocation(&noted, "img", &[], Path::new("/srv"), None);
         noted.unenforceable.clear();
-        let without = invocation(&noted, "img", &[], Path::new("/srv"));
+        let without = invocation(&noted, "img", &[], Path::new("/srv"), None);
         assert_eq!(with, without);
     }
 

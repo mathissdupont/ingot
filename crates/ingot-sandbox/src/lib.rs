@@ -14,7 +14,7 @@
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let ir = ingot_ir::AgentIr::from_json(&std::fs::read_to_string("CodeReviewTeam.ir.json")?)?;
-//! let plan = ingot_sandbox::plan(&ir, "repo", Path::new("/srv/checkout"), &[])?;
+//! let plan = ingot_sandbox::plan(&ir, "repo", Path::new("/srv/checkout"), &[], false)?;
 //!
 //! for mount in &plan.mounts {
 //!     println!("{} -> {} {}", mount.host.display(), mount.guest,
@@ -47,10 +47,12 @@
 //! [RFC-0004]: https://github.com/mathissdupont/ingot/blob/main/rfcs/0004-ingot-containers.md
 //! [ADR-0006]: https://github.com/mathissdupont/ingot/blob/main/docs/adr/0006-a-policy-enforcing-runner.md
 
+pub mod egress;
 pub mod executor;
 pub mod plan;
 pub mod report;
 
+pub use egress::{EgressBoundary, EgressRoute, DEFAULT_EGRESS_IMAGE};
 pub use executor::{
     detect, image_digests, image_exists, invocation, ExecutorError, Runtime, RUNTIMES,
 };

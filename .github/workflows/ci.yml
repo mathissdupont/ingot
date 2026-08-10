@@ -59,6 +59,14 @@ jobs:
       # Golden files are checked in; a platform-dependent encoding fails here.
       - name: Golden IR is platform independent
         run: cargo test -p ingot-compiler --test golden_ir
+      # The egress tests need the proxy the boundary routes through. Built here
+      # rather than pulled, for the same reason the run image is: what enforces
+      # a policy should be what this commit says it is.
+      - name: Build the egress proxy image
+        if: runner.os == 'Linux'
+        run: |
+          version=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
+          docker build -f tools/egress.Dockerfile -t "ingot/egress:$version" .
       # The boundary tests skip themselves where no container runtime exists,
       # which would make them worthless if nothing ever insisted. The Linux
       # runner has Docker, so it insists.

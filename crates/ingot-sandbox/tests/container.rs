@@ -71,7 +71,7 @@ fn plan(root: &Path, network: Network) -> SandboxPlan {
 /// Run `script` inside the boundary and return what happened.
 fn inside(program: &str, root: &Path, network: Network, script: &str) -> Output {
     let command = vec!["sh".to_string(), "-c".to_string(), script.to_string()];
-    let args = invocation(&plan(root, network), IMAGE, &command, root);
+    let args = invocation(&plan(root, network), IMAGE, &command, root, None);
     Command::new(program)
         .args(&args)
         .output()
@@ -213,4 +213,111 @@ fn the_working_directory_is_the_workspace() {
     let root = workspace("workdir");
     let output = inside(&program, &root, Network::None, "pwd");
     assert_eq!(stdout(&output), "/workspace");
+}
+
+// --- the egress boundary --------------------------------------------------
+
+/// The image the proxy runs from, overridable so CI can tag it as it likes.
+fn egress_image() -> String {
+    std::env::var("INGOT_EGRESS_IMAGE")
+        .unwrap_or_else(|_| ingot_sandbox::DEFAULT_EGRESS_IMAGE.to_string())
+}
+
+/// Whether the proxy image is here. Absent, these skip the way the rest do.
+fn egress_available(runtime: &ingot_sandbox::Runtime) -> bool {
+    match ingot_sandbox::image_exists(runtime, &egress_image()) {
+        Ok(true) => true,
+        _ => {
+            if std::env::var_os("INGOT_REQUIRE_CONTAINER").is_some() {
+                panic!(
+                    "INGOT_REQUIRE_CONTAINER is set but `{}` is not built; \
+                     docker build -f tools/egress.Dockerfile -t {} .",
+                    egress_image(),
+                    egress_image()
+                );
+            }
+            eprintln!("skipping: `{}` is not built", egress_image());
+            false
+        }
+    }
+}
+
+/// Run `script` inside a boundary routed through a proxy allowing `hosts`.
+fn through_egress(hosts: &[&str], script: &str) -> Option<Output> {
+    let runtime = ingot_sandbox::detect().ok()?;
+    if runtime.program.is_empty() || !egress_available(&runtime) {
+        return None;
+    }
+
+    let hosts: Vec<String> = hosts.iter().map(|host| (*host).to_string()).collect();
+    let name = format!("test-{}", std::process::id());
+    let boundary =
+        ingot_sandbox::EgressBoundary::start(&runtime, &name, &hosts, &egress_image()).ok()?;
+
+    let root = workspace("egress");
+    let command = vec!["sh".to_string(), "-c".to_string(), script.to_string()];
+    let args = invocation(
+        &plan(&root, Network::Hosts { hosts }),
+        IMAGE,
+        &command,
+        &root,
+        Some(boundary.route()),
+    );
+    Command::new(&runtime.program).args(&args).output().ok()
+}
+
+#[test]
+fn a_granted_host_is_reachable_from_inside_the_boundary() {
+    // busybox `wget` reads the lower-case variables, so both spellings are
+    // sent. A boundary that only set one would look like it worked with curl
+    // and fail with the tool somebody actually shipped.
+    let Some(output) = through_egress(
+        &["example.com"],
+        "wget -T 10 -q -O- http://example.com/ | head -c 40",
+    ) else {
+        return;
+    };
+    let body = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        body.contains("Example Domain") || body.contains("<!doctype"),
+        "a granted host should be reachable: {body} {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn a_host_the_policy_does_not_name_is_refused_from_inside_the_boundary() {
+    // The claim GAP-001 existed for. Not "the plan says so" — the request is
+    // made, from inside the box, and it does not arrive.
+    let Some(output) = through_egress(
+        &["example.com"],
+        "wget -T 10 -q -O- http://neverssl.com/ && echo REACHED || echo BLOCKED",
+    ) else {
+        return;
+    };
+    let body = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        body.contains("BLOCKED"),
+        "an ungranted host must not be reachable: {body} {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn ignoring_the_proxy_reaches_nothing_at_all() {
+    // The property that separates this from setting a variable and hoping. The
+    // network is the bound; the variables only say where the door is. A server
+    // that never heard of them gets nowhere.
+    let Some(output) = through_egress(
+        &["example.com"],
+        "unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY; \
+         wget -T 6 -q -O- http://example.com/ && echo REACHED || echo BLOCKED",
+    ) else {
+        return;
+    };
+    let body = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        body.contains("BLOCKED"),
+        "the boundary must not depend on the contained process cooperating: {body}"
+    );
 }

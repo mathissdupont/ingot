@@ -174,16 +174,15 @@ pub fn plan_for_run(
 
     let mut plans: Vec<SandboxPlan> = Vec::new();
     for agent in &compilation.agents {
-        let plan = ingot_sandbox::plan(agent, RUN_SUBJECT, &config.workspace, &pass_env).map_err(
-            |error| {
+        let plan = ingot_sandbox::plan(agent, RUN_SUBJECT, &config.workspace, &pass_env, false)
+            .map_err(|error| {
                 anyhow!(
                     "agent {} cannot be contained: {error}\n\
                      hint: a policy path is relative to the workspace ({})",
                     agent.agent,
                     config.workspace.display()
                 )
-            },
-        )?;
+            })?;
         plans.push(plan);
     }
 
@@ -339,7 +338,7 @@ fn contained_command(config: &RunConfig, plan: &SandboxPlan) -> Result<Command> 
     }
 
     let guest: Vec<String> = GUEST_COMMAND.iter().map(|part| part.to_string()).collect();
-    let args = ingot_sandbox::invocation(plan, &image, &guest, &config.workspace);
+    let args = ingot_sandbox::invocation(plan, &image, &guest, &config.workspace, None);
 
     let mut command = Command::new(&runtime.program);
     command.args(&args);

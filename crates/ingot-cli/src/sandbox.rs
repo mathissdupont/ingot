@@ -87,16 +87,28 @@ fn print_plans(plans: &[SandboxPlan], workspace: &Path) {
 pub type Plans = BTreeMap<(String, String), SandboxPlan>;
 
 /// Plan a boundary for each (server, agent) pair.
-pub fn plan_all(
+///
+/// `filter_egress` says whether the caller will start an [`EgressBoundary`] and
+/// route these servers through it. It decides only whether a host allowlist is
+/// reported as unenforceable, so passing `true` without starting the proxy
+/// would replace a true statement with a false one.
+pub fn plan_all_with(
     compilation: &Compilation,
     mcp: &McpConfig,
     workspace: &Path,
+    filter_egress: bool,
 ) -> Result<Plans, Vec<String>> {
     let mut plans = Plans::new();
     let mut problems = Vec::new();
 
     for (server, agent) in pairs(compilation, mcp) {
-        match ingot_sandbox::plan(agent, &server.name, workspace, &server.pass_env) {
+        match ingot_sandbox::plan(
+            agent,
+            &server.name,
+            workspace,
+            &server.pass_env,
+            filter_egress,
+        ) {
             Ok(plan) => {
                 plans.insert((server.name.clone(), agent.agent.clone()), plan);
             }
@@ -114,9 +126,43 @@ pub fn plan_all(
     }
 }
 
+/// Plan with no egress filtering, for callers that only inspect.
+pub fn plan_all(
+    compilation: &Compilation,
+    mcp: &McpConfig,
+    workspace: &Path,
+) -> Result<Plans, Vec<String>> {
+    plan_all_with(compilation, mcp, workspace, false)
+}
+
+/// The hosts every plan in a set names, sorted and deduplicated.
+///
+/// One proxy serves every server in a run, so its list is the union. That is
+/// wider than any single agent's grant, and it is why the compile-time check in
+/// [RFC-0014] matters: the boundary bounds the run, and the compiler bounds each
+/// agent within it.
+///
+/// [RFC-0014]: ../../../rfcs/0014-a-capabilitys-reach.md
+pub fn allowed_hosts(plans: &Plans) -> Vec<String> {
+    let mut hosts: Vec<String> = plans
+        .values()
+        .filter_map(|plan| match &plan.network {
+            ingot_sandbox::Network::Hosts { hosts } => Some(hosts.clone()),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    hosts.sort();
+    hosts.dedup();
+    hosts
+}
+
 /// Starts each tool server inside the boundary planned for the calling agent.
 pub struct ContainerLauncher {
     runtime: Runtime,
+    /// Held for the launcher's lifetime, so the network and the proxy outlive
+    /// every server that routes through them and are removed when it drops.
+    egress: Option<ingot_sandbox::EgressBoundary>,
     workspace: PathBuf,
     plans: Plans,
 }
@@ -125,9 +171,20 @@ impl ContainerLauncher {
     pub fn new(runtime: Runtime, workspace: PathBuf, plans: Plans) -> ContainerLauncher {
         ContainerLauncher {
             runtime,
+            egress: None,
             workspace,
             plans,
         }
+    }
+
+    /// Route every server this launches through `boundary`.
+    ///
+    /// Taken by value so the launcher owns it: the network and the proxy have to
+    /// outlive every container that joined them, and a boundary dropped early
+    /// would take the network out from under a running server.
+    pub fn through(mut self, boundary: ingot_sandbox::EgressBoundary) -> ContainerLauncher {
+        self.egress = Some(boundary);
+        self
     }
 }
 
@@ -164,7 +221,13 @@ impl Launcher for ContainerLauncher {
 
         let mut command = vec![server.command.clone()];
         command.extend(server.args.iter().cloned());
-        let args = invocation(plan, image, &command, &self.workspace);
+        let args = invocation(
+            plan,
+            image,
+            &command,
+            &self.workspace,
+            self.egress.as_ref().map(|boundary| boundary.route()),
+        );
 
         // The named variables have to reach the runtime's own environment for
         // `--env NAME` to forward them, and nowhere else.

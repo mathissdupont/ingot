@@ -42,17 +42,19 @@ Two things the server must satisfy, because the artifact declares them:
 `pass-env` names the variable; the value is read from your environment at spawn
 time. A server started by Ingot inherits nothing else.
 
-## The network allowlist is not enforced by the transport
+## The network allowlist, and when it is enforced
 
-`policy` says `network allow ["arxiv.org", "github.com"]`. The runtime checks
-that the `network` effect is granted before the call; it does **not** inspect
-which hosts the server actually contacts, because it cannot see inside another
-process. The allowlist is a statement of intent that a compliant backend, or the
-server itself, is expected to honour.
+`policy` says `network allow ["arxiv.org", "github.com"]`. Under
+`ingot run --sandbox` that list is kept: the tool server joins a container
+network with no route out, and the only thing it can reach is a proxy that
+refuses every host the policy does not name. Ignoring the proxy reaches nothing
+at all, because the bound is the network rather than an environment variable
+([GAP-001](../../docs/gaps.md#gap-001), closed).
 
-This is a real limitation and worth knowing before relying on it — it is
-[GAP-001](../../docs/gaps.md#gap-001) in the register. Confining a tool server's
-reach is the server's job, the same way `--root` is for `ingot-mcp-fs`.
+Without `--sandbox` there is no boundary and no proxy. The runtime still checks
+that the `network` effect is granted before the call, but nothing inspects which
+hosts the server contacts — it is an ordinary process with the operator's
+network. Run it contained, or treat the list as intent.
 
 The `verify CitationCheck(...)` line has the same shape of caveat:
 [GAP-002](../../docs/gaps.md#gap-002). It evaluates its arguments and reports a

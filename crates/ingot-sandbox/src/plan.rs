@@ -150,11 +150,19 @@ impl SandboxPlan {
 }
 
 /// Derive the boundary for `server`, from `agent`'s policy, over `workspace`.
+///
+/// `filter_egress` says whether the caller will route this server's traffic
+/// through a proxy that keeps a host allowlist. It changes no mount and no
+/// argument — only whether the allowlist is reported as something the boundary
+/// cannot deliver. A caller that passes `true` and then does not start the
+/// proxy would turn this file's whole point into a lie, which is why the one
+/// caller that passes it also owns the proxy's lifetime.
 pub fn plan(
     agent: &AgentIr,
     server: &str,
     workspace: &Path,
     pass_env: &[String],
+    filter_egress: bool,
 ) -> Result<SandboxPlan, PlanError> {
     let mut mounts: BTreeMap<String, Mount> = BTreeMap::new();
 
@@ -203,12 +211,16 @@ pub fn plan(
             Network::Unrestricted
         }
         Some(rule) if rule.decision == Decision::Allow => {
-            unenforceable.push(Unenforceable {
-                policy: describe(NETWORK, rule),
-                reason: "a host allowlist needs an egress proxy; the boundary can give the \
-                         server a network or withhold one, and it is giving it one"
-                    .to_string(),
-            });
+            // The note is the difference between a bound and a wish, so it
+            // appears exactly when there is no proxy to keep the list.
+            if !filter_egress {
+                unenforceable.push(Unenforceable {
+                    policy: describe(NETWORK, rule),
+                    reason: "a host allowlist needs an egress proxy; the boundary can give the \
+                             server a network or withhold one, and it is giving it one"
+                        .to_string(),
+                });
+            }
             Network::Hosts {
                 hosts: rule.values.clone(),
             }
@@ -373,7 +385,7 @@ mod tests {
         std::fs::create_dir_all(root.join("src")).unwrap();
         let agent = agent_with(&[(READ, Decision::Allow, &["src"])]);
 
-        let plan = plan(&agent, "files", &root, &[]).unwrap();
+        let plan = plan(&agent, "files", &root, &[], false).unwrap();
         assert_eq!(plan.mounts.len(), 1);
         assert_eq!(plan.mounts[0].guest, "/workspace/src");
         assert!(!plan.mounts[0].writable);
@@ -383,7 +395,7 @@ mod tests {
     #[test]
     fn no_rule_means_no_mount_and_no_network() {
         let root = workspace("empty");
-        let plan = plan(&agent_with(&[]), "files", &root, &[]).unwrap();
+        let plan = plan(&agent_with(&[]), "files", &root, &[], false).unwrap();
         assert!(plan.mounts.is_empty(), "{:?}", plan.mounts);
         assert_eq!(plan.network, Network::None);
         assert!(plan.is_fully_enforced());
@@ -394,7 +406,10 @@ mod tests {
         let root = workspace("denied");
         std::fs::create_dir_all(root.join("src")).unwrap();
         let agent = agent_with(&[(READ, Decision::Deny, &["src"])]);
-        assert!(plan(&agent, "files", &root, &[]).unwrap().mounts.is_empty());
+        assert!(plan(&agent, "files", &root, &[], false)
+            .unwrap()
+            .mounts
+            .is_empty());
     }
 
     #[test]
@@ -408,7 +423,7 @@ mod tests {
             (WRITE, Decision::Allow, &["out"]),
         ]);
 
-        let plan = plan(&agent, "files", &root, &[]).unwrap();
+        let plan = plan(&agent, "files", &root, &[], false).unwrap();
         assert_eq!(plan.mounts.len(), 1, "{:?}", plan.mounts);
         assert!(plan.mounts[0].writable);
     }
@@ -418,7 +433,7 @@ mod tests {
         let root = workspace("newdir");
         let agent = agent_with(&[(WRITE, Decision::Allow, &["target/review"])]);
 
-        let plan = plan(&agent, "files", &root, &[]).unwrap();
+        let plan = plan(&agent, "files", &root, &[], false).unwrap();
         assert_eq!(plan.mounts[0].guest, "/workspace/target/review");
         assert_eq!(plan.directories_to_create().len(), 1);
     }
@@ -428,7 +443,7 @@ mod tests {
         let root = workspace("missing");
         let agent = agent_with(&[(READ, Decision::Allow, &["src"])]);
 
-        let error = plan(&agent, "files", &root, &[]).unwrap_err();
+        let error = plan(&agent, "files", &root, &[], false).unwrap_err();
         assert!(
             matches!(error, PlanError::ReadPathMissing { .. }),
             "{error}"
@@ -441,7 +456,7 @@ mod tests {
         let root = workspace("escape");
         for path in ["../secrets", "/etc", "src/../../elsewhere"] {
             let agent = agent_with(&[(READ, Decision::Allow, &[path])]);
-            let error = plan(&agent, "files", &root, &[]).unwrap_err();
+            let error = plan(&agent, "files", &root, &[], false).unwrap_err();
             assert!(
                 matches!(error, PlanError::PathEscapesWorkspace { .. }),
                 "{path}: {error}"
@@ -453,7 +468,7 @@ mod tests {
     fn network_deny_and_an_absent_rule_both_mean_no_network() {
         let root = workspace("nonet");
         for policy in [vec![(NETWORK, Decision::Deny, &[] as &[&str])], vec![]] {
-            let plan = plan(&agent_with(&policy), "files", &root, &[]).unwrap();
+            let plan = plan(&agent_with(&policy), "files", &root, &[], false).unwrap();
             assert_eq!(plan.network, Network::None);
             assert!(plan.is_fully_enforced());
         }
@@ -464,7 +479,7 @@ mod tests {
         let root = workspace("hosts");
         let agent = agent_with(&[(NETWORK, Decision::Allow, &["arxiv.org", "github.com"])]);
 
-        let plan = plan(&agent, "files", &root, &[]).unwrap();
+        let plan = plan(&agent, "files", &root, &[], false).unwrap();
         assert_eq!(
             plan.network,
             Network::Hosts {
@@ -482,7 +497,7 @@ mod tests {
         let root = workspace("external");
         let agent = agent_with(&[(EXTERNAL_WRITE, Decision::RequireApproval, &[])]);
 
-        let gated = plan(&agent, "files", &root, &[]).unwrap();
+        let gated = plan(&agent, "files", &root, &[], false).unwrap();
         assert!(!gated.is_fully_enforced());
         assert!(gated.unenforceable[0]
             .policy
@@ -490,7 +505,7 @@ mod tests {
 
         // Denied is enforceable: the effect never runs.
         let denied = agent_with(&[(EXTERNAL_WRITE, Decision::Deny, &[])]);
-        assert!(plan(&denied, "files", &root, &[])
+        assert!(plan(&denied, "files", &root, &[], false)
             .unwrap()
             .is_fully_enforced());
     }
@@ -503,6 +518,7 @@ mod tests {
             "files",
             &root,
             &["BRAVE_API_KEY".to_string(), "BRAVE_API_KEY".to_string()],
+            false,
         )
         .unwrap();
         assert_eq!(plan.env, vec!["BRAVE_API_KEY".to_string()]);
@@ -519,6 +535,7 @@ mod tests {
             "files",
             &root,
             &[],
+            false,
         )
         .unwrap();
         let decorated = plan(
@@ -526,6 +543,7 @@ mod tests {
             "files",
             &root,
             &[],
+            false,
         )
         .unwrap();
         // The boundary is identical. `from` deliberately is not: it echoes the
@@ -548,7 +566,7 @@ mod tests {
     fn the_workspace_itself_can_be_the_mount() {
         let root = workspace("dot");
         let agent = agent_with(&[(READ, Decision::Allow, &["."])]);
-        let plan = plan(&agent, "files", &root, &[]).unwrap();
+        let plan = plan(&agent, "files", &root, &[], false).unwrap();
         assert_eq!(plan.mounts[0].guest, GUEST_WORKSPACE);
         assert_eq!(plan.mounts[0].host, root);
     }
@@ -561,7 +579,7 @@ mod tests {
             (READ, Decision::Allow, &["src"]),
             (NETWORK, Decision::Allow, &["arxiv.org"]),
         ]);
-        let plan = plan(&agent, "files", &root, &[]).unwrap();
+        let plan = plan(&agent, "files", &root, &[], false).unwrap();
         let text = serde_json::to_string_pretty(&plan).unwrap();
         let parsed: SandboxPlan = serde_json::from_str(&text).unwrap();
         assert_eq!(parsed, plan);
