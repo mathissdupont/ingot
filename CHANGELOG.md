@@ -8,7 +8,28 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
 
 ## [Unreleased]
 
-Nothing yet.
+**A tool-using agent can be tested offline** (cassette 0.2;
+closes [GAP-006](docs/gaps.md#gap-006))
+
+- A cassette now records tool invocations and their results alongside the model
+  exchanges, keyed by a digest of the invocation the way model requests already
+  were. `ingot run --record` captures them and `ingot test` serves them, so an
+  agent that calls tools is testable with no server started, nothing reached and
+  no key exported.
+- A recorded **failure** is replayed as a failure. How an agent behaves when a
+  tool fails is the behaviour most worth having a test for, and a format that
+  could only hold successes would be a format for the happy path.
+- A call whose arguments changed since recording is refused rather than answered
+  from the wrong row, the same rule model requests already followed.
+- A replayed tool call does **not** perform the effect. An agent whose recorded
+  run wrote a file receives the handle that write produced and leaves the
+  filesystem alone: `ingot test` proves what an agent does *with* an answer, not
+  that the tool still gives it.
+- Cassette 0.2 is a superset of 0.1, so existing recordings keep replaying and
+  only re-recording moves one. A document that states `0.1` and carries
+  `toolCalls` is refused.
+- `ToolInvocation` gained `node`, the IR node that made the call, mirroring
+  `CompletionRequest`.
 
 ## [0.4.0-rc.1] — 2026-08-09
 

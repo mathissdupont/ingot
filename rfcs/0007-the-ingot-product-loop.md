@@ -140,8 +140,9 @@ future graphical viewer are consumers, not new runtime semantics.
 
 Recording and replay are promoted from specialist flags into the normal loop.
 After a successful record, the CLI should be able to create or update a named
-test fixture and print the command that replays it. Tool-result recording remains
-GAP-006 and must be named when it prevents a self-contained test.
+test fixture and print the command that replays it. Tool results are recorded as
+of cassette 0.2 ([Runtime 0.2 §2](../specs/runtime/v0.2.md)), so a tool-using
+agent no longer falls outside a self-contained test.
 
 ### 5. Run safely without operating the container layer
 

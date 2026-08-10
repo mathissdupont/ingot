@@ -63,6 +63,7 @@ fn required(names: &[&str]) -> BTreeSet<String> {
 
 fn invocation(name: &str, result_type: &str, arguments: &[(&str, Value)]) -> ToolInvocation {
     ToolInvocation {
+        node: "n0".to_string(),
         agent: "test.Agent".to_string(),
         reference: format!("mcp:{name}"),
         name: name.to_string(),

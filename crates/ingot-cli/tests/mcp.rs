@@ -601,3 +601,101 @@ fn model_assisted_authoring_writes_against_routed_tool_schemas() {
         "a refused proposal must leave the project alone"
     );
 }
+
+#[test]
+fn a_tool_using_agent_can_be_tested_offline_after_one_recording() {
+    let project = Project::new("cassette-tools", DIGEST_SOURCE, true);
+    let stub = stub_provider(vec![text_reply("# Digest\n\nTwo markdown files.\n")]);
+    let cassette = project.workspace().join("tests/cassettes/example.json");
+
+    // Record once, against the real server and a stub model.
+    let mut args = digest_args(&project);
+    args.push("--record".to_string());
+    args.push(cassette.display().to_string());
+    let recorded = run(&as_args(&args), Some(&stub.url));
+    assert_eq!(code(&recorded), EXIT_OK, "{}", stderr(&recorded));
+    assert!(
+        stderr(&recorded).contains("tool call(s) to"),
+        "the recording must say what it captured:\n{}",
+        stderr(&recorded)
+    );
+
+    let written: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&cassette).expect("a cassette"))
+            .expect("canonical json");
+    assert_eq!(written["cassetteVersion"], "0.2");
+    let calls = written["toolCalls"]
+        .as_array()
+        .expect("recorded tool calls");
+    assert_eq!(
+        calls.len(),
+        3,
+        "the digest agent lists, reads and writes:\n{written:#}"
+    );
+    for call in calls {
+        assert!(
+            call["invocationDigest"]
+                .as_str()
+                .is_some_and(|d| d.len() == 64),
+            "every recorded call is keyed by a digest of the invocation: {call}"
+        );
+    }
+    assert_eq!(calls[0]["tool"], "fs.list_dir");
+    assert_eq!(calls[2]["tool"], "fs.write_file");
+
+    // The point of the whole exercise: `ingot test` now covers this agent, with
+    // no server started, no model reached and no key exported.
+    let output = run(&["test", &project.path()], None);
+    assert_eq!(
+        code(&output),
+        EXIT_OK,
+        "a tool-using agent must be testable offline:\n{}\n{}",
+        stdout(&output),
+        stderr(&output)
+    );
+    assert!(stdout(&output).contains("1 passed"), "{}", stdout(&output));
+
+    // A replayed tool call does not perform the effect. The recording captured a
+    // write; replaying it must not write anything.
+    let written_by_replay = project.workspace().join("data/out/digest.md");
+    std::fs::remove_file(&written_by_replay).expect("the recorded run wrote it");
+    let again = run(&["test", &project.path()], None);
+    assert_eq!(code(&again), EXIT_OK, "{}", stderr(&again));
+    assert!(
+        !written_by_replay.exists(),
+        "replay must return the recorded result, not repeat the effect"
+    );
+}
+
+#[test]
+fn a_tool_call_that_changed_since_recording_fails_loudly() {
+    let project = Project::new("cassette-tools-drift", DIGEST_SOURCE, true);
+    let stub = stub_provider(vec![text_reply("# Digest\n\nTwo markdown files.\n")]);
+    let cassette = project.workspace().join("tests/cassettes/example.json");
+
+    let mut args = digest_args(&project);
+    args.push("--record".to_string());
+    args.push(cassette.display().to_string());
+    assert_eq!(
+        code(&run(&as_args(&args), Some(&stub.url))),
+        EXIT_OK,
+        "the recording must succeed first"
+    );
+
+    // The agent now reads a different file. The recorded answer is for the old
+    // one, and serving it would be a test that passes by luck.
+    let source = std::fs::read_to_string(project.workspace().join("main.ing")).expect("source");
+    std::fs::write(
+        project.workspace().join("main.ing"),
+        source.replace(
+            r#"call fs.read_file("README.md")"#,
+            r#"call fs.read_file("notes.md")"#,
+        ),
+    )
+    .expect("editing the source");
+
+    let output = run(&["test", &project.path()], None);
+    assert_eq!(code(&output), EXIT_DIAGNOSTICS, "{}", stdout(&output));
+    let message = format!("{}{}", stdout(&output), stderr(&output));
+    assert!(message.contains("re-record"), "{message}");
+}

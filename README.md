@@ -197,7 +197,7 @@ export CARGO_TARGET_DIR=/c/build/ingot
 | `ingot run --sandbox` | execute it with each tool server inside a boundary |
 | `ingot run --contained` | execute the agent itself inside a boundary |
 | `ingot image build [SOURCE]` | build the version-matched local image used by contained runs |
-| `ingot test` | replay recorded cassettes |
+| `ingot test` | replay recorded cassettes, tool results included |
 | `ingot doctor [--json]` | report source, provider, MCP and container readiness without starting them |
 | `ingot dev [--run]` | watch source, check and build good revisions, optionally run them |
 | `ingot tools [--json] [--propose]` | discover, preflight and propose MCP tool declarations/routes |
@@ -800,7 +800,7 @@ The five worth knowing before you write an agent:
 |---|---|
 | [GAP-001](docs/gaps.md#gap-001) | `network allow ["arxiv.org"]` does not constrain which hosts a tool reaches. The decision is enforced; the list is not. |
 | [GAP-030](docs/gaps.md#gap-030) | `verify` cannot be executed by anything. The run reports it as `notPerformed` rather than claiming a pass, so nothing misleads — but nothing checks either. |
-| [GAP-006](docs/gaps.md#gap-006) | Cassettes record model exchanges only, so `ingot test` cannot test a tool-using agent. |
+| [GAP-010](docs/gaps.md#gap-010) | `parallel map` runs its iterations one after another. The result is identical; only the wall clock differs. |
 | [GAP-017](docs/gaps.md#gap-017) | The differential tests are not yet a packaged conformance suite or backend author guide. |
 | [GAP-025](docs/gaps.md#gap-025) | Authoring, checking, tracing, testing and safe execution are separate manual workflows. |
 

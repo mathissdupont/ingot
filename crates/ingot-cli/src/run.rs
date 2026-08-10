@@ -13,8 +13,9 @@ use ingot_compiler::Compilation;
 use ingot_mcp::{AgentTools, McpConfig, McpToolHost};
 use ingot_runtime::{
     run as run_agent, AgentRegistry, ApprovalHandler, ApprovalMode, ApprovalRequest, Artifact,
-    Cassette, DenyAllTools, ModelConfig, ModelProvider, RecordingProvider, ReplayProvider,
-    RoutingProvider, RunError, RunEvent, RunOptions, RunReport, TeeSink, ToolHost,
+    Cassette, DenyAllTools, ModelConfig, ModelProvider, RecordingProvider, RecordingTools,
+    ReplayProvider, ReplayToolHost as ReplayTools, RoutingProvider, RunError, RunEvent, RunOptions,
+    RunReport, TeeSink, ToolHost,
 };
 use serde_json::Value;
 
@@ -200,7 +201,9 @@ pub fn execute(compilation: &Compilation, config: &RunConfig) -> Result<u8> {
         );
     }
 
-    let mut tools = tool_host(compilation, config)?;
+    // Recording wraps the host rather than replacing it, so a recorded run uses
+    // exactly the tools an unrecorded one would.
+    let mut tools = Tools::new(tool_host(compilation, config)?, config.record.is_some());
 
     let mut provider = build_provider(config, &ir.agent, &inputs)?;
     let mut printer = EventPrinter::new(config.events, compilation);
@@ -222,11 +225,13 @@ pub fn execute(compilation: &Compilation, config: &RunConfig) -> Result<u8> {
     // Record whatever happened before propagating a failure: a partial cassette
     // is more useful than none when debugging why a run broke.
     if let Some(path) = &config.record {
-        if let Some(cassette) = provider.finish_recording() {
+        if let Some(mut cassette) = provider.finish_recording() {
+            cassette.tool_calls = tools.finish_recording();
             cassette.save(path).map_err(anyhow::Error::msg)?;
             eprintln!(
-                "recorded {} interaction(s) to {}",
+                "recorded {} interaction(s) and {} tool call(s) to {}",
                 cassette.interactions.len(),
+                cassette.tool_calls.len(),
                 path.display()
             );
         }
@@ -521,6 +526,40 @@ fn tool_host(compilation: &Compilation, config: &RunConfig) -> Result<Box<dyn To
     }
 
     Ok(Box::new(host))
+}
+
+/// A tool host plus, optionally, the recorder wrapped around it.
+///
+/// The same shape as [`Provider`], for the same reason: what serves the tools is
+/// a deployment decision, so the host stays a trait object, and the recording
+/// has to come back out afterwards without a downcast.
+enum Tools {
+    Plain(Box<dyn ToolHost>),
+    Recording(RecordingTools<Box<dyn ToolHost>>),
+}
+
+impl Tools {
+    fn new(inner: Box<dyn ToolHost>, record: bool) -> Tools {
+        if record {
+            Tools::Recording(RecordingTools::new(inner))
+        } else {
+            Tools::Plain(inner)
+        }
+    }
+
+    fn as_mut(&mut self) -> &mut dyn ToolHost {
+        match self {
+            Tools::Plain(inner) => inner.as_mut(),
+            Tools::Recording(inner) => inner,
+        }
+    }
+
+    fn finish_recording(self) -> Vec<ingot_runtime::ToolExchange> {
+        match self {
+            Tools::Plain(_) => Vec::new(),
+            Tools::Recording(inner) => inner.finish(),
+        }
+    }
 }
 
 /// A provider plus, optionally, the recorder wrapped around it.
@@ -824,14 +863,13 @@ pub fn test(compilation: &Compilation, config: &TestConfig) -> Result<u8> {
         };
 
         let inputs = cassette.inputs.clone();
+        // Tools are served from the recording, or refused. Never reached: a
+        // test that touches the filesystem or the network is not the offline,
+        // repeatable thing `ingot test` promises, and a cassette with no tool
+        // calls in it is not evidence that a tool-using agent works.
+        let recorded_tools = cassette.tool_calls.clone();
         let mut provider = ReplayProvider::new(cassette);
-        // Replay hosts no tools, deliberately. A cassette records the model
-        // exchanges and nothing else, so a tool call during `ingot test` would
-        // have to reach a real server — and a test that touches the filesystem
-        // or the network is not the offline, repeatable thing `ingot test`
-        // promises. Recording tool results is the next piece of work; until it
-        // exists, a tools-using agent fails here rather than passing by luck.
-        let mut tools = DenyAllTools;
+        let mut tools = ReplayTools::new(recorded_tools);
         let mut sink = ingot_runtime::CollectingSink::default();
 
         let result = run_agent(
@@ -850,8 +888,20 @@ pub fn test(compilation: &Compilation, config: &TestConfig) -> Result<u8> {
         match result {
             Ok(report) => {
                 let unused = provider.remaining();
-                if unused > 0 {
-                    eprintln!("FAIL {name}: {unused} recorded interaction(s) were never played");
+                let unused_tools = tools.remaining();
+                if unused > 0 || unused_tools > 0 {
+                    // A recording that was not played out is a test that stopped
+                    // early without saying so.
+                    if unused > 0 {
+                        eprintln!(
+                            "FAIL {name}: {unused} recorded interaction(s) were never played"
+                        );
+                    }
+                    if unused_tools > 0 {
+                        eprintln!(
+                            "FAIL {name}: {unused_tools} recorded tool call(s) were never played"
+                        );
+                    }
                     failed += 1;
                 } else {
                     println!(

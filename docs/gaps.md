@@ -39,7 +39,6 @@ to you*.
 | [GAP-001](#gap-001) | A policy's host allowlist is not enforced | Unenforced | an egress proxy in the runner |
 | [GAP-003](#gap-003) | `cost` budgets are never charged | Unenforced | per-model pricing in the runtime |
 | [GAP-005](#gap-005) | No streaming; one call, 16k output ceiling | Refused | a streaming provider interface (RFC) |
-| [GAP-006](#gap-006) | Cassettes carry no tool results | Refused | cassette format 0.2 |
 | [GAP-007](#gap-007) | MCP over stdio only | Refused | GAP-013, then a transport |
 | [GAP-008](#gap-008) | `checkpoint` cannot be resumed from | Refused | a resumption model (RFC) |
 | [GAP-009](#gap-009) | MCP prompts, resources and sampling unsupported | Refused | language support for each |
@@ -146,31 +145,6 @@ ends the run with a truncation error.
 *What closing it needs.* A streaming shape on `ModelProvider`, and a decision
 about what a partially streamed structured response means when it fails
 validation.
-
-### GAP-006
-
-**Cassettes carry no tool results, so `ingot test` cannot test a tool-using
-agent.**
-
-A cassette records model exchanges. `ingot test` hosts no tools deliberately —
-replaying a tool call would mean reaching a real server, and a test that touches
-the filesystem is not the offline, repeatable thing `ingot test` promises. So a
-tool-using agent fails under `ingot test` rather than passing by luck.
-
-*How it shows up.* Of four examples, only `document-summarizer` has cassette
-tests. The others' execution paths are covered by integration tests in
-`crates/ingot-cli/tests/`, not by `ingot test`.
-
-*The workaround.* `ingot run --provider replay --cassette …` *does* host tools:
-a deterministic model with real tools. That is what the end-to-end tests use.
-
-*What closing it needs.* Cassette format 0.2, recording tool invocations and
-their results alongside model exchanges, keyed by a digest of the invocation the
-way model requests already are. Note the review burden this adds: a recorded
-tool result contains whatever the tool returned.
-
-*Recorded in.* [Runtime 0.1 §10](../specs/runtime/v0.1.md),
-[RFC-0003](../rfcs/0003-mcp-tool-host.md).
 
 ### GAP-007
 
@@ -498,6 +472,40 @@ remain.
 When a gap closes it moves here with the release that closed it, and its section
 stays where a link can find it. Identifiers are never reused: a link to GAP-007
 must keep meaning what it meant.
+
+### GAP-006
+
+**Cassettes carry no tool results, so `ingot test` cannot test a tool-using
+agent.**
+*Closed in Unreleased (cassette 0.2).*
+
+A cassette now records tool invocations and their results alongside the model
+exchanges, keyed by a digest of the invocation the way model requests already
+were ([Runtime 0.2 §2](../specs/runtime/v0.2.md)). `ingot run --record` captures
+them; `ingot test` serves them. No server is started, nothing is reached, and a
+call whose arguments changed since recording is refused rather than answered from
+the wrong row.
+
+A recorded **failure** is replayed as a failure, because how an agent behaves
+when a tool fails is the behaviour most worth having a test for.
+
+*What a replay does not do.* Perform the effect. An agent whose recorded run
+wrote a file receives the handle that write produced and leaves the filesystem
+alone. `ingot test` proves what an agent does *with* a tool's answer, not that
+the tool still answers that way — checking the second is what a live run is for.
+
+*The review burden this adds, as predicted.* A recorded result contains whatever
+the tool returned, and a cassette is committed. The build-time secret scan reads
+cassettes for exactly this reason
+([Ingot Package 0.1 §8](../specs/image/v0.1.md)).
+
+*What is left over.* The capability exists; the reference examples still carry no
+recordings, because making one needs a model. That is one `ingot run --record`
+per example with a key exported — the same one-recorded-run price
+[GAP-028](#gap-028) describes.
+
+*Recorded in.* [Runtime 0.2 §2](../specs/runtime/v0.2.md),
+[RFC-0003](../rfcs/0003-mcp-tool-host.md).
 
 ### GAP-024
 

@@ -223,12 +223,13 @@ with a plugin system.
 Each of these has an entry in the [gap register](../docs/gaps.md), which is
 where their current state is tracked; this section is why they were left.
 
-* **`ingot test` hosts no tools** ([GAP-006]). A cassette records model
-  exchanges and nothing else, so a tool call during replay would have to reach a
-  real server — and a test that touches the filesystem is not the offline,
-  repeatable thing `ingot test` promises. A tools-using agent therefore fails
-  under `ingot test` rather than passing by luck. Recording tool results is the
-  obvious next piece of work, and it is a cassette format change.
+* **`ingot test` hosted no tools** ([GAP-006], since closed). A cassette
+  recorded model exchanges and nothing else, so a tool call during replay would
+  have had to reach a real server — and a test that touches the filesystem is not
+  the offline, repeatable thing `ingot test` promises. Cassette 0.2 records the
+  invocations and their results instead
+  ([Runtime 0.2 §2](../specs/runtime/v0.2.md)), which was indeed the obvious next
+  piece of work and indeed a format change.
 * **Remote servers** ([GAP-007]). Only stdio, per the non-goals.
 * **Per-call effect narrowing** ([GAP-013]). A tool's effects are declared once
   for the tool. There is no way to say "this call reads only `docs/`" beyond

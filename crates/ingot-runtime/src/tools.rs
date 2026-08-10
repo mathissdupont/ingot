@@ -13,6 +13,9 @@ use serde_json::Value;
 /// One resolved tool call.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ToolInvocation {
+    /// The IR node that made the call, for cassette matching and error
+    /// messages. The same role `CompletionRequest::node` plays for a model call.
+    pub node: String,
     /// The agent making the call.
     ///
     /// A host that bounds what a tool can reach needs this: two agents in one
@@ -69,6 +72,24 @@ pub trait ToolHost {
     fn provides(&self, tool: &str) -> bool;
 
     fn call(&mut self, invocation: &ToolInvocation) -> Result<Value, ToolError>;
+}
+
+/// Lets a boxed host be used wherever a host is expected — including as the
+/// inner host of a [`crate::RecordingTools`], which is how the CLI wraps a
+/// recorder around a host it chose at runtime. The same courtesy
+/// [`crate::ModelProvider`] already gets.
+impl<H: ToolHost + ?Sized> ToolHost for Box<H> {
+    fn name(&self) -> &str {
+        (**self).name()
+    }
+
+    fn provides(&self, tool: &str) -> bool {
+        (**self).provides(tool)
+    }
+
+    fn call(&mut self, invocation: &ToolInvocation) -> Result<Value, ToolError> {
+        (**self).call(invocation)
+    }
 }
 
 /// Refuses every tool. The default, so nothing runs by accident.
@@ -192,6 +213,7 @@ mod tests {
 
     fn invocation(name: &str) -> ToolInvocation {
         ToolInvocation {
+            node: "n0".to_string(),
             agent: "test.Agent".to_string(),
             reference: format!("mcp:{name}"),
             name: name.to_string(),

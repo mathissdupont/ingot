@@ -63,8 +63,9 @@ pub mod openai;
 mod tests;
 
 pub use cassette::{
-    load_directory, Cassette, Interaction, RecordingProvider, ReplayProvider, ScriptedProvider,
-    CASSETTE_VERSION,
+    invocation_digest, load_directory, Cassette, Interaction, RecordingProvider, RecordingTools,
+    ReplayProvider, ReplayToolHost, ScriptedProvider, ToolExchange, CASSETTE_VERSION,
+    SUPPORTED_CASSETTE_VERSIONS,
 };
 pub use catalogue::{ModelConfig, ProviderConfig, ProviderKind};
 pub use events::{Artifact, CollectingSink, EventSink, NullSink, RunEvent, TeeSink, VerifyOutcome};
