@@ -10,11 +10,16 @@ authors.workspace = true
 
 [features]
 default = []
+# The shared HTTP layer. Enabled by any network provider and never on its own,
+# so one gate covers "this build can reach a service" however many protocols
+# are added above it.
+http = ["dep:ureq"]
 # Network model providers. Off by default so the core interpreter, and its
-# tests, carry no TLS or HTTP dependency. Both share `http.rs`, so the retry
-# rule and the timeout are the same whichever service answers.
-anthropic = ["dep:ureq"]
-openai = ["dep:ureq"]
+# tests, carry no TLS or HTTP dependency. All of them share `http.rs`, so the
+# retry rule and the timeout are the same whichever service answers.
+anthropic = ["http"]
+openai = ["http"]
+google = ["http"]
 
 [dependencies]
 ingot-ir.workspace = true

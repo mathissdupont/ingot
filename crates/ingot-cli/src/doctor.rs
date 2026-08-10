@@ -228,7 +228,7 @@ fn inspect_providers(target: &Target, compilation: &Compilation, checks: &mut Ve
                 "the program makes model calls, but no provider is ready",
                 location,
                 Some(
-                    "export ANTHROPIC_API_KEY or OPENAI_API_KEY, or declare a reachable `[[model.provider]]`"
+                    "export ANTHROPIC_API_KEY, OPENAI_API_KEY or GEMINI_API_KEY, or declare a reachable `[[model.provider]]`"
                         .to_string(),
                 ),
             )),
@@ -260,19 +260,37 @@ fn provider_readiness(
         .collect();
     let mut ready = BTreeMap::new();
 
-    for (name, variable, included) in [
+    // A vendor may answer to more than one variable name. Recognising only the
+    // first would leave a configured machine told it has no provider.
+    for (name, variables, included) in [
         (
             "anthropic",
-            "ANTHROPIC_API_KEY",
+            &["ANTHROPIC_API_KEY"][..],
             cfg!(feature = "anthropic"),
         ),
-        ("openai", "OPENAI_API_KEY", cfg!(feature = "openai")),
+        (
+            "google",
+            &["GEMINI_API_KEY", "GOOGLE_API_KEY"][..],
+            cfg!(feature = "google"),
+        ),
+        ("openai", &["OPENAI_API_KEY"][..], cfg!(feature = "openai")),
     ] {
         if declared.contains(name) {
             continue;
         }
-        let present = included && credential_is_present(variable);
+        let found = variables
+            .iter()
+            .copied()
+            .find(|variable| credential_is_present(variable));
+        let present = included && found.is_some();
         ready.insert(name.to_string(), present);
+
+        let primary = variables[0];
+        let alternatives = match variables.len() {
+            1 => String::new(),
+            _ => format!(" (or `{}`)", variables[1..].join("`, `")),
+        };
+
         checks.push(if !included {
             Check::new(
                 format!("provider.{name}"),
@@ -281,7 +299,7 @@ fn provider_readiness(
                 "ingot binary",
                 Some(format!("rebuild ingot with the `{name}` feature")),
             )
-        } else if present {
+        } else if let Some(variable) = found {
             Check::new(
                 format!("provider.{name}"),
                 Status::Pass,
@@ -293,10 +311,10 @@ fn provider_readiness(
             Check::new(
                 format!("provider.{name}"),
                 Status::Warn,
-                format!("`{variable}` is not set"),
-                format!("environment:{variable}"),
+                format!("`{primary}`{alternatives} is not set"),
+                format!("environment:{primary}"),
                 Some(format!(
-                    "export `{variable}` to use the built-in `{name}` provider"
+                    "export `{primary}` to use the built-in `{name}` provider"
                 )),
             )
         });
@@ -306,23 +324,26 @@ fn provider_readiness(
         let protocol_included = match provider.kind {
             ProviderKind::Anthropic => cfg!(feature = "anthropic"),
             ProviderKind::Openai => cfg!(feature = "openai"),
+            ProviderKind::Google => cfg!(feature = "google"),
         };
-        let required_variable = match (provider.kind, provider.api_key_env.as_deref()) {
-            (ProviderKind::Anthropic, None) => {
+        let required_variable = match provider.api_key_env.as_deref() {
+            None if provider.kind.requires_authentication() => {
                 ready.insert(provider.name.clone(), false);
                 checks.push(Check::new(
                     format!("provider.{}", provider.name),
                     Status::Fail,
                     format!(
-                        "provider `{}` uses Anthropic protocol but declares no `api-key-env`",
-                        provider.name
+                        "provider `{}` speaks the {} protocol, which authenticates every \
+                         request, but declares no `api-key-env`",
+                        provider.name,
+                        provider.kind.as_str()
                     ),
                     manifest,
                     Some("add `api-key-env = \"VARIABLE_NAME\"` to this provider".to_string()),
                 ));
                 continue;
             }
-            (_, variable) => variable,
+            variable => variable,
         };
         let credential_ready = required_variable.map(credential_is_present).unwrap_or(true);
         let is_ready = protocol_included && credential_ready;

@@ -8,6 +8,34 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
 
 ## [Unreleased]
 
+**A third protocol: Gemini** (CLI; opens [GAP-033](docs/gaps.md#gap-033))
+
+- `kind = "google"` and `--provider google` reach Google's Generative Language
+  API. `GEMINI_API_KEY` or `GOOGLE_API_KEY`; `auto` routes `google/…` to it the
+  way it already routes the other two.
+- It is here for one reason: Gemini is the vendor that cannot be reached by
+  pretending to be something else. `kind = "openai"` already reaches Ollama,
+  vLLM, llama.cpp, LM Studio, Azure, Groq, Together, OpenRouter, Fireworks and
+  DeepSeek with nothing but a `base-url`, and `kind` has always named a
+  protocol rather than a company. A fourth protocol earns its place the same
+  way this one did.
+- Three differences from the other two, each of them load-bearing. The model
+  and the method are **path segments**, so `base-url` for this protocol is the
+  API base — a base that already names a method is refused rather than
+  concatenated into a 404. The key travels in the `x-goog-api-key` **header**:
+  the API also accepts `?key=`, and a URL reaches proxy logs and crash reports
+  in a way a header does not. Structured output takes an **OpenAPI subset**
+  rather than JSON Schema, so `ask<T>` is translated — and a type with no
+  faithful translation is refused, because a schema quietly stripped of a
+  constraint is one the caller believes in and does not have.
+- It streams, so a Gemini call gets the 64,000-token ceiling and shows its text
+  as it arrives, through the same contract the other two use.
+- `--effort` is refused on this protocol rather than guessed at (GAP-033): the
+  thinking control differs per model generation, and sending nothing while
+  saying nothing would let an operator believe a flag took effect.
+- The provider `cfg` gates are now one umbrella feature per crate rather than
+  a list that grows with every protocol.
+
 **An answer arrives as it is written** (Runtime 0.3;
 closes [GAP-005](docs/gaps.md#gap-005); opens
 [GAP-031](docs/gaps.md#gap-031), [GAP-032](docs/gaps.md#gap-032))

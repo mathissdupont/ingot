@@ -51,7 +51,7 @@ pub mod tools;
 
 /// Shared by every network provider, so there is one retry rule rather than one
 /// per vendor.
-#[cfg(any(feature = "anthropic", feature = "openai"))]
+#[cfg(feature = "http")]
 pub mod http;
 
 #[cfg(feature = "anthropic")]
@@ -59,6 +59,9 @@ pub mod anthropic;
 
 #[cfg(feature = "openai")]
 pub mod openai;
+
+#[cfg(feature = "google")]
+pub mod google;
 
 #[cfg(test)]
 mod tests;

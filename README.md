@@ -419,8 +419,9 @@ answer from the wrong model is the worst outcome available.
 |---|---|
 | `anthropic/…` | Messages API. `ANTHROPIC_API_KEY` |
 | `openai/…` | Chat Completions. `OPENAI_API_KEY` |
+| `google/…` | Gemini. `GEMINI_API_KEY`, or `GOOGLE_API_KEY` |
 
-Those two need no configuring. **Anything else you name yourself:**
+Those three need no configuring. **Anything else you name yourself:**
 
 ```toml
 # ingot.toml
@@ -441,16 +442,27 @@ api-key-env = "AZURE_OPENAI_KEY"     # a name; a manifest never holds a key
 model exact "local/llama-3.3-70b"
 ```
 
-`kind` names a **protocol**. Ingot implements two, and Chat Completions is
-spoken by Ollama, vLLM, llama.cpp, LM Studio, Azure OpenAI and most hosted
-gateways — so "how many providers does Ingot support" is the wrong question.
-A declaration may also take over a built-in name, pointing `openai/…` at a
-company gateway without editing a single agent.
+`kind` names a **protocol**, not a company. Ingot implements three, and Chat
+Completions alone is spoken by Ollama, vLLM, llama.cpp, LM Studio, Azure OpenAI,
+Groq, Together, OpenRouter, Fireworks, DeepSeek and most hosted gateways — so
+"how many providers does Ingot support" is the wrong question. A declaration may
+also take over a built-in name, pointing `openai/…` at a company gateway without
+editing a single agent.
+
+| `kind` | Reaches | `base-url` is |
+|---|---|---|
+| `openai` | anything speaking Chat Completions | the full endpoint |
+| `anthropic` | Anthropic, and gateways fronting it | the full endpoint |
+| `google` | Gemini | the API base — this protocol puts the model and the method in the path |
+
+A third protocol exists for one reason: Gemini is the vendor that cannot be
+reached by pretending to be something else. Anything already speaking one of the
+first two needs no code here, only a `base-url`.
 
 An agent may instead state what it needs — `model requires { structured_output,
 context >= 128k }` — and let the provider pick. Anthropic resolves that against
-its default model; OpenAI refuses, because a guessed model name produces a `404`
-that reads like a bug here.
+its default model; OpenAI and Google refuse, because a guessed model name
+produces a `404` that reads like a bug here.
 
 ### Running an agent
 

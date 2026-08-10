@@ -13,10 +13,14 @@ name = "ingot"
 path = "src/main.rs"
 
 [features]
-default = ["anthropic", "openai"]
+default = ["anthropic", "openai", "google"]
+# Enabled by any network provider and never on its own, so one gate covers
+# "this build can reach a model service" however many protocols sit above it.
+providers = []
 # The network model providers, and the TLS stack they share.
-anthropic = ["ingot-runtime/anthropic"]
-openai = ["ingot-runtime/openai"]
+anthropic = ["ingot-runtime/anthropic", "providers"]
+openai = ["ingot-runtime/openai", "providers"]
+google = ["ingot-runtime/google", "providers"]
 
 [dependencies]
 ingot-compiler.workspace = true

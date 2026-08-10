@@ -19,7 +19,7 @@ The top-level shape is:
       "status": "fail",
       "summary": "the program makes model calls, but no provider is ready",
       "location": "project/ingot.toml",
-      "fix": "export ANTHROPIC_API_KEY or OPENAI_API_KEY, or declare a reachable `[[model.provider]]`"
+      "fix": "export ANTHROPIC_API_KEY, OPENAI_API_KEY or GEMINI_API_KEY, or declare a reachable `[[model.provider]]`"
     }
   ]
 }

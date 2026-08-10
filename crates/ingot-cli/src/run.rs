@@ -35,6 +35,9 @@ pub enum ProviderChoice {
     /// Call an OpenAI-compatible Chat Completions endpoint. Needs
     /// `OPENAI_API_KEY`; `INGOT_OPENAI_BASE_URL` points it elsewhere.
     Openai,
+    /// Call Google's Generative Language API. Needs `GEMINI_API_KEY` (or
+    /// `GOOGLE_API_KEY`); `INGOT_GOOGLE_BASE_URL` points it elsewhere.
+    Google,
     /// Replay a recorded cassette. No network, no key, same answers every time.
     Replay,
 }
@@ -58,9 +61,9 @@ pub struct RunConfig {
     pub cassette: Option<PathBuf>,
     pub record: Option<PathBuf>,
     /// Read only by the HTTP providers, so unused in a build without them.
-    #[cfg_attr(not(any(feature = "anthropic", feature = "openai")), allow(dead_code))]
+    #[cfg_attr(not(feature = "providers"), allow(dead_code))]
     pub model: Option<String>,
-    #[cfg_attr(not(any(feature = "anthropic", feature = "openai")), allow(dead_code))]
+    #[cfg_attr(not(feature = "providers"), allow(dead_code))]
     pub effort: Option<String>,
     pub agent: Option<String>,
     pub out_dir: Option<PathBuf>,
@@ -80,7 +83,7 @@ pub struct RunConfig {
     pub sandbox_allow_unenforced: bool,
     /// The root policy paths are relative to.
     pub workspace: PathBuf,
-    /// Model services declared in the manifest, beyond the built-in two.
+    /// Model services declared in the manifest, beyond the built-in ones.
     pub models: ModelConfig,
     /// Run the agent itself inside a boundary derived from its policy, with the
     /// model call and the approval gate crossing out through a supervisor.
@@ -126,9 +129,9 @@ pub struct ProviderSelection {
     pub choice: ProviderChoice,
     pub cassette: Option<PathBuf>,
     /// Read only by the HTTP providers, so unused in a build without them.
-    #[cfg_attr(not(any(feature = "anthropic", feature = "openai")), allow(dead_code))]
+    #[cfg_attr(not(feature = "providers"), allow(dead_code))]
     pub model: Option<String>,
-    #[cfg_attr(not(any(feature = "anthropic", feature = "openai")), allow(dead_code))]
+    #[cfg_attr(not(feature = "providers"), allow(dead_code))]
     pub effort: Option<String>,
     pub models: ModelConfig,
     /// Whether a replayed interaction must match the request that recorded it.
@@ -163,6 +166,7 @@ pub fn build_model_provider(selection: &ProviderSelection) -> Result<Box<dyn Mod
         }
         ProviderChoice::Anthropic => anthropic(selection),
         ProviderChoice::Openai => openai(selection),
+        ProviderChoice::Google => google(selection),
         ProviderChoice::Auto => auto(selection),
     }
 }
@@ -703,9 +707,20 @@ fn build_provider(
 }
 
 /// Vendors that need no declaring, when a key for them is exported.
-pub const BUILT_IN_PROVIDERS: &[&str] = &["anthropic", "openai"];
+pub const BUILT_IN_PROVIDERS: &[&str] = &["anthropic", "google", "openai"];
 
-/// Every vendor this run can reach: the built-in two, plus whatever the
+/// Whether a Gemini key is exported, under either name it goes by.
+///
+/// Both are in wide use and neither is wrong, so recognising only one would
+/// leave a configured machine reporting that it has no Google provider.
+#[cfg(feature = "google")]
+pub fn google_key_is_set() -> bool {
+    ["GEMINI_API_KEY", "GOOGLE_API_KEY"]
+        .iter()
+        .any(|name| std::env::var_os(name).is_some())
+}
+
+/// Every vendor this run can reach: the built-in ones, plus whatever the
 /// manifest declared.
 ///
 /// A vendor whose key is absent is not an error here — it is only an error if
@@ -759,9 +774,23 @@ fn available(selection: &ProviderSelection) -> Result<Vec<(String, Box<dyn Model
         }
     }
 
+    #[cfg(feature = "google")]
+    if !declared.contains("google") && google_key_is_set() {
+        if let Ok(provider) = ingot_runtime::google::GoogleProvider::from_env() {
+            providers.push((
+                ingot_runtime::google::PROVIDER.to_string(),
+                Box::new(
+                    provider
+                        .with_model(selection.model.clone())
+                        .with_effort(selection.effort.clone()),
+                ),
+            ));
+        }
+    }
+
     // A declared provider is a stated intention, so a missing key for one is an
     // error rather than a quiet absence.
-    #[cfg(any(feature = "anthropic", feature = "openai"))]
+    #[cfg(feature = "providers")]
     for declaration in &selection.models.providers {
         let provider = ingot_runtime::catalogue::build(
             declaration,
@@ -776,7 +805,7 @@ fn available(selection: &ProviderSelection) -> Result<Vec<(String, Box<dyn Model
     // better than ignoring the manifest. This is the shape the image built by
     // `tools/ingot.Dockerfile` has: the contained half asks its supervisor for
     // completions, so it carries no provider and no TLS stack at all.
-    #[cfg(not(any(feature = "anthropic", feature = "openai")))]
+    #[cfg(not(feature = "providers"))]
     if let Some(declaration) = selection.models.providers.first() {
         bail!(
             "the manifest declares the model provider `{}`, and this build has no HTTP provider \
@@ -802,8 +831,8 @@ fn auto(selection: &ProviderSelection) -> Result<Box<dyn ModelProvider>> {
     if providers.is_empty() {
         bail!(
             "no model provider is available\n  \
-             export ANTHROPIC_API_KEY or OPENAI_API_KEY, declare one with `[[model.provider]]` \
-             in {}, or use `--provider replay --cassette <FILE>`",
+             export ANTHROPIC_API_KEY, OPENAI_API_KEY or GEMINI_API_KEY, declare one with \
+             `[[model.provider]]` in {}, or use `--provider replay --cassette <FILE>`",
             super::MANIFEST_NAME
         );
     }
@@ -869,6 +898,27 @@ fn openai(selection: &ProviderSelection) -> Result<Box<dyn ModelProvider>> {
         bail!(
             "this build has no OpenAI provider\n\
              rebuild with `cargo build --features openai`, or use \
+             `--provider replay --cassette <FILE>`"
+        );
+    }
+}
+
+fn google(selection: &ProviderSelection) -> Result<Box<dyn ModelProvider>> {
+    #[cfg(feature = "google")]
+    {
+        Ok(Box::new(
+            ingot_runtime::google::GoogleProvider::from_env()
+                .map_err(anyhow::Error::msg)?
+                .with_model(selection.model.clone())
+                .with_effort(selection.effort.clone()),
+        ))
+    }
+    #[cfg(not(feature = "google"))]
+    {
+        let _ = selection;
+        bail!(
+            "this build has no Google provider\n\
+             rebuild with `cargo build --features google`, or use \
              `--provider replay --cassette <FILE>`"
         );
     }

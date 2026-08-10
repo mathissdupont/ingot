@@ -21,6 +21,10 @@ use serde_json::Value;
 pub struct Captured {
     pub headers: BTreeMap<String, String>,
     pub body: Value,
+    /// The request target, including any query. Recorded because one protocol
+    /// puts the model and the method in the path, and because a test needs to
+    /// be able to prove a credential is *not* in there.
+    pub target: String,
 }
 
 /// Serve one request with `status` and `response`, and report what arrived.
@@ -127,5 +131,16 @@ fn handle_raw(
     stream.write_all(payload).ok()?;
     stream.flush().ok()?;
 
-    Some(Captured { headers, body })
+    // `POST /some/path HTTP/1.1` — the middle field.
+    let target = request_line
+        .split_whitespace()
+        .nth(1)
+        .unwrap_or_default()
+        .to_string();
+
+    Some(Captured {
+        headers,
+        body,
+        target,
+    })
 }

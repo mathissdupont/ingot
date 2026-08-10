@@ -1,6 +1,6 @@
 //! Which model services this machine can reach.
 //!
-//! Two are built in, because most people want them and neither needs
+//! Three are built in, because most people want them and none needs
 //! configuring. Everything else is declared by the operator:
 //!
 //! ```toml
@@ -19,9 +19,24 @@
 //! api-key-env = "AZURE_OPENAI_KEY"
 //! ```
 //!
-//! `kind` names a **protocol**, not a company. Ingot implements two, and a
-//! service that speaks either can be reached by naming it here — which is why
-//! "how many providers does Ingot support" is the wrong question.
+//! `kind` names a **protocol**, not a company. Ingot implements three, and a
+//! service that speaks any of them can be reached by naming it here — which is
+//! why "how many providers does Ingot support" is the wrong question. The
+//! answer to the right one:
+//!
+//! | `kind` | Reaches |
+//! |--------|---------|
+//! | `openai` | OpenAI, Azure OpenAI, Ollama, vLLM, llama.cpp, LM Studio, Groq, Together, OpenRouter, Fireworks, DeepSeek, Mistral's compatible endpoint, and most hosted gateways |
+//! | `anthropic` | Anthropic, and gateways that front the Messages API |
+//! | `google` | Google Gemini |
+//!
+//! A third protocol is here for one reason: Gemini is the vendor that cannot be
+//! reached by pretending to be something else. Anything that already speaks one
+//! of the first two needs no code, only a `base-url`.
+//!
+//! `base-url` is a complete endpoint for `openai` and `anthropic`. For `google`
+//! it is the API base, because that protocol puts the model and the method in
+//! the path — see [`ProviderKind::base_url_is_an_endpoint`].
 //!
 //! `api-key-env` names an environment variable. There is no way to write a key
 //! into a manifest, for the same reason there is none in `[[mcp.server]]`: a
@@ -40,8 +55,15 @@ pub enum ProviderKind {
     /// llama.cpp, Ollama, LM Studio, and most hosted gateways.
     #[serde(alias = "openai-compatible")]
     Openai,
-    /// The Anthropic Messages API.
+    /// The Anthropic Messages API. Spoken by Anthropic and by gateways that
+    /// front it.
     Anthropic,
+    /// Google's Generative Language API (Gemini).
+    ///
+    /// Here because it is the one a service cannot reach by pretending to be
+    /// something else: it is neither of the two above.
+    #[serde(alias = "gemini")]
+    Google,
 }
 
 impl ProviderKind {
@@ -49,6 +71,32 @@ impl ProviderKind {
         match self {
             ProviderKind::Openai => "openai",
             ProviderKind::Anthropic => "anthropic",
+            ProviderKind::Google => "google",
+        }
+    }
+
+    /// Whether every request this protocol makes carries a credential.
+    ///
+    /// False only for `openai`, and only because a server on the same machine
+    /// usually wants no authentication at all. Asserted here rather than
+    /// rediscovered by each caller, so `doctor` and the provider builder cannot
+    /// disagree about whether a declaration is complete.
+    pub fn requires_authentication(self) -> bool {
+        match self {
+            ProviderKind::Openai => false,
+            ProviderKind::Anthropic | ProviderKind::Google => true,
+        }
+    }
+
+    /// Whether `base-url` is a complete endpoint or the base to build one from.
+    ///
+    /// Worth being explicit about rather than leaving to a reader of two
+    /// provider modules: the Gemini protocol puts the model and the method in
+    /// the path, so there is no one endpoint to name.
+    pub fn base_url_is_an_endpoint(self) -> bool {
+        match self {
+            ProviderKind::Openai | ProviderKind::Anthropic => true,
+            ProviderKind::Google => false,
         }
     }
 }
@@ -160,7 +208,7 @@ impl ModelConfig {
 ///
 /// Separate from the declaration so that a manifest can be read, validated and
 /// printed on a build with no HTTP support at all.
-#[cfg(any(feature = "anthropic", feature = "openai"))]
+#[cfg(feature = "http")]
 pub fn build(
     config: &ProviderConfig,
     model_override: Option<String>,
@@ -223,6 +271,32 @@ pub fn build(
                 )))
             }
         }
+        ProviderKind::Google => {
+            #[cfg(feature = "google")]
+            {
+                let Some(key) = key else {
+                    return Err(ProviderError::Configuration(format!(
+                        "model provider `{}` speaks the Gemini protocol, which authenticates \
+                         every request; give it an `api-key-env`",
+                        config.name
+                    )));
+                };
+                Ok(Box::new(
+                    crate::google::GoogleProvider::with_key(key)
+                        .with_base_url(config.base_url.clone())
+                        .with_model(model_override)
+                        .with_effort(effort),
+                ))
+            }
+            #[cfg(not(feature = "google"))]
+            {
+                Err(ProviderError::Configuration(format!(
+                    "model provider `{}` needs the `google` protocol, which this build does not \
+                     include; rebuild with `--features google`",
+                    config.name
+                )))
+            }
+        }
     }
 }
 
@@ -230,7 +304,7 @@ pub fn build(
 mod tests {
     use super::*;
 
-    const BUILT_IN: &[&str] = &["anthropic", "openai"];
+    const BUILT_IN: &[&str] = &["anthropic", "google", "openai"];
 
     fn provider(name: &str) -> ProviderConfig {
         ProviderConfig {
@@ -327,7 +401,10 @@ mod tests {
         };
         let error = config.validate(BUILT_IN).unwrap_err();
         assert!(error.contains("mistral"), "{error}");
-        assert!(error.contains("anthropic, local, openai"), "{error}");
+        assert!(
+            error.contains("anthropic, google, local, openai"),
+            "{error}"
+        );
     }
 
     #[test]

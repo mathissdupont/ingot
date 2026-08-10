@@ -54,6 +54,7 @@ to you*.
 | [GAP-030](#gap-030) | A verifier cannot be executed at all | Absent | a verifier execution model (RFC) |
 | [GAP-031](#gap-031) | A contained run does not stream, and keeps the 16k ceiling | Refused | a delta notification on the supervisor channel |
 | [GAP-032](#gap-032) | The Python backend does not stream, so the two backends accept different answer lengths | Degraded | streaming in the Python prelude |
+| [GAP-033](#gap-033) | `--effort` cannot be honoured by the Gemini protocol | Refused | one thinking control that holds across model generations |
 
 ---
 
@@ -277,6 +278,31 @@ raised ceiling only once the guest's calls actually stream.
 *Recorded in.* [Runtime 0.3 §6](../specs/runtime/v0.3.md),
 [RFC-0013](../rfcs/0013-streaming.md),
 [RFC-0005](../rfcs/0005-the-contained-run.md).
+
+### GAP-033
+
+**`--effort` cannot be honoured by the Gemini protocol.**
+
+`--effort low|medium|high|xhigh|max` reaches Anthropic and OpenAI, which each
+take a named reasoning level. The Gemini protocol has no single equivalent: one
+model generation takes a thinking budget in tokens, the next takes a named
+level, and the two are not interchangeable. A run that names an effort and
+routes to `google` stops and says so.
+
+*Why refused rather than mapped.* Guessing which control a given model accepts
+produces a rejected request on half the catalogue. Sending neither and saying
+nothing would be worse: an operator would believe a flag took effect on a run
+where it did nothing, and the only evidence would be a bill. The refusal is
+checked when this provider answers a call rather than when it is constructed,
+so exporting a Gemini key does not break `--effort` for an artifact pinned to
+another vendor.
+
+*What closing it needs.* One control that holds across model generations —
+either because the protocol grows one, or because Ingot carries a table of
+which models take which, which is a catalogue this project has so far refused
+to keep for exactly the reason model names change.
+
+*Recorded in.* `crates/ingot-runtime/src/google.rs`.
 
 ## Degraded
 
