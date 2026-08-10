@@ -42,15 +42,14 @@ to you*.
 | [GAP-008](#gap-008) | `checkpoint` cannot be resumed from | Refused | a resumption model (RFC) |
 | [GAP-009](#gap-009) | MCP prompts, resources and sampling unsupported | Refused | language support for each |
 | [GAP-010](#gap-010) | `parallel` executes sequentially | Degraded | a scheduler in the interpreter |
-| [GAP-011](#gap-011) | One file per program; no modules | Absent | a module system (RFC) |
-| [GAP-012](#gap-012) | No optionals, unions, generics or functions | Absent | language 0.2 |
+| [GAP-011](#gap-011) | No package semantics beyond project-local imports | Absent | a package model (RFC) |
+| [GAP-012](#gap-012) | No generics | Absent | evidence, then an RFC |
 | [GAP-013](#gap-013) | A capability cannot be scoped to an endpoint or a path | Absent | a policy subject for resources (RFC) |
 | [GAP-014](#gap-014) | No persistent memory or state migration | Absent | a memory model (RFC) |
 | [GAP-017](#gap-017) | No conformance suite or backend author guide | Absent | M8 |
 | [GAP-020](#gap-020) | The boundary needs Linux containers | Refused | a second expression of the boundary |
-| [GAP-022](#gap-022) | Nothing has been released; you build from source | Absent | one tag |
 | [GAP-023](#gap-023) | A contained run cannot cross a boundary to a sub-agent | Refused | a box per agent, over the supervisor |
-| [GAP-025](#gap-025) | The product loop is fragmented across commands and raw output | Degraded | M11 |
+| [GAP-025](#gap-025) | The product loop is a sequence of commands with no single surface | Degraded | a surface over the existing contracts |
 | [GAP-028](#gap-028) | A model-authored project has no offline test until one run is recorded | Degraded | cassette synthesis, or nothing |
 | [GAP-029](#gap-029) | An image cannot be verified by signature, so acquisition stays manual | Refused | a signature scheme and a trust root |
 | [GAP-030](#gap-030) | A verifier cannot be executed at all | Absent | a verifier execution model (RFC) |
@@ -332,20 +331,31 @@ a test and another in production — the divergence this project exists to refus
 
 ### GAP-025
 
-**The product loop is fragmented across commands and raw output.**
+**The product loop is a sequence of commands with no single surface.**
 
-The compiler, builder, cassette runner, event stream and policy-derived
-container all work. Maintained templates, `ingot doctor`, `ingot dev` and the
-human trace now cover creation, readiness, the edit loop and run diagnosis;
-integrated tool/safe-run guidance is still missing.
+*Narrowed.* This entry used to say integrated tool and safe-run guidance was
+missing. It is not: every work package it named has landed, and
+[RFC-0007](../rfcs/0007-the-ingot-product-loop.md)'s conformance list is
+complete. Templates, `ingot doctor`, `ingot dev`, the human trace, typed tool
+onboarding, contained-run readiness, model-assisted authoring and packaging all
+exist, and the editor and the CLI are tested to report the same diagnostics.
 
-*How it shows up.* Safe-run and tool onboarding remain separate from the edit
-loop.
+What is left is not another command. It is that the loop is *nine* of them, each
+correct and each printing to a terminal, with no place that shows a project's
+state at once: what compiles, what it may reach, what a run did, what it cost,
+what is ready and what is not.
 
-*What closing it needs.* M11 and the P1–P5/P8 work packages in
-[RFC-0007](../rfcs/0007-the-ingot-product-loop.md): templates whose instructions
-are tested, `ingot doctor`, `ingot dev`, a human trace and integrated tool/safe-run
-readiness.
+*How it shows up.* Answering "is this agent alright?" means running `check`,
+`doctor`, `tools`, `test` and reading three kinds of output. Every fact is
+available; none of them are in the same place.
+
+*What closing it needs.* A surface over the interfaces that already exist —
+`doctor --json`, `tools --json`, the run event stream, the human trace,
+`package --json` — and **nothing behind it**. RFC-0007 rejected building a UI
+first precisely because it would have encoded missing semantics and become a
+second source of truth; those interfaces now exist, so a consumer of them would
+not. A surface that computed anything the CLI cannot would be that second source
+of truth arriving late.
 
 *Recorded in.* [Vision](vision.md#one-product-loop-around-the-language),
 [RFC-0007](../rfcs/0007-the-ingot-product-loop.md).
@@ -354,37 +364,52 @@ readiness.
 
 ### GAP-011
 
-**One file per program; no modules.**
+**No package semantics beyond project-local imports.**
 
-A compilation unit is a single `.ing` file. There is no `import`. A shared
-`type` or `tool` declaration must be copied.
+*Narrowed by Language 0.2.* This entry used to say a program was one file and
+there was no `import`. Both are now false:
+[RFC-0008](../rfcs/0008-language-v0.2-modules-and-imports.md) landed, and a
+project can split shared `type`, `tool` and `verifier` declarations across files
+and import them.
 
-*How it shows up.* `ingot fmt` formats the entry file only, and a project cannot
-be split by concern.
+What is still absent is everything above that: wildcards, re-exports, importing
+an agent, and a package identity that means anything outside one directory. An
+`import` is a project-local path, so code cannot be shared between projects
+except by copying it.
 
-*Initial Language 0.2 fix.* [RFC-0008](../rfcs/0008-language-v0.2-modules-and-imports.md)
-specifies project-local imports, and the first implementation can import shared
-`type`, `tool` and `verifier` declarations. Broader package semantics,
-wildcards, re-exports and agent imports remain out of scope.
+*How it shows up.* `ingot fmt` formats the entry file only. Two projects that
+want the same `tool` declaration keep two copies of it.
 
-*Recorded in.* [Language 0.1 §3 and §9](../specs/language/v0.1.md).
+*What closing it needs.* A package model, which is a larger question than a
+module system: it has to say what a package is named, how a version is resolved,
+and how that interacts with the artifact digest
+([Ingot Package 0.1](../specs/image/v0.1.md)).
+
+*Recorded in.* [Language 0.2](../specs/language/v0.2.md),
+[RFC-0008](../rfcs/0008-language-v0.2-modules-and-imports.md).
 
 ### GAP-012
 
-**No optionals, unions, generics or user-defined functions.**
+**No generics.**
 
-The type universe is fixed: scalars, `T[]`, and declared records. A value is
-always present, and a tool that may or may not return something has no way to
-say so.
+*Narrowed by Language 0.2.* This entry used to cover optionals, unions and
+user-defined functions as well. All three landed:
+[RFC-0009](../rfcs/0009-language-v0.2-optionals-and-unions.md) for `T?` and
+`A | B`, [RFC-0010](../rfcs/0010-language-v0.2-pure-helper-functions.md) for
+expression-only helpers. A tool that may or may not return something can now say
+so.
 
-*Initial Language 0.2 fixes.* Optionals and unions are specified and implemented
-in [RFC-0009](../rfcs/0009-language-v0.2-optionals-and-unions.md). Pure helper
-functions are specified and implemented in
-[RFC-0010](../rfcs/0010-language-v0.2-pure-helper-functions.md). Generics are
-deferred until repeated real source demonstrates the need in
+Generics remain absent, and **by decision rather than by omission**:
+[RFC-0011](../rfcs/0011-language-v0.2-generics-decision.md) defers them until
+repeated real source demonstrates the need. A small agent language that grows a
+type parameter system because it seemed principled is how a deliberately small
+language stops being one.
+
+*What closing it needs.* Evidence first — real `.ing` that is worse without
+them — and then an RFC. Not the other way round.
+
+*Recorded in.* [Language 0.2](../specs/language/v0.2.md),
 [RFC-0011](../rfcs/0011-language-v0.2-generics-decision.md).
-
-*Recorded in.* [Language 0.1 §4 and §9](../specs/language/v0.1.md).
 
 ### GAP-013
 
@@ -438,27 +463,6 @@ There is no `persistent`, and therefore no question yet of migrating it.
 
 *Recorded in.* [Language 0.1 §9](../specs/language/v0.1.md).
 
-### GAP-022
-
-**Nothing has been released; you build from source.**
-
-`cargo build --release` works and is tested on three platforms, but there is no
-tag, no GitHub Release and no prebuilt binary. Trying Ingot therefore starts
-with installing a Rust toolchain, which is a large first step for someone
-deciding whether the idea is worth ten minutes.
-
-*What closing it needs.* One command —
-`git tag v0.4.0-rc.2 && git push origin v0.4.0-rc.2`. The machinery is in place:
-[`.github/workflows/release.yml`](../.github/workflows/release.yml) builds
-`ingot` and `ingot-mcp-fs` for Linux, macOS on both architectures, and Windows;
-refuses a tag that disagrees with the workspace version; runs each archived
-binary before shipping it; and publishes one `SHA256SUMS` covering all of them.
-
-*What was blocking it.* [GAP-019](#gap-019) — no clearance for the name — which
-is now closed by a decision rather than by a search: Ingot claims no rights in
-the name. Publishing is still outward-facing, so what remains is the maintainer
-choosing the moment.
-
 ### GAP-017
 
 **No conformance suite or backend author guide.**
@@ -479,6 +483,28 @@ remain.
 When a gap closes it moves here with the release that closed it, and its section
 stays where a link can find it. Identifiers are never reused: a link to GAP-007
 must keep meaning what it meant.
+
+### GAP-022
+
+**Nothing has been released; you build from source.**
+*Closed in 0.4.0-rc.2.*
+
+`ingot`, `ingot-mcp-fs` and `ingot-lsp` are published for Linux, Windows and
+macOS on both architectures, with one `SHA256SUMS` covering all of them. Trying
+Ingot no longer starts with installing a Rust toolchain.
+
+*What the first candidate found.* v0.4.0-rc.1 was tagged and produced nothing:
+its Intel macOS job asked for the `macos-13` runner image, which GitHub has
+retired, and a job asking for a retired image queues indefinitely rather than
+failing. That binary is now cross-compiled from Apple silicon and still executed
+before it ships. This is the entire reason the first release was a candidate.
+
+*Still a candidate on purpose.* The language, the Agent IR and the artifact
+format may change before 1.0, and the archives say so.
+
+*Recorded in.* [README](../README.md#install),
+[CHANGELOG](../CHANGELOG.md),
+[`release.yml`](../.github/workflows/release.yml).
 
 ### GAP-003
 

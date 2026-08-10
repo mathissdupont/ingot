@@ -497,6 +497,7 @@ dependencies = [
  "ingot-compiler",
  "ingot-diagnostics",
  "ingot-ir",
+ "ingot-language-service",
  "ingot-lexer",
  "ingot-mcp",
  "ingot-package",

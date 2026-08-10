@@ -467,7 +467,7 @@ turning a deliberately small agent language into a general-purpose one by guess.
 - [x] `ingot_tools_preflight_rejects_source_schema_drift`
 - [x] `ingot_tools_proposes_typed_source_without_writing_project_files`
 - [x] `ingot_tools_proposes_an_unambiguous_manifest_alias`
-- [ ] `editor_and_cli_diagnostics_are_identical`
+- [x] `editor_and_cli_diagnostics_are_identical`
 - [x] `an_authoring_repair_cannot_accept_its_own_policy_widening`
 - [x] `model_assistance_leaves_a_project_that_works_without_the_model`
 - [x] `the_packaged_ir_is_the_same_bytes_that_the_tested_build_produced`

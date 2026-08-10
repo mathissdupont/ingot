@@ -8,6 +8,27 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
 
 ## [Unreleased]
 
+**The register says what is true**
+(closes [GAP-022](docs/gaps.md#gap-022); narrows
+[GAP-011](docs/gaps.md#gap-011), [GAP-012](docs/gaps.md#gap-012),
+[GAP-025](docs/gaps.md#gap-025))
+
+- GAP-022 is closed: 0.4.0-rc.2 publishes `ingot`, `ingot-mcp-fs` and
+  `ingot-lsp` for Linux, Windows and macOS on both architectures, with one
+  `SHA256SUMS`. Trying Ingot no longer starts with a Rust toolchain.
+- GAP-011 no longer claims there is no `import`; Language 0.2 landed one. What
+  remains is package semantics above it — wildcards, re-exports, agent imports,
+  and an identity that means something outside one directory.
+- GAP-012 no longer claims optionals, unions and functions are missing; all
+  three landed. Only generics remain, deferred by decision rather than omission.
+- GAP-025 no longer claims tool and safe-run guidance are missing; every work
+  package it named has landed and RFC-0007's conformance list is complete. What
+  is left is that the loop is nine correct commands with no single place that
+  shows a project's state at once.
+- Added `editor_and_cli_diagnostics_are_identical`, the last unticked test in
+  RFC-0007: the editor and the command line must not grow two answers to "is
+  this source correct".
+
 **A `cost` budget is charged, or says it was not** (Runtime 0.2;
 closes [GAP-003](docs/gaps.md#gap-003))
 

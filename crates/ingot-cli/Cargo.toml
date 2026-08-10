@@ -40,6 +40,9 @@ notify = { workspace = true }
 
 [dev-dependencies]
 ingot-ir.workspace = true
+# The editor and the CLI must report the same diagnostics; proving it needs both
+# in one process.
+ingot-language-service.workspace = true
 # The package tests assert on the artifact a person receives, and compute the
 # digests they assert with rather than restating them.
 ingot-package.workspace = true

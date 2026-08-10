@@ -1311,3 +1311,118 @@ fn a_failing_build_writes_no_artifact() {
     assert_eq!(code(&output), EXIT_DIAGNOSTICS);
     assert!(!out_dir.exists(), "a failed build must not create output");
 }
+
+/// The editor and the command line must not disagree about a program.
+///
+/// Both read the same compiler, so this is a test that they keep doing so: a
+/// second diagnostic path — a "quick" editor lint, a CLI-only filter — is how a
+/// project ends up with two answers to "is this source correct".
+///
+/// It compares the **compiler's** diagnostics. `ING5007` is deliberately not
+/// among them: an unchargeable cost budget is a fact about the deployment's
+/// prices, which the CLI can see and an editor holding only source cannot.
+#[test]
+fn editor_and_cli_diagnostics_are_identical() {
+    let dir = TempDir::new("editor-cli-parity");
+    let cases: [(&str, &str); 3] = [
+        (
+            "errors.ing",
+            r#"language 0.1
+
+tool web.search(query: string) -> string[] !network
+
+agent Broken(topic: string) -> report<markdown> {
+  tools { mcp web.search }
+  policy {
+    network deny
+  }
+  flow {
+    hits = call web.search(topic)
+    emit report = missing
+  }
+}
+"#,
+        ),
+        (
+            "warnings.ing",
+            r#"language 0.1
+
+verifier CitationCheck(draft: markdown, min_sources: int)
+
+agent Warned(topic: string) -> report<markdown> {
+  flow {
+    draft = ask<markdown>("Write about ${topic}")
+    unused = ask<markdown>("Also write something else")
+    verify CitationCheck(draft, min_sources: 8)
+    emit report = draft
+  }
+}
+"#,
+        ),
+        (
+            "clean.ing",
+            r#"language 0.1
+
+agent Clean(topic: string) -> report<markdown> {
+  flow {
+    emit report = ask<markdown>("Write about ${topic}")
+  }
+}
+"#,
+        ),
+    ];
+
+    let service = ingot_language_service::LanguageService::new();
+    for (name, source) in cases {
+        let path = dir.path().join(name);
+        std::fs::write(&path, source).expect("writing the source");
+
+        let editor = service.check_source(name, source);
+        let editor_seen: Vec<String> = editor
+            .diagnostics
+            .iter()
+            .map(|diagnostic| format!("{:?}:{}", diagnostic.severity, diagnostic.code))
+            .collect();
+
+        let output = run(&["check", &path.display().to_string()]);
+        let rendered = stderr(&output);
+        let cli_seen: Vec<String> = rendered
+            .lines()
+            .filter_map(|line| {
+                let (severity, rest) = line
+                    .strip_prefix("error[")
+                    .map(|rest| ("Error", rest))
+                    .or_else(|| line.strip_prefix("warning[").map(|rest| ("Warning", rest)))?;
+                let code = rest.split(']').next()?;
+                Some(format!("{severity}:{code}"))
+            })
+            .collect();
+
+        assert_eq!(
+            editor_seen, cli_seen,
+            "`{name}`: the editor and the CLI disagree\n{rendered}"
+        );
+        assert_eq!(
+            editor.has_errors,
+            code(&output) == EXIT_DIAGNOSTICS,
+            "`{name}`: the editor and the CLI disagree about whether it builds"
+        );
+        assert_eq!(
+            editor.warning_count,
+            cli_seen
+                .iter()
+                .filter(|seen| seen.starts_with("Warning"))
+                .count(),
+            "`{name}`: warning counts differ\n{rendered}"
+        );
+    }
+
+    // The cases have to be worth comparing: one that fails, one that only warns,
+    // one that is clean.
+    let broken = service.check_source("errors.ing", cases[0].1);
+    assert!(broken.error_count > 0);
+    let warned = service.check_source("warnings.ing", cases[1].1);
+    assert!(!warned.has_errors && warned.warning_count > 0);
+    let clean = service.check_source("clean.ing", cases[2].1);
+    assert!(clean.diagnostics.is_empty(), "{:?}", clean.diagnostics);
+}
