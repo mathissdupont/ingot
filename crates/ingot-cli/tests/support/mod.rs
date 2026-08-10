@@ -105,6 +105,22 @@ fn answer(mut stream: TcpStream, reply: &Value) -> std::io::Result<()> {
     }
     let mut body = vec![0u8; content_length];
     reader.read_exact(&mut body)?;
+    let request: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+
+    // The provider streams, so the stub has to. Rather than keep a second set
+    // of fixtures, the same reply is re-framed as the event stream that would
+    // have produced it — which is also the sharpest test of the property the
+    // providers are built on: one parser, two transports, same answer.
+    if request.get("stream") == Some(&Value::Bool(true)) {
+        let (content_type, payload) = (String::from("text/event-stream"), as_event_stream(reply));
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            payload.len()
+        )?;
+        stream.write_all(payload.as_bytes())?;
+        return stream.flush();
+    }
 
     let payload = serde_json::to_vec(reply)?;
     write!(
@@ -114,6 +130,113 @@ fn answer(mut stream: TcpStream, reply: &Value) -> std::io::Result<()> {
     )?;
     stream.write_all(&payload)?;
     stream.flush()
+}
+
+/// Re-frame a whole reply as the event stream that would have produced it.
+///
+/// The vendor is read off the reply's own shape, so a test writes one fixture
+/// and gets both transports. A reply in neither shape is served as-is, which is
+/// how an error payload reaches the provider unchanged.
+fn as_event_stream(reply: &Value) -> String {
+    let mut out = String::new();
+    let mut push = |name: &str, data: Value| {
+        if !name.is_empty() {
+            out.push_str(&format!("event: {name}\n"));
+        }
+        out.push_str(&format!("data: {data}\n\n"));
+    };
+
+    if let Some(content) = reply.get("content") {
+        let text: String = content
+            .as_array()
+            .map(|blocks| {
+                blocks
+                    .iter()
+                    .filter(|block| block.get("type").and_then(Value::as_str) == Some("text"))
+                    .filter_map(|block| block.get("text").and_then(Value::as_str))
+                    .collect::<Vec<_>>()
+                    .join("")
+            })
+            .unwrap_or_default();
+        push(
+            "message_start",
+            json!({ "type": "message_start", "message": {
+                "id": reply.get("id").cloned().unwrap_or(Value::Null),
+                "model": reply.get("model").cloned().unwrap_or(Value::Null),
+                "usage": reply.get("usage").cloned().unwrap_or(json!({})),
+            }}),
+        );
+        for fragment in fragments(&text) {
+            push(
+                "content_block_delta",
+                json!({ "type": "content_block_delta",
+                        "delta": { "type": "text_delta", "text": fragment } }),
+            );
+        }
+        push(
+            "message_delta",
+            json!({ "type": "message_delta", "delta": {
+                "stop_reason": reply.get("stop_reason").cloned().unwrap_or(Value::Null),
+                "stop_details": reply.get("stop_details").cloned().unwrap_or(Value::Null),
+            }, "usage": reply.get("usage").cloned().unwrap_or(json!({})) }),
+        );
+        push("message_stop", json!({ "type": "message_stop" }));
+        return out;
+    }
+
+    if let Some(choice) = reply
+        .get("choices")
+        .and_then(Value::as_array)
+        .and_then(|choices| choices.first())
+    {
+        let text = choice
+            .get("message")
+            .and_then(|message| message.get("content"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let model = reply.get("model").cloned().unwrap_or(Value::Null);
+        for fragment in fragments(text) {
+            push(
+                "",
+                json!({ "model": model, "choices": [
+                    { "index": 0, "delta": { "content": fragment }, "finish_reason": Value::Null }
+                ]}),
+            );
+        }
+        push(
+            "",
+            json!({ "model": model, "choices": [{
+                "index": 0,
+                "delta": {},
+                "finish_reason": choice.get("finish_reason").cloned().unwrap_or(Value::Null),
+            }], "usage": reply.get("usage").cloned().unwrap_or(Value::Null) }),
+        );
+        push("", json!("[DONE]"));
+        // `[DONE]` is framing rather than JSON, and quoting it would make it a
+        // string the provider tries to parse as a chunk.
+        return out.replace("data: \"[DONE]\"", "data: [DONE]");
+    }
+
+    format!("data: {reply}\n\n")
+}
+
+/// A few pieces rather than one, so the streaming path is actually exercised.
+fn fragments(text: &str) -> Vec<&str> {
+    if text.is_empty() {
+        return Vec::new();
+    }
+    let mut pieces = Vec::new();
+    let mut rest = text;
+    while !rest.is_empty() {
+        let mut cut = rest.len().min(16);
+        while cut > 0 && !rest.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        let (piece, tail) = rest.split_at(cut.max(1).min(rest.len()));
+        pieces.push(piece);
+        rest = tail;
+    }
+    pieces
 }
 
 pub fn text_reply(text: &str) -> Value {

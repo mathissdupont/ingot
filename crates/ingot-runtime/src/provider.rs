@@ -168,6 +168,14 @@ impl fmt::Display for ProviderError {
 
 impl std::error::Error for ProviderError {}
 
+/// Text as it arrives, handed over before the answer is complete.
+///
+/// A delta is for watching, never for deciding. Nothing downstream may parse
+/// one, validate one, or bind one to a name: the value a run uses is always
+/// assembled from the finished response and validated whole. See
+/// [Runtime 0.3 §2](../../../specs/runtime/v0.3.md).
+pub type DeltaSink<'a> = &'a mut dyn FnMut(&str);
+
 /// A source of model completions.
 pub trait ModelProvider {
     /// Short name used in events and diagnostics, e.g. `anthropic` or `replay`.
@@ -177,6 +185,38 @@ pub trait ModelProvider {
         &mut self,
         request: &CompletionRequest,
     ) -> Result<CompletionResponse, ProviderError>;
+
+    /// Whether this provider delivers an answer incrementally.
+    ///
+    /// Read by the interpreter before it decides how many output tokens one
+    /// call may ask for: a service that must compose a whole body before
+    /// sending it holds the connection open for the length of the answer, and
+    /// several refuse a large `max_tokens` outright unless the request streams.
+    /// The ceiling is therefore a property of the transport, and a provider
+    /// that says `false` here keeps the smaller one.
+    fn streams(&self) -> bool {
+        false
+    }
+
+    /// Complete a request, handing text to `on_delta` as it arrives.
+    ///
+    /// The default is [`ModelProvider::complete`] with the deltas dropped,
+    /// which is the honest answer for a provider that has nothing live to
+    /// show — a cassette replay produces its answer at once, and inventing
+    /// deltas for it would make a replayed run look like a call that never
+    /// happened.
+    ///
+    /// The returned response is what the run uses. Whatever reached `on_delta`
+    /// is a display artifact: on any error it is discarded, including when the
+    /// answer was cut off part-way through.
+    fn complete_streaming(
+        &mut self,
+        request: &CompletionRequest,
+        on_delta: DeltaSink<'_>,
+    ) -> Result<CompletionResponse, ProviderError> {
+        let _ = on_delta;
+        self.complete(request)
+    }
 }
 
 /// Lets a boxed provider be used wherever a provider is expected — including as
@@ -192,6 +232,18 @@ impl<P: ModelProvider + ?Sized> ModelProvider for Box<P> {
         request: &CompletionRequest,
     ) -> Result<CompletionResponse, ProviderError> {
         (**self).complete(request)
+    }
+
+    fn streams(&self) -> bool {
+        (**self).streams()
+    }
+
+    fn complete_streaming(
+        &mut self,
+        request: &CompletionRequest,
+        on_delta: DeltaSink<'_>,
+    ) -> Result<CompletionResponse, ProviderError> {
+        (**self).complete_streaming(request, on_delta)
     }
 }
 
@@ -237,6 +289,37 @@ mod tests {
         let mut other = request();
         other.response_type = "text".into();
         assert_ne!(request().digest(), other.digest());
+    }
+
+    #[test]
+    fn a_provider_that_cannot_stream_answers_at_once_and_shows_nothing() {
+        struct AtOnce;
+        impl ModelProvider for AtOnce {
+            fn name(&self) -> &str {
+                "at-once"
+            }
+            fn complete(
+                &mut self,
+                _request: &CompletionRequest,
+            ) -> Result<CompletionResponse, ProviderError> {
+                Ok(CompletionResponse {
+                    value: json!("the whole answer"),
+                    usage: Usage::default(),
+                    model: "at-once".into(),
+                })
+            }
+        }
+
+        let mut seen = Vec::new();
+        let response = AtOnce
+            .complete_streaming(&request(), &mut |text| seen.push(text.to_string()))
+            .unwrap();
+        assert_eq!(response.value, json!("the whole answer"));
+        assert!(
+            seen.is_empty(),
+            "a provider with nothing live to show must not invent deltas: {seen:?}"
+        );
+        assert!(!AtOnce.streams());
     }
 
     #[test]

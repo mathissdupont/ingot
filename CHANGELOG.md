@@ -8,6 +8,40 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
 
 ## [Unreleased]
 
+**An answer arrives as it is written** (Runtime 0.3;
+closes [GAP-005](docs/gaps.md#gap-005); opens
+[GAP-031](docs/gaps.md#gap-031), [GAP-032](docs/gaps.md#gap-032))
+
+- A provider may now deliver a completion incrementally, and `ingot run` prints
+  the text as it arrives instead of showing nothing until the answer is whole.
+  Both the Anthropic and the OpenAI-compatible providers stream.
+- A streamed call may ask for up to 64,000 output tokens instead of 16,000. The
+  ceiling belongs to the transport, not to the artifact: a service that composes
+  a whole body before sending it holds the connection open for the length of the
+  answer, and several refuse a larger `max_tokens` unless the request streams.
+  The interpreter picks the ceiling by asking the provider whether it streams.
+- **A delta is not an event.** The live text travels on a second channel that is
+  not the event stream, is not recorded in a cassette, and carries no
+  determinism guarantee. Putting fragments into the recorded stream would have
+  broken [Runtime 0.1 §9](specs/runtime/v0.1.md) and cassette position matching.
+  A replay emits no deltas, which is correct — there is nothing live to watch.
+- **A partial answer is not an answer.** The value a run uses is always
+  assembled from the finished response and validated whole, by the same code
+  path a whole-body response takes. On a truncation or a type mismatch the
+  accumulated text is discarded and the run fails exactly as before. A watcher
+  that was shown that text is told it was discarded, so a half-finished answer
+  is not left on screen looking like a result.
+- Each provider accumulates its stream into the shape its whole-body response
+  has and hands that to the same parser — one parser, two transports, so the two
+  paths cannot drift into producing different answers or different errors.
+- A stream that fails part-way is not retried. The caller has already shown that
+  text to somebody, and a second attempt would repeat it from the beginning.
+- Additive throughout: both provider methods and both sink methods are
+  defaulted, so a backend written against Runtime 0.2 satisfies 0.3 unchanged.
+- Not done, and recorded rather than glossed: a contained run does not stream
+  and keeps the 16k ceiling (GAP-031), and the Python backend does not stream,
+  so the two backends accept different answer lengths (GAP-032).
+
 **The register says what is true**
 (closes [GAP-022](docs/gaps.md#gap-022); narrows
 [GAP-011](docs/gaps.md#gap-011), [GAP-012](docs/gaps.md#gap-012),

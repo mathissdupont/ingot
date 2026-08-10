@@ -28,9 +28,15 @@ const PRELUDE: &str = include_str!("prelude.py");
 /// The IR major version this backend implements.
 const SUPPORTED_IR_MAJOR: &str = "0";
 
-/// Cap on a single non-streaming model call, and the default when the artifact
-/// sets no token budget. Streaming would lift it; nothing streams yet
-/// ([GAP-005](https://github.com/mathissdupont/ingot/blob/main/docs/gaps.md#gap-005)).
+/// Cap on a single whole-body model call, and the default when the artifact
+/// sets no token budget.
+///
+/// The ceiling belongs to the transport rather than to the artifact, and this
+/// backend has only the one: it makes a single request and reads a single
+/// response. Runtime 0.3 §4 reserves 16,000 for exactly that case, so keeping
+/// it here is conformance, not a shortfall. The shortfall is that a streaming
+/// transport would be allowed 64,000 and this backend cannot offer one
+/// ([GAP-032](https://github.com/mathissdupont/ingot/blob/main/docs/gaps.md#gap-032)).
 const MAX_OUTPUT_TOKENS: i64 = 16_000;
 
 /// Why an artifact could not be lowered to Python.

@@ -13,9 +13,9 @@ use ingot_compiler::Compilation;
 use ingot_mcp::{AgentTools, McpConfig, McpToolHost};
 use ingot_runtime::{
     run as run_agent, AgentRegistry, ApprovalHandler, ApprovalMode, ApprovalRequest, Artifact,
-    Cassette, DenyAllTools, ModelConfig, ModelProvider, RecordingProvider, RecordingTools,
-    ReplayProvider, ReplayToolHost as ReplayTools, RoutingProvider, RunError, RunEvent, RunOptions,
-    RunReport, TeeSink, ToolHost,
+    Cassette, DenyAllTools, EventSink, ModelConfig, ModelProvider, RecordingProvider,
+    RecordingTools, ReplayProvider, ReplayToolHost as ReplayTools, RoutingProvider, RunError,
+    RunEvent, RunOptions, RunReport, ToolHost,
 };
 use serde_json::Value;
 
@@ -44,7 +44,9 @@ pub enum ProviderChoice {
 pub enum EventFormat {
     /// Human-readable lines.
     Text,
-    /// One JSON object per line, for piping.
+    /// One JSON object per line, for piping. Every event carries an `event`
+    /// key; a live run also writes lines without one, which are the model's
+    /// text as it arrives and are not part of the event stream.
     Json,
     /// Nothing but the final artifacts.
     Quiet,
@@ -206,8 +208,9 @@ pub fn execute(compilation: &Compilation, config: &RunConfig) -> Result<u8> {
     let mut tools = Tools::new(tool_host(compilation, config)?, config.record.is_some());
 
     let mut provider = build_provider(config, &ir.agent, &inputs)?;
-    let mut printer = EventPrinter::new(config.events, compilation);
-    let mut sink = TeeSink::new(move |event: &RunEvent| printer.print(event));
+    let mut sink = RunSink {
+        printer: EventPrinter::new(config.events, compilation),
+    };
 
     let result = run_agent(
         &ir,
@@ -259,6 +262,8 @@ pub fn execute(compilation: &Compilation, config: &RunConfig) -> Result<u8> {
 pub(crate) struct EventPrinter {
     format: EventFormat,
     trace: crate::trace::HumanTrace,
+    /// Whether a model is mid-sentence on the current line.
+    streaming: bool,
 }
 
 impl EventPrinter {
@@ -270,15 +275,103 @@ impl EventPrinter {
                 &compilation.sources,
                 compilation.file,
             ),
+            streaming: false,
         }
     }
 
     pub(crate) fn print(&mut self, event: &RunEvent) {
+        // A model that was mid-sentence has stopped being mid-sentence, and the
+        // next line should not land in the middle of it.
+        self.close_stream();
         match self.format {
             EventFormat::Text => eprintln!("{}", self.trace.render(event)),
             EventFormat::Json => eprintln!("{}", event.to_json_line()),
             EventFormat::Quiet => {}
         }
+    }
+
+    /// A fragment of an answer, as the model produces it.
+    ///
+    /// Written to the same stream as the trace and never to stdout, which
+    /// carries the artifacts: a pipeline reading a run's output must not have
+    /// half-finished text spliced into it.
+    ///
+    /// In JSON these lines carry no `event` key, and that is the contract — the
+    /// event stream is the set of lines that have one. A consumer selecting on
+    /// `event` sees exactly what a replay would reproduce.
+    pub(crate) fn delta(&mut self, node: &str, text: &str) {
+        match self.format {
+            EventFormat::Text => {
+                if !self.streaming {
+                    eprint!("        ");
+                    self.streaming = true;
+                }
+                // Indent continuation lines to the same column, so a multi-line
+                // answer stays inside the trace rather than breaking out of it.
+                eprint!("{}", text.replace('\n', "\n        "));
+                let _ = std::io::stderr().flush();
+            }
+            EventFormat::Json => {
+                self.streaming = true;
+                eprintln!(
+                    "{}",
+                    serde_json::json!({ "delta": { "node": node, "text": text } })
+                );
+            }
+            EventFormat::Quiet => {}
+        }
+    }
+
+    /// The text is finished, and whether it became the answer.
+    pub(crate) fn settled(&mut self, node: &str, kept: bool) {
+        match self.format {
+            EventFormat::Text => {
+                self.close_stream();
+                if !kept {
+                    // Said plainly, because the text above is the beginning of
+                    // a real answer and looks like a result.
+                    eprintln!("        (discarded: that text is not the answer)");
+                }
+            }
+            EventFormat::Json => {
+                self.streaming = false;
+                eprintln!(
+                    "{}",
+                    serde_json::json!({ "settled": { "node": node, "kept": kept } })
+                );
+            }
+            EventFormat::Quiet => {}
+        }
+    }
+
+    fn close_stream(&mut self) {
+        if self.streaming && self.format == EventFormat::Text {
+            eprintln!();
+        }
+        self.streaming = false;
+    }
+}
+
+/// Where a live run's output goes: the event stream, and the text a model is
+/// producing right now.
+///
+/// Both reach the same printer, and the printer keeps them from colliding on
+/// screen. They are still two streams — see [`ingot_runtime::EventSink`].
+pub(crate) struct RunSink {
+    printer: EventPrinter,
+}
+
+impl EventSink for RunSink {
+    fn emit(&mut self, event: RunEvent) {
+        self.printer.print(&event);
+    }
+
+    fn delta(&mut self, node: &str, text: &str) {
+        self.printer.delta(node, text);
+    }
+
+    fn settled(&mut self, node: &str, kept: bool) {
+        self.printer.settled(node, kept);
     }
 }
 

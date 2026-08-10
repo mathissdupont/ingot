@@ -13,7 +13,7 @@ use ingot_runtime::anthropic::AnthropicProvider;
 use ingot_runtime::provider::{CompletionRequest, ModelProvider, ModelSelection, ProviderError};
 use ingot_runtime::schema;
 use serde_json::{json, Value};
-use support::serve_once as serve_at;
+use support::{serve_once as serve_at, serve_stream as serve_stream_at};
 
 /// Serve one request at the Messages endpoint.
 fn serve_once(
@@ -21,6 +21,50 @@ fn serve_once(
     response: Value,
 ) -> (String, std::sync::mpsc::Receiver<support::Captured>) {
     serve_at("/v1/messages", status, response)
+}
+
+/// Serve one streamed request at the Messages endpoint.
+fn serve_stream(
+    events: Vec<(&str, Value)>,
+) -> (String, std::sync::mpsc::Receiver<support::Captured>) {
+    serve_stream_at(
+        "/v1/messages",
+        events
+            .into_iter()
+            .map(|(name, data)| (name.to_string(), data.to_string()))
+            .collect(),
+    )
+}
+
+/// The events a healthy Messages stream sends for one prose answer.
+fn ok_stream(chunks: &[&str]) -> Vec<(&'static str, Value)> {
+    let mut events = vec![
+        (
+            "message_start",
+            json!({"message": {
+                "id": "msg_test",
+                "model": "claude-opus-5",
+                "usage": {"input_tokens": 42},
+            }}),
+        ),
+        (
+            "content_block_start",
+            json!({"index": 0, "content_block": {"type": "text", "text": ""}}),
+        ),
+    ];
+    for chunk in chunks {
+        events.push((
+            "content_block_delta",
+            json!({"index": 0, "delta": {"type": "text_delta", "text": chunk}}),
+        ));
+    }
+    events.push(("content_block_stop", json!({"index": 0})));
+    events.push((
+        "message_delta",
+        json!({"delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 7}}),
+    ));
+    events.push(("message_stop", json!({})));
+    events
 }
 
 fn request(response_type: &str, prompt: &str) -> CompletionRequest {
@@ -216,4 +260,168 @@ fn a_typed_answer_that_is_not_json_is_an_error() {
         matches!(error, ProviderError::InvalidResponse(_)),
         "{error}"
     );
+}
+
+#[test]
+fn a_streaming_request_asks_for_a_stream_and_carries_the_same_headers() {
+    let (url, captured) = serve_stream(ok_stream(&["# Summary\n\n", "Short."]));
+    let mut provider = AnthropicProvider::with_key("test-key").with_base_url(url);
+
+    let mut seen = Vec::new();
+    let response = provider
+        .complete_streaming(&request("markdown", "Summarise it"), &mut |text| {
+            seen.push(text.to_string())
+        })
+        .unwrap();
+    assert_eq!(response.value, json!("# Summary\n\nShort."));
+    assert_eq!(response.usage.input_tokens, 42);
+    assert_eq!(response.usage.output_tokens, 7);
+    assert_eq!(response.model, "claude-opus-5");
+    assert_eq!(seen, ["# Summary\n\n", "Short."]);
+
+    let sent = captured
+        .recv()
+        .expect("the stub should have served a request");
+    assert_eq!(sent.body["stream"], true);
+    assert_eq!(sent.body["model"], "claude-opus-5");
+    assert_eq!(sent.body["max_tokens"], 2048);
+    assert_eq!(
+        sent.headers.get("accept").map(String::as_str),
+        Some("text/event-stream")
+    );
+    assert_eq!(
+        sent.headers.get("x-api-key").map(String::as_str),
+        Some("test-key")
+    );
+    assert_eq!(
+        sent.headers.get("anthropic-version").map(String::as_str),
+        Some("2023-06-01")
+    );
+}
+
+#[test]
+fn a_streamed_answer_is_identical_to_the_same_answer_sent_at_once() {
+    // The point of assembling a payload rather than parsing the stream: the
+    // transport is not allowed to change the answer.
+    let (stream_url, _streamed) = serve_stream(ok_stream(&["# Summary\n\n", "Short."]));
+    let (once_url, _at_once) = serve_once(200, ok_response("# Summary\n\nShort."));
+
+    let streamed = AnthropicProvider::with_key("k")
+        .with_base_url(stream_url)
+        .complete_streaming(&request("markdown", "Summarise it"), &mut |_| {})
+        .unwrap();
+    let at_once = AnthropicProvider::with_key("k")
+        .with_base_url(once_url)
+        .complete(&request("markdown", "Summarise it"))
+        .unwrap();
+
+    assert_eq!(streamed, at_once);
+}
+
+#[test]
+fn a_streamed_refusal_is_surfaced_rather_than_returned_as_content() {
+    let (url, _captured) = serve_stream(vec![
+        (
+            "message_start",
+            json!({"message": {"id": "msg_test", "model": "claude-opus-5"}}),
+        ),
+        (
+            "message_delta",
+            json!({"delta": {
+                "stop_reason": "refusal",
+                "stop_details": {"category": "cyber", "explanation": "declined"},
+            }}),
+        ),
+        ("message_stop", json!({})),
+    ]);
+    let mut provider = AnthropicProvider::with_key("k").with_base_url(url);
+    let error = provider
+        .complete_streaming(&request("markdown", "x"), &mut |_| {})
+        .unwrap_err();
+    assert!(matches!(error, ProviderError::Refused { .. }), "{error}");
+    assert!(error.to_string().contains("cyber"), "{error}");
+}
+
+#[test]
+fn a_stream_that_stops_before_the_message_does_is_an_error() {
+    // Half an answer and then silence: a cut connection, not a short reply.
+    let (url, _captured) = serve_stream(vec![
+        (
+            "message_start",
+            json!({"message": {"id": "msg_test", "model": "claude-opus-5"}}),
+        ),
+        (
+            "content_block_delta",
+            json!({"index": 0, "delta": {"type": "text_delta", "text": "half an ans"}}),
+        ),
+    ]);
+    let mut provider = AnthropicProvider::with_key("k").with_base_url(url);
+    let error = provider
+        .complete_streaming(&request("markdown", "x"), &mut |_| {})
+        .unwrap_err();
+    assert!(matches!(error, ProviderError::Transport(_)), "{error}");
+    assert!(error.to_string().contains("ended before"), "{error}");
+}
+
+#[test]
+fn an_error_event_mid_stream_fails_the_call() {
+    let (url, _captured) = serve_stream(vec![
+        (
+            "message_start",
+            json!({"message": {"id": "msg_test", "model": "claude-opus-5"}}),
+        ),
+        (
+            "content_block_delta",
+            json!({"index": 0, "delta": {"type": "text_delta", "text": "starting"}}),
+        ),
+        (
+            "error",
+            json!({"error": {"type": "overloaded_error", "message": "overloaded"}}),
+        ),
+    ]);
+    let mut provider = AnthropicProvider::with_key("k").with_base_url(url);
+    let error = provider
+        .complete_streaming(&request("markdown", "x"), &mut |_| {})
+        .unwrap_err();
+    assert!(
+        matches!(error, ProviderError::Request { status: 500, .. }),
+        "{error}"
+    );
+    assert!(error.to_string().contains("overloaded"), "{error}");
+}
+
+#[test]
+fn a_watcher_is_never_shown_reasoning_it_will_not_get_back() {
+    let (url, _captured) = serve_stream(vec![
+        (
+            "message_start",
+            json!({"message": {"id": "msg_test", "model": "claude-opus-5"}}),
+        ),
+        (
+            "content_block_delta",
+            json!({"index": 0, "delta": {
+                "type": "thinking_delta",
+                "thinking": "weighing it up",
+            }}),
+        ),
+        (
+            "content_block_delta",
+            json!({"index": 1, "delta": {"type": "text_delta", "text": "the answer"}}),
+        ),
+        (
+            "message_delta",
+            json!({"delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 3}}),
+        ),
+        ("message_stop", json!({})),
+    ]);
+    let mut provider = AnthropicProvider::with_key("k").with_base_url(url);
+
+    let mut seen = Vec::new();
+    let response = provider
+        .complete_streaming(&request("markdown", "x"), &mut |text| {
+            seen.push(text.to_string())
+        })
+        .unwrap();
+    assert_eq!(seen.concat(), "the answer");
+    assert_eq!(response.value, json!("the answer"));
 }

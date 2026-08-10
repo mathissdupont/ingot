@@ -166,6 +166,35 @@ impl ModelProvider for RoutingProvider {
         self.last = name;
         response
     }
+
+    /// Only when every route streams.
+    ///
+    /// The interpreter asks this before a request exists, so the answer has to
+    /// hold for whichever route ends up answering. One provider that cannot
+    /// stream therefore keeps the smaller output ceiling for all of them —
+    /// conservative on purpose, because the alternative is an artifact that
+    /// asks for more tokens than a service accepts and fails on a route the
+    /// operator did not think they were using.
+    fn streams(&self) -> bool {
+        !self.is_empty()
+            && self.routes.values().all(|provider| provider.streams())
+            && self
+                .fallback
+                .as_ref()
+                .is_none_or(|provider| provider.streams())
+    }
+
+    fn complete_streaming(
+        &mut self,
+        request: &CompletionRequest,
+        on_delta: crate::provider::DeltaSink<'_>,
+    ) -> Result<CompletionResponse, ProviderError> {
+        let provider = self.pick(&request.model)?;
+        let name = provider.name().to_string();
+        let response = provider.complete_streaming(request, on_delta);
+        self.last = name;
+        response
+    }
 }
 
 #[cfg(test)]

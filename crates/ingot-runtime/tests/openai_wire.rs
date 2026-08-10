@@ -16,12 +16,25 @@ use ingot_runtime::provider::{CompletionRequest, ModelProvider, ModelSelection, 
 use ingot_runtime::schema;
 use serde_json::{json, Value};
 use support::serve_once as serve_at;
+use support::serve_stream as stream_at;
 
 fn serve_once(
     status: u16,
     response: Value,
 ) -> (String, std::sync::mpsc::Receiver<support::Captured>) {
     serve_at("/v1/chat/completions", status, response)
+}
+
+fn serve_stream(events: Vec<String>) -> (String, std::sync::mpsc::Receiver<support::Captured>) {
+    // Every name is empty: an OpenAI-compatible stream frames its chunks with
+    // `data:` alone and carries no `event:` line.
+    stream_at(
+        "/v1/chat/completions",
+        events
+            .into_iter()
+            .map(|data| (String::new(), data))
+            .collect(),
+    )
 }
 
 fn request(response_type: &str, prompt: &str) -> CompletionRequest {
@@ -49,6 +62,38 @@ fn ok_response(content: &str) -> Value {
         }],
         "usage": { "prompt_tokens": 42, "completion_tokens": 7 },
     })
+}
+
+/// The chunks a server sends for `content`, framed the way a real one frames
+/// them: a role-only opener, one chunk per word, the stop, a usage-only chunk
+/// with an empty `choices`, then the `[DONE]` terminator.
+///
+/// The usage matches [`ok_response`], so a streamed answer and a non-streamed
+/// one can be compared whole.
+fn streamed(content: &str) -> Vec<String> {
+    let mut chunks = vec![json!({
+        "model": "gpt-test",
+        "choices": [{ "delta": { "role": "assistant", "content": "" } }],
+    })];
+    for fragment in content.split_inclusive(' ') {
+        chunks.push(json!({
+            "model": "gpt-test",
+            "choices": [{ "delta": { "content": fragment } }],
+        }));
+    }
+    chunks.push(json!({
+        "model": "gpt-test",
+        "choices": [{ "delta": {}, "finish_reason": "stop" }],
+    }));
+    chunks.push(json!({
+        "model": "gpt-test",
+        "choices": [],
+        "usage": { "prompt_tokens": 42, "completion_tokens": 7 },
+    }));
+
+    let mut events: Vec<String> = chunks.iter().map(|chunk| chunk.to_string()).collect();
+    events.push("[DONE]".to_string());
+    events
 }
 
 fn provider(url: &str) -> OpenAiProvider {
@@ -243,4 +288,121 @@ fn the_endpoint_can_be_pointed_at_something_that_is_not_openai() {
 
     assert_eq!(response.value, json!("from elsewhere"));
     assert!(captured.recv().is_ok());
+}
+
+#[test]
+fn a_streamed_request_asks_the_server_to_stream_and_to_report_usage() {
+    let (url, captured) = serve_stream(streamed("ok"));
+    provider(&url)
+        .complete_streaming(&request("markdown", "hello"), &mut |_| {})
+        .expect("the stub streams");
+
+    let seen = captured.recv().expect("the server saw a request");
+    assert_eq!(seen.body["stream"], json!(true));
+    // Without this most servers send no usage at all on a streamed call, and a
+    // run that cannot see its token usage cannot enforce its budget.
+    assert_eq!(seen.body["stream_options"]["include_usage"], json!(true));
+    assert_eq!(
+        seen.headers.get("authorization").map(String::as_str),
+        Some("Bearer stub-key")
+    );
+    assert_eq!(
+        seen.headers.get("accept").map(String::as_str),
+        Some("text/event-stream")
+    );
+}
+
+#[test]
+fn a_streamed_prose_answer_is_identical_to_the_same_answer_returned_at_once() {
+    // One parser, two transports: the point of reassembling the chunks into the
+    // non-streamed shape is that neither the value nor the usage can drift.
+    let (url, _captured) = serve_once(200, ok_response("# Summary of it"));
+    let at_once = provider(&url)
+        .complete(&request("markdown", "Summarise it"))
+        .expect("the stub answers");
+
+    let (url, _captured) = serve_stream(streamed("# Summary of it"));
+    let mut shown = String::new();
+    let in_pieces = provider(&url)
+        .complete_streaming(&request("markdown", "Summarise it"), &mut |text| {
+            shown.push_str(text)
+        })
+        .expect("the stub streams");
+
+    assert_eq!(in_pieces, at_once);
+    assert_eq!(shown, "# Summary of it");
+}
+
+#[test]
+fn text_reaches_the_watcher_in_pieces_rather_than_all_at_once() {
+    let (url, _captured) = serve_stream(streamed("one two three"));
+    let mut shown: Vec<String> = Vec::new();
+    let response = provider(&url)
+        .complete_streaming(&request("markdown", "count"), &mut |text| {
+            shown.push(text.to_string())
+        })
+        .expect("the stub streams");
+
+    assert!(shown.len() > 1, "the answer arrived whole: {shown:?}");
+    assert_eq!(shown.concat(), "one two three");
+    assert_eq!(response.value, json!("one two three"));
+}
+
+#[test]
+fn the_done_terminator_is_framing_rather_than_a_chunk() {
+    let whole_answer = json!({
+        "model": "gpt-test",
+        "choices": [{ "delta": { "content": "ok" }, "finish_reason": "stop" }],
+    });
+    let (url, _captured) = serve_stream(vec![whole_answer.to_string(), "[DONE]".to_string()]);
+    let response = provider(&url)
+        .complete_streaming(&request("markdown", "hello"), &mut |_| {})
+        .expect("[DONE] is not an error");
+
+    assert_eq!(response.value, json!("ok"));
+}
+
+#[test]
+fn a_stream_cut_before_the_completion_is_a_transport_failure() {
+    // No finish reason ever arrived. That is a broken connection, not a short
+    // answer, and calling it a success would hand the run half a document.
+    let half = json!({
+        "model": "gpt-test",
+        "choices": [{ "delta": { "content": "half an ans" } }],
+    });
+    let (url, _captured) = serve_stream(vec![half.to_string()]);
+    let error = provider(&url)
+        .complete_streaming(&request("markdown", "write a lot"), &mut |_| {})
+        .unwrap_err();
+
+    assert!(matches!(error, ProviderError::Transport(_)), "{error}");
+    assert!(
+        error.to_string().contains("ended before the completion"),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_truncated_stream_is_reported_the_way_a_truncated_response_is() {
+    let events = vec![
+        json!({ "model": "gpt-test", "choices": [{ "delta": { "content": "half an ans" } }] })
+            .to_string(),
+        json!({ "model": "gpt-test", "choices": [{ "delta": {}, "finish_reason": "length" }] })
+            .to_string(),
+        "[DONE]".to_string(),
+    ];
+    let (url, _captured) = serve_stream(events);
+    let error = provider(&url)
+        .complete_streaming(&request("markdown", "write a lot"), &mut |_| {})
+        .unwrap_err();
+
+    assert!(
+        matches!(error, ProviderError::Truncated { limit: 2048 }),
+        "{error}"
+    );
+}
+
+#[test]
+fn this_provider_says_it_streams_so_the_interpreter_can_raise_the_cap() {
+    assert!(provider("http://127.0.0.1:1/v1/chat/completions").streams());
 }

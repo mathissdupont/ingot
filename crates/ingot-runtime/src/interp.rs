@@ -24,14 +24,21 @@ use crate::schema;
 use crate::tools::{ApprovalMode, ApprovalRequest, ToolError, ToolHost, ToolInvocation};
 use crate::{RunError, RunReport};
 
-/// Output cap for a single model call when the artifact sets no token budget.
+/// Hard ceiling on a single call whose answer arrives as one whole body.
 ///
-/// Chosen to stay comfortably inside HTTP timeouts on the non-streaming path;
-/// larger outputs need streaming, which this interpreter does not implement yet.
-const DEFAULT_MAX_OUTPUT_TOKENS: u32 = 16_000;
-
-/// Hard ceiling on a single non-streaming model call.
+/// Chosen to stay comfortably inside HTTP timeouts: a service that composes the
+/// entire response before sending it holds the connection open for as long as
+/// the answer takes, and several refuse a larger cap outright unless the
+/// request streams.
 const NON_STREAMING_CEILING: u32 = 16_000;
+
+/// Hard ceiling on a single streamed call.
+///
+/// Higher because the objection above does not apply — text arrives as it is
+/// produced, so nothing waits on the whole answer. Still a ceiling rather than
+/// no limit: `max_tokens` above what a model accepts is a rejected request, and
+/// a number the interpreter picked is easier to explain than a provider's 400.
+const STREAMING_CEILING: u32 = 64_000;
 
 pub struct RunOptions {
     /// Input name to value.
@@ -414,20 +421,49 @@ impl Interp<'_> {
             max_tokens: self.max_output_tokens(),
         };
 
-        let response = self
-            .provider
-            .complete(&request)
-            .map_err(|error| RunError::Provider {
-                node: node.id.clone(),
-                source: error,
-            })?;
+        // The two channels are borrowed side by side here, and that is the
+        // whole arrangement: text goes out live as it arrives, while the
+        // decision about what the run does with it waits for the finished
+        // response below.
+        let node_id = node.id.clone();
+        let mut shown = false;
+        let attempt = {
+            let sink = &mut *self.sink;
+            self.provider.complete_streaming(&request, &mut |text| {
+                shown = true;
+                sink.delta(&node_id, text);
+            })
+        };
 
-        schema::validate(&response.value, &response_type, &self.ir.types).map_err(|reason| {
-            RunError::Provider {
+        // A partial answer is not an answer. Whatever a watcher saw is struck
+        // rather than parsed, repaired or bound — including on a truncation,
+        // where the text on screen is the beginning of a real answer and
+        // therefore the most tempting thing in the system to keep.
+        let response = match attempt {
+            Ok(response) => response,
+            Err(error) => {
+                if shown {
+                    self.sink.settled(&node_id, false);
+                }
+                return Err(RunError::Provider {
+                    node: node.id.clone(),
+                    source: error,
+                });
+            }
+        };
+
+        if let Err(reason) = schema::validate(&response.value, &response_type, &self.ir.types) {
+            if shown {
+                self.sink.settled(&node_id, false);
+            }
+            return Err(RunError::Provider {
                 node: node.id.clone(),
                 source: ProviderError::InvalidResponse(reason),
-            }
-        })?;
+            });
+        }
+        if shown {
+            self.sink.settled(&node_id, true);
+        }
 
         self.sink.emit(RunEvent::ModelCall {
             node: node.id.clone(),
@@ -868,14 +904,26 @@ impl Interp<'_> {
         }
     }
 
+    /// The cap on one call: what is left of the token budget, or the ceiling.
+    ///
+    /// Bounded from below by 1, because asking a provider for zero tokens is a
+    /// request that cannot succeed, and from above by whichever ceiling the
+    /// transport earns. An artifact does not choose this and cannot: the same
+    /// artifact run against a streaming provider and a non-streaming one is the
+    /// same program, and only the second has to keep the smaller number.
     fn max_output_tokens(&self) -> u32 {
+        let ceiling = if self.provider.streams() {
+            STREAMING_CEILING
+        } else {
+            NON_STREAMING_CEILING
+        };
         let remaining = match self.ir.budget.tokens {
             Some(limit) if limit >= 0 => (limit as u64)
                 .saturating_sub(self.usage.total())
                 .min(u32::MAX as u64) as u32,
-            _ => DEFAULT_MAX_OUTPUT_TOKENS,
+            _ => ceiling,
         };
-        remaining.clamp(1, NON_STREAMING_CEILING)
+        remaining.clamp(1, ceiling)
     }
 
     fn render_prompt(&mut self, value: &IrValue) -> Result<String, RunError> {

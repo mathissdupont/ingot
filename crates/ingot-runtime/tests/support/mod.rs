@@ -44,7 +44,51 @@ pub fn serve_once(path: &str, status: u16, response: Value) -> (String, mpsc::Re
     (format!("http://127.0.0.1:{port}{path}"), rx)
 }
 
-fn handle(mut stream: TcpStream, status: u16, response: &Value) -> Option<Captured> {
+/// Serve one request as `text/event-stream`, and report what arrived.
+///
+/// Each entry is written as `event: <name>\ndata: <data>\n\n`, with the `event:`
+/// line omitted when the name is empty — which is how an OpenAI-compatible
+/// stream frames its chunks, and how it says `[DONE]`. `data` is raw text
+/// rather than a `Value` so a test can serve something unparseable on purpose.
+pub fn serve_stream(
+    path: &str,
+    events: Vec<(String, String)>,
+) -> (String, mpsc::Receiver<Captured>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("binding a local port");
+    let port = listener.local_addr().unwrap().port();
+    let (tx, rx) = mpsc::channel();
+
+    let mut payload = String::new();
+    for (name, data) in events {
+        if !name.is_empty() {
+            payload.push_str(&format!("event: {name}\n"));
+        }
+        payload.push_str(&format!("data: {data}\n\n"));
+    }
+
+    thread::spawn(move || {
+        let Ok((stream, _)) = listener.accept() else {
+            return;
+        };
+        if let Some(captured) = handle_raw(stream, 200, "text/event-stream", payload.as_bytes()) {
+            let _ = tx.send(captured);
+        }
+    });
+
+    (format!("http://127.0.0.1:{port}{path}"), rx)
+}
+
+fn handle(stream: TcpStream, status: u16, response: &Value) -> Option<Captured> {
+    let payload = serde_json::to_vec(response).ok()?;
+    handle_raw(stream, status, "application/json", &payload)
+}
+
+fn handle_raw(
+    mut stream: TcpStream,
+    status: u16,
+    content_type: &str,
+    payload: &[u8],
+) -> Option<Captured> {
     let mut reader = BufReader::new(stream.try_clone().ok()?);
 
     let mut request_line = String::new();
@@ -75,13 +119,12 @@ fn handle(mut stream: TcpStream, status: u16, response: &Value) -> Option<Captur
     reader.read_exact(&mut body).ok()?;
     let body: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
 
-    let payload = serde_json::to_vec(response).ok()?;
     let head = format!(
-        "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {status} X\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         payload.len()
     );
     stream.write_all(head.as_bytes()).ok()?;
-    stream.write_all(&payload).ok()?;
+    stream.write_all(payload).ok()?;
     stream.flush().ok()?;
 
     Some(Captured { headers, body })

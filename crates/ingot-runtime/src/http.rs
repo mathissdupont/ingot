@@ -7,6 +7,7 @@
 //!
 //! Compiled only when a network provider is.
 
+use std::io::{BufRead, BufReader};
 use std::time::Duration;
 
 use serde_json::Value;
@@ -76,6 +77,142 @@ pub fn post_json(
             }
         }
     }
+}
+
+/// POST a JSON body and read a `text/event-stream` reply, one event at a time.
+///
+/// `on_event` is called with each event's name and its parsed `data` payload,
+/// in arrival order. Events the caller does not recognise are still delivered;
+/// deciding what is meaningful is the provider's job, not the transport's.
+///
+/// **Retries stop once anything has been delivered.** A stream that fails
+/// half-way cannot be started again: the caller has already shown that text to
+/// somebody, and a second attempt would repeat it from the beginning. So a
+/// retry here only covers the window before the first event, where nothing has
+/// been observed and the attempt is genuinely repeatable.
+pub fn post_sse(
+    url: &str,
+    headers: &[(&str, &str)],
+    body: &Value,
+    timeout: Duration,
+    max_retries: u32,
+    on_event: &mut dyn FnMut(&str, &Value),
+) -> Result<(), ProviderError> {
+    let mut attempt = 0;
+
+    loop {
+        attempt += 1;
+        let mut request = ureq::post(url)
+            .config()
+            .timeout_global(Some(timeout))
+            .build()
+            .header("content-type", "application/json")
+            .header("accept", "text/event-stream");
+        for (name, value) in headers {
+            request = request.header(*name, *value);
+        }
+
+        match request.send_json(body) {
+            Ok(mut ok) => {
+                let mut delivered = false;
+                let reader = BufReader::new(ok.body_mut().as_reader());
+                let outcome = read_events(reader, &mut delivered, on_event);
+                return match outcome {
+                    Ok(()) => Ok(()),
+                    Err(error) if delivered || attempt > max_retries => Err(error),
+                    // Nothing was observed, so nothing would be repeated.
+                    Err(_) => {
+                        std::thread::sleep(backoff(attempt));
+                        continue;
+                    }
+                };
+            }
+            Err(ureq::Error::StatusCode(status)) => {
+                let retryable = status == 429 || status >= 500;
+                if retryable && attempt <= max_retries {
+                    std::thread::sleep(backoff(attempt));
+                    continue;
+                }
+                if status == 429 {
+                    return Err(ProviderError::RateLimited {
+                        retry_after_seconds: None,
+                    });
+                }
+                return Err(ProviderError::Request {
+                    status,
+                    message: describe_status(status).to_string(),
+                });
+            }
+            Err(error) => {
+                if attempt <= max_retries {
+                    std::thread::sleep(backoff(attempt));
+                    continue;
+                }
+                return Err(ProviderError::Transport(error.to_string()));
+            }
+        }
+    }
+}
+
+/// Read `text/event-stream` framing off a reader.
+///
+/// Split out so the framing can be tested without a socket.
+pub(crate) fn read_events(
+    reader: impl BufRead,
+    delivered: &mut bool,
+    on_event: &mut dyn FnMut(&str, &Value),
+) -> Result<(), ProviderError> {
+    let mut name = String::new();
+    let mut data = String::new();
+
+    for line in reader.lines() {
+        let line = line.map_err(|error| ProviderError::Transport(error.to_string()))?;
+        let line = line.strip_suffix('\r').unwrap_or(&line);
+
+        // A blank line ends an event. A comment (`:` first) is a keep-alive.
+        if line.is_empty() {
+            if !data.is_empty() {
+                // `[DONE]` is not JSON. It is how an OpenAI-compatible stream
+                // says it is over, and parsing it would fail the whole call at
+                // the last possible moment.
+                if data.trim() != "[DONE]" {
+                    let payload: Value = serde_json::from_str(&data).map_err(|error| {
+                        ProviderError::Transport(format!("malformed event data: {error}"))
+                    })?;
+                    *delivered = true;
+                    on_event(&name, &payload);
+                }
+            }
+            name.clear();
+            data.clear();
+            continue;
+        }
+        if line.starts_with(':') {
+            continue;
+        }
+
+        let (field, value) = match line.split_once(':') {
+            Some((field, value)) => (field, value.strip_prefix(' ').unwrap_or(value)),
+            None => (line, ""),
+        };
+        match field {
+            "event" => {
+                name.clear();
+                name.push_str(value);
+            }
+            // Multiple `data:` lines in one event concatenate with newlines,
+            // per the event-stream format.
+            "data" => {
+                if !data.is_empty() {
+                    data.push('\n');
+                }
+                data.push_str(value);
+            }
+            _ => {}
+        }
+    }
+
+    Ok(())
 }
 
 fn backoff(attempt: u32) -> Duration {
@@ -155,5 +292,51 @@ mod tests {
     #[test]
     fn backoff_grows_with_the_attempt() {
         assert!(backoff(2) > backoff(1));
+    }
+
+    fn events(stream: &str) -> Vec<(String, Value)> {
+        let mut seen = Vec::new();
+        let mut delivered = false;
+        read_events(stream.as_bytes(), &mut delivered, &mut |name, data| {
+            seen.push((name.to_string(), data.clone()))
+        })
+        .unwrap();
+        assert_eq!(delivered, !seen.is_empty());
+        seen
+    }
+
+    #[test]
+    fn a_blank_line_ends_an_event() {
+        let seen = events("event: one\ndata: {\"a\":1}\n\nevent: two\ndata: {\"a\":2}\n\n");
+        assert_eq!(seen.len(), 2);
+        assert_eq!(seen[0].0, "one");
+        assert_eq!(seen[1].1["a"], 2);
+    }
+
+    #[test]
+    fn keep_alive_comments_and_crlf_are_tolerated() {
+        // A gateway that pads the stream with comments, and a server that ends
+        // its lines the other way, are both ordinary and neither is an event.
+        let seen = events(": ping\r\nevent: one\r\ndata: {\"a\":1}\r\n\r\n");
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].1["a"], 1);
+    }
+
+    #[test]
+    fn the_done_sentinel_is_not_parsed_as_json() {
+        let seen = events("data: {\"a\":1}\n\ndata: [DONE]\n\n");
+        assert_eq!(seen.len(), 1, "[DONE] is framing, not an event: {seen:?}");
+    }
+
+    #[test]
+    fn malformed_event_data_fails_rather_than_being_skipped() {
+        let mut delivered = false;
+        let error = read_events(
+            "data: not json\n\n".as_bytes(),
+            &mut delivered,
+            &mut |_, _| {},
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("malformed"), "{error}");
     }
 }

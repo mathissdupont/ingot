@@ -490,6 +490,15 @@ marked `<redacted>`; the trace has no secret classification with which to expose
 them safely. Use `--events json` for the original unchanged JSON Lines stream or
 `--events quiet` for no event output.
 
+Against a provider that streams, the answer itself is printed as it is written,
+indented under the node that asked for it. That text is *not* an event: it is
+how the answer happened to arrive over one connection, so it is not recorded in
+a cassette and a replay shows none of it. In `--events json` an event is a line
+with an `event` key, and the live text arrives as lines without one. If the
+answer is then discarded — cut off, or the wrong type — the run says so rather
+than leaving a half-finished answer on screen looking like a result. See
+[RFC-0013](rfcs/0013-streaming.md) and [Runtime 0.3](specs/runtime/v0.3.md).
+
 ```text
 trace[0002] node.started demo.Brief:n0  llm.call
              prompt "Write about <redacted input.topic:string>."

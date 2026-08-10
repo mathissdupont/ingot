@@ -18,6 +18,10 @@
 //! * **Sampling parameters are not sent**, for the same reason they are not
 //!   sent to Anthropic: current reasoning models reject them, and an artifact
 //!   that behaves differently per provider defeats the point of the artifact.
+//!
+//! Streaming adds a transport, not a second understanding of the response: the
+//! chunks are reassembled into the shape a non-streamed call returns and handed
+//! to the same [`parse_response`]. See [`StreamAccumulator`].
 
 use std::time::Duration;
 
@@ -25,7 +29,8 @@ use serde_json::{json, Map, Value};
 
 use crate::http::{self, DEFAULT_MAX_RETRIES, DEFAULT_TIMEOUT};
 use crate::provider::{
-    CompletionRequest, CompletionResponse, ModelProvider, ModelSelection, ProviderError, Usage,
+    CompletionRequest, CompletionResponse, DeltaSink, ModelProvider, ModelSelection, ProviderError,
+    Usage,
 };
 use crate::schema::ResponseShape;
 
@@ -187,6 +192,149 @@ impl OpenAiProvider {
 
         Ok(Value::Object(body))
     }
+
+    /// The same body, with the two keys a streamed call needs.
+    fn build_streaming_body(&self, request: &CompletionRequest) -> Result<Value, ProviderError> {
+        let mut body = self.build_body(request)?;
+        let object = body
+            .as_object_mut()
+            .expect("build_body always produces an object");
+        object.insert("stream".into(), json!(true));
+        // Without `include_usage` most servers report no usage at all on a
+        // streamed call, and a run that cannot see its token usage cannot
+        // enforce its budget — so the budget would silently stop being a bound.
+        object.insert("stream_options".into(), json!({ "include_usage": true }));
+        Ok(body)
+    }
+
+    /// Absent for a server that wants no authentication.
+    fn authorization(&self) -> Option<String> {
+        self.api_key.as_ref().map(|key| format!("Bearer {key}"))
+    }
+}
+
+/// Chunks reassembled into the shape a non-streamed response arrives in.
+///
+/// This is the load-bearing choice in the streaming path: **one parser, two
+/// transports.** Nothing here decides what an answer means. It collects the
+/// pieces, rebuilds the ordinary Chat Completions payload, and lets the same
+/// [`parse_response`] read it — which is what guarantees that a streamed call
+/// and a non-streamed call over the same content produce identical values *and*
+/// identical errors: truncation, content filter, refusal, invalid JSON, an
+/// empty answer. A second parser here would be a second set of rules, and the
+/// two would drift apart on exactly the cases that matter least often and hurt
+/// most.
+///
+/// Kept separate from the socket so the reassembly is testable with a list of
+/// chunk values.
+#[derive(Default)]
+struct StreamAccumulator {
+    /// The first one named; a stream does not change model mid-answer.
+    model: Option<String>,
+    content: String,
+    refusal: String,
+    /// The last non-null one, which is the one that ended the completion.
+    finish_reason: Option<String>,
+    /// The last non-null one: it arrives on the final chunk.
+    usage: Option<Value>,
+    error: Option<Value>,
+}
+
+impl StreamAccumulator {
+    fn chunk(&mut self, data: &Value, on_delta: DeltaSink<'_>) {
+        // Once a failure has been reported there is nothing left worth
+        // accumulating: whatever follows describes a call that already failed.
+        if self.error.is_some() {
+            return;
+        }
+        // Some OpenAI-compatible gateways report a failure mid-stream this way
+        // rather than with a status code.
+        if let Some(error) = data.get("error") {
+            self.error = Some(error.clone());
+            return;
+        }
+
+        if self.model.is_none() {
+            if let Some(model) = data.get("model").and_then(Value::as_str) {
+                self.model = Some(model.to_string());
+            }
+        }
+        // Read before the choices, because the chunk carrying usage carries an
+        // empty `choices` array.
+        if let Some(usage) = data.get("usage").filter(|usage| !usage.is_null()) {
+            self.usage = Some(usage.clone());
+        }
+
+        let Some(choice) = data
+            .get("choices")
+            .and_then(Value::as_array)
+            .and_then(|choices| choices.first())
+        else {
+            return;
+        };
+
+        if let Some(reason) = choice.get("finish_reason").and_then(Value::as_str) {
+            self.finish_reason = Some(reason.to_string());
+        }
+
+        let delta = choice.get("delta");
+        if let Some(text) = delta
+            .and_then(|delta| delta.get("content"))
+            .and_then(Value::as_str)
+        {
+            // The opening chunk of an OpenAI stream carries `content: ""`
+            // beside the role. Handing that on would be noise, not text
+            // arriving.
+            if !text.is_empty() {
+                self.content.push_str(text);
+                on_delta(text);
+            }
+        }
+        // A refusal is accumulated but never shown: a watcher reading it live
+        // would read it as the answer arriving, and a refusal is not an answer.
+        // It reaches the caller through `parse_response`, as a refusal.
+        if let Some(text) = delta
+            .and_then(|delta| delta.get("refusal"))
+            .and_then(Value::as_str)
+        {
+            self.refusal.push_str(text);
+        }
+
+        // Every other field is ignored on purpose. A service that adds one must
+        // not break a run.
+    }
+
+    /// Whether the stream stopped before the completion did.
+    ///
+    /// No `finish_reason` ever arrived, so the connection was cut part-way
+    /// through the answer. That is a transport failure, not a successful empty
+    /// answer, and the difference decides whether a run continues on nothing.
+    fn ended_early(&self) -> bool {
+        self.error.is_none() && self.finish_reason.is_none()
+    }
+
+    fn into_payload(self) -> Value {
+        // Carried in the payload rather than raised here, so a mid-stream error
+        // and a gateway that answers 200 with an error body produce the very
+        // same `ProviderError`.
+        if let Some(error) = self.error {
+            return json!({ "error": error });
+        }
+
+        let refusal = if self.refusal.is_empty() {
+            Value::Null
+        } else {
+            Value::String(self.refusal)
+        };
+        json!({
+            "model": self.model,
+            "choices": [{
+                "message": { "content": self.content, "refusal": refusal },
+                "finish_reason": self.finish_reason,
+            }],
+            "usage": self.usage,
+        })
+    }
 }
 
 /// A schema name OpenAI accepts: letters, digits, underscores and dashes.
@@ -213,7 +361,7 @@ impl ModelProvider for OpenAiProvider {
         request: &CompletionRequest,
     ) -> Result<CompletionResponse, ProviderError> {
         let body = self.build_body(request)?;
-        let authorization = self.api_key.as_ref().map(|key| format!("Bearer {key}"));
+        let authorization = self.authorization();
         let headers: Vec<(&str, &str)> = match &authorization {
             Some(value) => vec![("authorization", value.as_str())],
             None => Vec::new(),
@@ -226,6 +374,46 @@ impl ModelProvider for OpenAiProvider {
             self.max_retries,
         )?;
         parse_response(request, &payload)
+    }
+
+    fn streams(&self) -> bool {
+        true
+    }
+
+    fn complete_streaming(
+        &mut self,
+        request: &CompletionRequest,
+        on_delta: DeltaSink<'_>,
+    ) -> Result<CompletionResponse, ProviderError> {
+        let body = self.build_streaming_body(request)?;
+        let authorization = self.authorization();
+        let headers: Vec<(&str, &str)> = match &authorization {
+            Some(value) => vec![("authorization", value.as_str())],
+            None => Vec::new(),
+        };
+
+        let mut accumulator = StreamAccumulator::default();
+        http::post_sse(
+            &self.base_url,
+            &headers,
+            &body,
+            self.timeout,
+            self.max_retries,
+            // The event name is empty for every chunk: an OpenAI-compatible
+            // stream carries no `event:` line, only `data:`.
+            &mut |_name, data| accumulator.chunk(data, &mut *on_delta),
+        )?;
+
+        if accumulator.ended_early() {
+            return Err(ProviderError::Transport(
+                "the stream ended before the completion did: no finish reason arrived, so the \
+                 connection was cut part-way through the answer"
+                    .to_string(),
+            ));
+        }
+        // The same parser the non-streaming path uses, so the two agree on
+        // every value and every error.
+        parse_response(request, &accumulator.into_payload())
     }
 }
 
@@ -553,5 +741,183 @@ mod tests {
         assert_eq!(schema_name("search_result[]"), "ingot_search_result");
         assert_eq!(schema_name("string"), "ingot_string");
         assert_eq!(schema_name("[]"), "ingot_response");
+    }
+
+    #[test]
+    fn a_non_streaming_request_never_asks_the_server_to_stream() {
+        let body = provider()
+            .build_body(&request("markdown", pinned()))
+            .unwrap();
+        assert!(body.get("stream").is_none(), "{body}");
+        assert!(body.get("stream_options").is_none(), "{body}");
+    }
+
+    #[test]
+    fn a_streamed_request_asks_for_usage_because_the_budget_depends_on_it() {
+        let body = provider()
+            .build_streaming_body(&request("markdown", pinned()))
+            .unwrap();
+        assert_eq!(body["stream"], json!(true));
+        assert_eq!(body["stream_options"]["include_usage"], json!(true));
+        // The rest of the body is the non-streamed one, cap included.
+        assert_eq!(body["max_completion_tokens"], json!(4096));
+        assert!(body.get("max_tokens").is_none(), "{body}");
+    }
+
+    /// Drive the accumulator the way a stream would, and report what a watcher
+    /// would have seen while it ran.
+    fn accumulate(chunks: Vec<Value>) -> (StreamAccumulator, Vec<String>) {
+        let mut accumulator = StreamAccumulator::default();
+        let mut shown = Vec::new();
+        for chunk in &chunks {
+            accumulator.chunk(chunk, &mut |text| shown.push(text.to_string()));
+        }
+        (accumulator, shown)
+    }
+
+    fn content_chunk(text: &str) -> Value {
+        json!({ "model": "gpt-test", "choices": [{ "delta": { "content": text } }] })
+    }
+
+    fn stop_chunk(reason: &str) -> Value {
+        json!({ "choices": [{ "delta": {}, "finish_reason": reason }] })
+    }
+
+    #[test]
+    fn content_chunks_accumulate_in_the_order_they_arrive() {
+        let (accumulator, _) = accumulate(vec![
+            content_chunk("Once "),
+            content_chunk("upon "),
+            content_chunk("a time"),
+            stop_chunk("stop"),
+        ]);
+        let response =
+            parse_response(&request("markdown", pinned()), &accumulator.into_payload()).unwrap();
+        assert_eq!(response.value, json!("Once upon a time"));
+        assert_eq!(response.model, "gpt-test");
+    }
+
+    #[test]
+    fn every_content_delta_is_handed_over_as_it_arrives() {
+        let (_, shown) = accumulate(vec![
+            // The opening chunk of a real stream: a role and no text yet.
+            json!({ "choices": [{ "delta": { "role": "assistant", "content": "" } }] }),
+            content_chunk("one "),
+            content_chunk("two"),
+            stop_chunk("stop"),
+        ]);
+        assert_eq!(shown, vec!["one ".to_string(), "two".to_string()]);
+    }
+
+    #[test]
+    fn a_watcher_sees_exactly_the_text_that_becomes_the_answer() {
+        // The property the streaming path exists to keep: nothing is shown that
+        // does not end up in the answer, and nothing in the answer went unshown.
+        let (accumulator, shown) = accumulate(vec![
+            content_chunk("the "),
+            json!({ "choices": [{ "delta": { "refusal": "I will not" } }] }),
+            content_chunk("answer"),
+            stop_chunk("stop"),
+        ]);
+        assert_eq!(shown.concat(), accumulator.content);
+        assert_eq!(shown.concat(), "the answer");
+    }
+
+    #[test]
+    fn refusal_deltas_are_collected_but_never_shown_to_a_watcher() {
+        // A refusal is not an answer, so showing it live would be a lie about
+        // what the run is producing — but it is still what the caller is told.
+        let (accumulator, shown) = accumulate(vec![
+            json!({ "choices": [{ "delta": { "refusal": "I cannot " } }] }),
+            json!({ "choices": [{ "delta": { "refusal": "help with that." } }] }),
+            stop_chunk("stop"),
+        ]);
+        assert!(shown.is_empty(), "{shown:?}");
+
+        let error = parse_response(&request("markdown", pinned()), &accumulator.into_payload())
+            .unwrap_err();
+        assert!(matches!(error, ProviderError::Refused { .. }), "{error}");
+        assert!(error.to_string().contains("cannot help"), "{error}");
+    }
+
+    #[test]
+    fn a_streamed_truncation_is_reported_rather_than_returned_as_a_result() {
+        let (accumulator, _) = accumulate(vec![content_chunk("half an ans"), stop_chunk("length")]);
+        let error = parse_response(&request("markdown", pinned()), &accumulator.into_payload())
+            .unwrap_err();
+        assert!(
+            matches!(error, ProviderError::Truncated { limit: 4096 }),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_streamed_content_filter_stop_is_a_refusal() {
+        let (accumulator, _) =
+            accumulate(vec![content_chunk("half"), stop_chunk("content_filter")]);
+        let error = parse_response(&request("markdown", pinned()), &accumulator.into_payload())
+            .unwrap_err();
+        assert!(matches!(error, ProviderError::Refused { .. }), "{error}");
+    }
+
+    #[test]
+    fn usage_from_the_final_chunk_reaches_the_response() {
+        let (accumulator, _) = accumulate(vec![
+            content_chunk("done"),
+            // Every chunk before the last carries a null here.
+            json!({ "choices": [{ "delta": {} }], "usage": Value::Null }),
+            stop_chunk("stop"),
+            // The final chunk: usage, and no choice to go with it.
+            json!({ "choices": [],
+                    "usage": { "prompt_tokens": 120, "completion_tokens": 40,
+                               "prompt_tokens_details": { "cached_tokens": 100 } } }),
+        ]);
+        let response =
+            parse_response(&request("markdown", pinned()), &accumulator.into_payload()).unwrap();
+        assert_eq!(response.usage.input_tokens, 120);
+        assert_eq!(response.usage.output_tokens, 40);
+        assert_eq!(response.usage.cache_read_tokens, 100);
+    }
+
+    #[test]
+    fn an_unrecognised_chunk_field_is_ignored_rather_than_failing_the_run() {
+        // A service adding a field must not break an artifact that predates it.
+        let (accumulator, _) = accumulate(vec![
+            json!({ "model": "gpt-test", "system_fingerprint": "fp_1",
+                    "choices": [{ "delta": { "content": "fine", "reasoning": "hidden" },
+                                  "logprobs": null }],
+                    "obviously_new": { "nested": true } }),
+            stop_chunk("stop"),
+        ]);
+        let response =
+            parse_response(&request("markdown", pinned()), &accumulator.into_payload()).unwrap();
+        assert_eq!(response.value, json!("fine"));
+    }
+
+    #[test]
+    fn an_error_reported_mid_stream_stops_the_answer_rather_than_completing_it() {
+        let (accumulator, shown) = accumulate(vec![
+            content_chunk("start"),
+            json!({ "error": { "message": "upstream capacity exhausted" } }),
+            content_chunk("never shown"),
+            stop_chunk("stop"),
+        ]);
+        assert_eq!(shown, vec!["start".to_string()]);
+        assert!(!accumulator.ended_early(), "the failure is the outcome");
+
+        let error = parse_response(&request("markdown", pinned()), &accumulator.into_payload())
+            .unwrap_err();
+        assert!(error.to_string().contains("capacity exhausted"), "{error}");
+    }
+
+    #[test]
+    fn a_stream_that_ends_without_a_finish_reason_is_not_a_finished_answer() {
+        // The connection was cut mid-answer. Treating that as a successful
+        // short answer would hand the run half a document.
+        let (accumulator, _) = accumulate(vec![content_chunk("half an ans")]);
+        assert!(accumulator.ended_early());
+
+        let (accumulator, _) = accumulate(vec![content_chunk("all of it"), stop_chunk("stop")]);
+        assert!(!accumulator.ended_early());
     }
 }

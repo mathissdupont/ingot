@@ -183,9 +183,42 @@ impl RunEvent {
     }
 }
 
-/// Where events go.
+/// Where a run's observable output goes.
+///
+/// Two channels, and the difference between them is the point.
+///
+/// [`emit`](EventSink::emit) carries the **event stream**: the record of what
+/// the run did. It is ordered, it is timestamp-free, and replaying a cassette
+/// reproduces it byte for byte, which is what lets a test assert on it.
+///
+/// [`delta`](EventSink::delta) and [`settled`](EventSink::settled) carry the
+/// **live channel**: text as a model produces it. None of it is a record of
+/// anything. How an answer arrived over the wire is a property of the
+/// connection, not of the run, so a delta is never an event, never recorded in
+/// a cassette, and never asserted on. Both default to discarding, so a sink
+/// that only wants the record gets exactly the record.
 pub trait EventSink {
     fn emit(&mut self, event: RunEvent);
+
+    /// A fragment of a model's answer, as it arrives.
+    ///
+    /// Called only on a live call against a provider that streams. Fragments
+    /// for one node arrive in order and concatenate to the answer's text; a
+    /// watcher that shows them is showing something that may yet be thrown
+    /// away, which is what [`settled`](EventSink::settled) is for.
+    fn delta(&mut self, node: &str, text: &str) {
+        let _ = (node, text);
+    }
+
+    /// No more deltas for this node, and whether the text became the answer.
+    ///
+    /// `kept` is false when the response was discarded — the answer was cut
+    /// off, or it did not match its declared type — so a watcher can strike
+    /// what it showed instead of leaving a half-finished answer on screen
+    /// looking like a result. Called only after at least one delta.
+    fn settled(&mut self, node: &str, kept: bool) {
+        let _ = (node, kept);
+    }
 }
 
 /// Keeps every event, for tests and for the run report.
@@ -208,6 +241,11 @@ impl EventSink for NullSink {
 }
 
 /// Collects events and also hands each to a callback, for live output.
+///
+/// Events only. Deltas are discarded, because a callback that took both would
+/// have to decide which stream it was being handed on every call. A watcher
+/// that wants the live text implements [`EventSink`] directly and overrides
+/// [`EventSink::delta`].
 pub struct TeeSink<F: FnMut(&RunEvent)> {
     pub events: Vec<RunEvent>,
     callback: F,
@@ -324,5 +362,20 @@ mod tests {
         });
         assert_eq!(sink.events.len(), 2);
         assert!(matches!(sink.events[0], RunEvent::RunStarted { .. }));
+    }
+
+    #[test]
+    fn a_delta_is_not_an_event() {
+        // The property the whole design rests on: what a watcher sees live
+        // leaves no trace in the stream a replay has to reproduce.
+        let mut sink = CollectingSink::default();
+        sink.delta("n0", "half an ans");
+        sink.delta("n0", "wer");
+        sink.settled("n0", true);
+        assert!(
+            sink.events.is_empty(),
+            "deltas leaked into the event stream: {:?}",
+            sink.events
+        );
     }
 }

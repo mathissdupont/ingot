@@ -37,7 +37,6 @@ to you*.
 | ID | Gap | Class | Closes with |
 |----|-----|-------|-------------|
 | [GAP-001](#gap-001) | A policy's host allowlist is not enforced | Unenforced | an egress proxy in the runner |
-| [GAP-005](#gap-005) | No streaming; one call, 16k output ceiling | Refused | a streaming provider interface (RFC) |
 | [GAP-007](#gap-007) | MCP over stdio only | Refused | GAP-013, then a transport |
 | [GAP-008](#gap-008) | `checkpoint` cannot be resumed from | Refused | a resumption model (RFC) |
 | [GAP-009](#gap-009) | MCP prompts, resources and sampling unsupported | Refused | language support for each |
@@ -53,6 +52,8 @@ to you*.
 | [GAP-028](#gap-028) | A model-authored project has no offline test until one run is recorded | Degraded | cassette synthesis, or nothing |
 | [GAP-029](#gap-029) | An image cannot be verified by signature, so acquisition stays manual | Refused | a signature scheme and a trust root |
 | [GAP-030](#gap-030) | A verifier cannot be executed at all | Absent | a verifier execution model (RFC) |
+| [GAP-031](#gap-031) | A contained run does not stream, and keeps the 16k ceiling | Refused | a delta notification on the supervisor channel |
+| [GAP-032](#gap-032) | The Python backend does not stream, so the two backends accept different answer lengths | Degraded | streaming in the Python prelude |
 
 ---
 
@@ -110,17 +111,6 @@ language-side half: expressing a scope per call rather than per agent.
 
 These stop the run and say what they could not do. They limit what you can
 build; they do not mislead you about what you built.
-
-### GAP-005
-
-**No streaming; one call, and a 16k output ceiling.**
-
-Every `ask` is one non-streaming request. A response longer than the ceiling
-ends the run with a truncation error.
-
-*What closing it needs.* A streaming shape on `ModelProvider`, and a decision
-about what a partially streamed structured response means when it fails
-validation.
 
 ### GAP-007
 
@@ -253,6 +243,41 @@ caller's write mount.
 [ADR-0007](adr/0007-containing-the-run-is-not-blocked-on-a-second-backend.md),
 `crates/ingot-cli/src/contained.rs`.
 
+### GAP-031
+
+**A contained run does not stream, and keeps the 16k ceiling.**
+
+`ingot run --contained` puts the interpreter inside the boundary and leaves the
+provider holding the credential outside it
+([RFC-0005](../rfcs/0005-the-contained-run.md)), so a completion already crosses
+the supervisor channel. A fragment of an answer would have to cross it too, as a
+notification rather than as a reply, and the protocol has no such notification.
+
+*How it shows up.* A contained run prints its trace and no live text, and one
+call is capped at 16,000 output tokens rather than 64,000
+([Runtime 0.3 §4](../specs/runtime/v0.3.md)), so an answer a host run would
+complete can end a contained run with a truncation error. Everything else is
+identical: the event stream is the same either way, because a delta is not an
+event ([Runtime 0.3 §2](../specs/runtime/v0.3.md)), which is what
+[Runtime 0.1 §7.1](../specs/runtime/v0.1.md) already requires of a contained
+run.
+
+*Why not yet.* The channel carries a request and gets a reply. A delta is
+neither — it is a one-way notification the host must interleave with whatever
+else the guest is saying, and the guest's `event` notifications show the shape
+exists. What has not been done is the decision to widen the protocol, and the
+supervisor protocol is the interface the boundary is expressed through, so
+widening it for display text is a change worth making deliberately rather than
+in passing.
+
+*What closing it needs.* A delta notification on the supervisor channel, a rule
+that keeps it out of the event stream on both sides of the boundary, and the
+raised ceiling only once the guest's calls actually stream.
+
+*Recorded in.* [Runtime 0.3 §6](../specs/runtime/v0.3.md),
+[RFC-0013](../rfcs/0013-streaming.md),
+[RFC-0005](../rfcs/0005-the-contained-run.md).
+
 ## Degraded
 
 ### GAP-028
@@ -359,6 +384,46 @@ of truth arriving late.
 
 *Recorded in.* [Vision](vision.md#one-product-loop-around-the-language),
 [RFC-0007](../rfcs/0007-the-ingot-product-loop.md).
+
+### GAP-032
+
+**The Python backend does not stream, so the two backends accept different
+answer lengths.**
+
+`crates/ingot-backend-python/src/prelude.py` makes one whole-body request per
+`ask` and keeps the 16,000-token ceiling that
+[Runtime 0.3 §4](../specs/runtime/v0.3.md) reserves for that transport. The
+reference interpreter asks for up to 64,000 against a provider that streams.
+
+*How it shows up.* An answer between 16,000 and 64,000 output tokens completes
+on the reference interpreter and ends the run with a truncation error on the
+Python backend. Below 16,000 the two agree, which covers every reference example
+and every differential fixture.
+
+*Nothing here misleads about the event stream.*
+`the_event_streams_agree_on_kind_and_order` still holds, and it holds for a
+reason rather than by luck: a delta is not an event
+([Runtime 0.3 §2](../specs/runtime/v0.3.md)), so the two backends emit the same
+events in the same order whether or not one of them streamed. What differs is
+the length of answer each accepts, which is a portability difference rather than
+a divergence in what a run means — and it is why this is Degraded rather than
+Unenforced.
+
+*Why not yet.* The Python backend exists to demonstrate that Agent IR has more
+than one consumer ([RFC-0006](../rfcs/0006-a-second-backend.md)), and it
+implements the common subset deliberately. Streaming there is an event-stream
+reader per vendor shape plus a second implementation of the rule that a partial
+answer is never used ([Runtime 0.3 §3](../specs/runtime/v0.3.md)). The failure
+mode of getting that second implementation subtly wrong is a value derived from
+a fragment, which is precisely what the rule exists to prevent.
+
+*What closing it needs.* Streaming in the Python prelude: an event-stream reader
+per vendor shape, the same accumulate-then-parse path the whole-body case
+already uses, and the raised ceiling only where the transport earns it.
+
+*Recorded in.* [Runtime 0.3 §6](../specs/runtime/v0.3.md),
+[RFC-0013](../rfcs/0013-streaming.md),
+`crates/ingot-backend-python/src/prelude.py`.
 
 ## Absent
 
@@ -483,6 +548,60 @@ remain.
 When a gap closes it moves here with the release that closed it, and its section
 stays where a link can find it. Identifiers are never reused: a link to GAP-007
 must keep meaning what it meant.
+
+### GAP-005
+
+**No streaming; one call, and a 16k output ceiling.**
+*Closed in Unreleased (Runtime 0.3).*
+
+A provider may now deliver an answer as it is produced, and `ingot run` shows
+the text as it arrives. A streamed call may ask for up to 64,000 output tokens
+instead of 16,000, because the ceiling is a property of the transport rather
+than of the artifact: a service that composes a whole body before sending it
+holds the connection open for the length of the answer, and several refuse a
+larger `max_tokens` outright unless the request streams
+([Runtime 0.3](../specs/runtime/v0.3.md),
+[RFC-0013](../rfcs/0013-streaming.md)).
+
+*Two channels, and the difference is the point.* `emit` carries the event
+stream — ordered, timestamp-free, reproduced byte for byte by a replay. `delta`
+and `settled` carry the live channel, which is a property of the connection and
+not of the run. A delta is therefore never an event, never recorded in a
+cassette, and never asserted on. Putting fragments into the recorded stream
+would have broken [Runtime 0.1 §9](../specs/runtime/v0.1.md), broken cassette
+position matching, and broken
+`the_event_streams_agree_on_kind_and_order`, whose only repair would have been
+a second backend fabricating events it never received.
+
+*The question this entry asked, answered.* "What a partially streamed
+structured response means when it fails validation." It means nothing: **a
+partial answer is not an answer.** The value a run uses is always assembled from
+the finished response and validated whole, by the same code path a non-streamed
+response takes, and on any failure the accumulated text is discarded and the run
+fails with `Truncated` or `InvalidResponse` exactly as it did before. Salvaging
+a prefix was rejected because it would make a result depend on where a
+connection happened to stop — an input nothing records and nobody controls.
+`settled(node, kept: false)` exists because a watcher was shown text that then
+got thrown away, and a half-finished answer left on screen looks like a result.
+
+*Retries stop at the first fragment.* A stream that fails part-way is not
+retried: the caller has already shown that text to somebody, and a second
+attempt would repeat it from the beginning. Retries cover only the window before
+anything was observed.
+
+*Additive, all of it.* Both provider methods and both sink methods are
+defaulted, so a backend written against Runtime 0.2 satisfies 0.3 with no edit —
+it reports that it does not stream, keeps the smaller ceiling, and emits the
+event stream it emitted before.
+
+*What is deliberately not done.* A contained run does not stream and keeps the
+16k ceiling ([GAP-031](#gap-031)); the Python backend does not stream, so the
+two backends accept different answer lengths ([GAP-032](#gap-032)); and deltas
+carry no determinism guarantee, which is what "not an event" means.
+
+*Recorded in.* [Runtime 0.3](../specs/runtime/v0.3.md),
+[RFC-0013](../rfcs/0013-streaming.md),
+[Runtime 0.1 §9](../specs/runtime/v0.1.md).
 
 ### GAP-022
 

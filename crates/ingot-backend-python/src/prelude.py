@@ -647,8 +647,9 @@ class Runtime:
         """The cap on one call: what is left of the token budget, or the ceiling.
 
         Bounded from below by 1, because asking a provider for zero tokens is a
-        request that cannot succeed, and from above by the ceiling, because
-        nothing here streams (GAP-005).
+        request that cannot succeed, and from above by the ceiling this
+        backend's transport earns: it asks once and reads one whole answer, so
+        it keeps the whole-body ceiling of Runtime 0.3 section 4 (GAP-032).
         """
         if self.token_limit is None:
             remaining = ceiling

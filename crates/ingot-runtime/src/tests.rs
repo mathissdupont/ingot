@@ -1232,3 +1232,184 @@ fn an_artifact_with_no_cost_budget_is_not_priced_at_all() {
     assert_eq!(report.spend.rendered(), None);
     assert!(report.spend.is_complete());
 }
+
+// --- streaming ------------------------------------------------------------
+
+/// Records both channels, so a test can assert that they stayed separate.
+#[derive(Default)]
+struct WatchingSink {
+    events: Vec<RunEvent>,
+    deltas: Vec<String>,
+    settled: Vec<bool>,
+}
+
+impl crate::EventSink for WatchingSink {
+    fn emit(&mut self, event: RunEvent) {
+        self.events.push(event);
+    }
+    fn delta(&mut self, _node: &str, text: &str) {
+        self.deltas.push(text.to_string());
+    }
+    fn settled(&mut self, _node: &str, kept: bool) {
+        self.settled.push(kept);
+    }
+}
+
+/// Hands over one fragment per word, then answers with `value`.
+///
+/// The answer is deliberately settable independently of the fragments, so a
+/// test can arrange the case that matters: text a watcher saw, and a response
+/// the run then refuses.
+struct Streaming {
+    fragments: Vec<String>,
+    value: serde_json::Value,
+    /// The cap the interpreter asked for on the last call.
+    asked_for: std::rc::Rc<std::cell::Cell<u32>>,
+}
+
+impl Streaming {
+    fn new(fragments: &[&str], value: serde_json::Value) -> Streaming {
+        Streaming {
+            fragments: fragments.iter().map(|text| text.to_string()).collect(),
+            value,
+            asked_for: std::rc::Rc::new(std::cell::Cell::new(0)),
+        }
+    }
+}
+
+impl crate::ModelProvider for Streaming {
+    fn name(&self) -> &str {
+        "streaming"
+    }
+
+    fn complete(
+        &mut self,
+        request: &crate::provider::CompletionRequest,
+    ) -> Result<crate::provider::CompletionResponse, crate::provider::ProviderError> {
+        self.asked_for.set(request.max_tokens);
+        Ok(crate::provider::CompletionResponse {
+            value: self.value.clone(),
+            usage: Usage::default(),
+            model: "streaming".to_string(),
+        })
+    }
+
+    fn streams(&self) -> bool {
+        true
+    }
+
+    fn complete_streaming(
+        &mut self,
+        request: &crate::provider::CompletionRequest,
+        on_delta: crate::provider::DeltaSink<'_>,
+    ) -> Result<crate::provider::CompletionResponse, crate::provider::ProviderError> {
+        for fragment in self.fragments.clone() {
+            on_delta(&fragment);
+        }
+        self.complete(request)
+    }
+}
+
+fn watch(
+    ir: &AgentIr,
+    provider: &mut dyn crate::ModelProvider,
+) -> (WatchingSink, Result<crate::RunReport, RunError>) {
+    let mut tools = DenyAllTools;
+    let mut sink = WatchingSink::default();
+    let report = run(
+        ir,
+        &BTreeMap::new(),
+        provider,
+        &mut tools,
+        &mut sink,
+        RunOptions {
+            inputs: BTreeMap::from([("document".to_string(), json!("the source"))]),
+            ..RunOptions::default()
+        },
+    );
+    (sink, report)
+}
+
+#[test]
+fn text_reaches_the_watcher_without_reaching_the_event_stream() {
+    let mut provider = Streaming::new(&["Half ", "an ", "answer"], json!("Half an answer"));
+    let (sink, report) = watch(&summarizer(), &mut provider);
+    report.expect("the run should succeed");
+
+    assert_eq!(sink.deltas, vec!["Half ", "an ", "answer"]);
+    assert_eq!(sink.settled, vec![true]);
+    // The property the design rests on: a replay has to reproduce this stream
+    // byte for byte, and it cannot reproduce how a connection was chunked.
+    assert!(
+        sink.events
+            .iter()
+            .all(|event| !event.to_json_line().contains("Half ")),
+        "a fragment leaked into the event stream: {:?}",
+        sink.events
+    );
+}
+
+#[test]
+fn text_shown_before_a_refused_answer_is_struck_rather_than_left_standing() {
+    // The answer is a number where the artifact declared markdown, so the run
+    // fails after the watcher has already been shown the beginning of it.
+    let mut provider = Streaming::new(&["Half an ans"], json!(7));
+    let (sink, report) = watch(&summarizer(), &mut provider);
+
+    assert!(report.is_err(), "a mistyped answer must not be accepted");
+    assert_eq!(sink.deltas, vec!["Half an ans"]);
+    assert_eq!(
+        sink.settled,
+        vec![false],
+        "the watcher was told the text became the answer when it did not"
+    );
+}
+
+#[test]
+fn a_streaming_provider_is_allowed_a_longer_answer_than_one_that_arrives_whole() {
+    let mut streaming = Streaming::new(&["ok"], json!("ok"));
+    let asked_for = streaming.asked_for.clone();
+    watch(&summarizer(), &mut streaming).1.expect("streamed");
+    let streamed = asked_for.get();
+
+    let mut at_once = ScriptedProvider::new(vec![json!("ok")]);
+    watch(&summarizer(), &mut at_once).1.expect("at once");
+
+    assert_eq!(streamed, 64_000);
+    assert!(
+        streamed > 16_000,
+        "streaming exists to lift the ceiling, and did not: {streamed}"
+    );
+}
+
+#[test]
+fn a_replay_shows_nothing_live() {
+    // Correct rather than unfortunate: a cassette produces its answer at once,
+    // and inventing fragments for it would make a replayed run look like a call
+    // that never happened.
+    let mut recorder = RecordingProvider::new(Streaming::new(&["a", "b"], json!("ab")), "x");
+    let mut sink = WatchingSink::default();
+    run(
+        &summarizer(),
+        &BTreeMap::new(),
+        &mut recorder,
+        &mut DenyAllTools,
+        &mut sink,
+        RunOptions {
+            inputs: BTreeMap::from([("document".to_string(), json!("the source"))]),
+            ..RunOptions::default()
+        },
+    )
+    .expect("recording run");
+    assert_eq!(
+        sink.deltas,
+        vec!["a", "b"],
+        "recording must not swallow the live text"
+    );
+
+    let mut replay = ReplayProvider::new(recorder.finish());
+    let (replayed, report) = watch(&summarizer(), &mut replay);
+    report.expect("replayed run");
+    assert!(replayed.deltas.is_empty(), "{:?}", replayed.deltas);
+    assert!(replayed.settled.is_empty());
+}

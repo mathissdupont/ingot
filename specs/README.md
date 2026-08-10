@@ -12,6 +12,7 @@ Normative behaviour lives here. Implementation detail does not.
 | [`image/v0.1.md`](image/v0.1.md) | Draft, implemented | OCI artifact profile, media types, lockfile, digest |
 | [`runtime/v0.1.md`](runtime/v0.1.md) | Draft, superseded in part | Execution model and the backend interface |
 | [`runtime/v0.2.md`](runtime/v0.2.md) | Draft, implemented | Runtime 0.1 plus a three-state `verify` outcome |
+| [`runtime/v0.3.md`](runtime/v0.3.md) | Draft, implemented | Runtime 0.2 plus streaming, a live channel and transport-decided ceilings |
 | [`conformance/`](conformance/) | Started (M5); packaging planned for M8 | Normative tests a backend must pass |
 
 Where a specification and the implementation disagree, the specification is

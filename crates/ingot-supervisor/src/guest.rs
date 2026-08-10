@@ -282,6 +282,13 @@ impl Guest {
 }
 
 /// Completions, fetched from outside the boundary.
+///
+/// This one does not stream, and inherits the default `streams() == false`
+/// deliberately. The provider with the credential is on the other side of the
+/// channel, so a fragment would have to cross it as a notification the protocol
+/// does not have. Until it does, a contained run keeps the smaller output
+/// ceiling and shows no live text — which is a real limitation, recorded as
+/// such rather than papered over by claiming a capability this side lacks.
 pub struct GuestProvider {
     inner: Rc<RefCell<Channel>>,
     name: String,

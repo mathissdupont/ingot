@@ -269,6 +269,23 @@ impl<P: ModelProvider> RecordingProvider<P> {
     pub fn finish(self) -> Cassette {
         self.cassette
     }
+
+    /// What goes on the tape, whichever transport delivered it.
+    ///
+    /// A cassette records the answer, never how it arrived: two runs of the
+    /// same artifact, one streamed and one not, must produce the same tape, or
+    /// a recording would pin a property of the connection.
+    fn record(&mut self, request: &CompletionRequest, response: &CompletionResponse) {
+        self.cassette.interactions.push(Interaction {
+            index: self.cassette.interactions.len(),
+            node: request.node.clone(),
+            request_digest: request.digest(),
+            response_type: request.response_type.clone(),
+            value: response.value.clone(),
+            usage: response.usage,
+            model: Some(response.model.clone()),
+        });
+    }
 }
 
 impl<P: ModelProvider> ModelProvider for RecordingProvider<P> {
@@ -281,15 +298,21 @@ impl<P: ModelProvider> ModelProvider for RecordingProvider<P> {
         request: &CompletionRequest,
     ) -> Result<CompletionResponse, ProviderError> {
         let response = self.inner.complete(request)?;
-        self.cassette.interactions.push(Interaction {
-            index: self.cassette.interactions.len(),
-            node: request.node.clone(),
-            request_digest: request.digest(),
-            response_type: request.response_type.clone(),
-            value: response.value.clone(),
-            usage: response.usage,
-            model: Some(response.model.clone()),
-        });
+        self.record(request, &response);
+        Ok(response)
+    }
+
+    fn streams(&self) -> bool {
+        self.inner.streams()
+    }
+
+    fn complete_streaming(
+        &mut self,
+        request: &CompletionRequest,
+        on_delta: crate::provider::DeltaSink<'_>,
+    ) -> Result<CompletionResponse, ProviderError> {
+        let response = self.inner.complete_streaming(request, on_delta)?;
+        self.record(request, &response);
         Ok(response)
     }
 }
