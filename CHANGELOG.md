@@ -8,6 +8,41 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
 
 ## [Unreleased]
 
+**The egress filter exists** (new crate `ingot-egress`; narrows
+[GAP-001](docs/gaps.md#gap-001))
+
+- A forward proxy that decides on the host: `CONNECT` for TLS, an absolute-URI
+  request line for plain HTTP, and a `403` naming the reason for anything the
+  policy does not grant. No TLS is terminated and no certificate authority is
+  involved. Runnable as `ingot egress --allow arxiv.org`, which prints every
+  decision — allowed and refused alike, because a filter that only reported what
+  it stopped would leave you unable to tell "nothing was blocked" from "nothing
+  was tried".
+- Each failure mode the register named is closed, and each has a test that
+  connects a real socket:
+  - **DNS rebinding.** The client never resolves anything. It hands over a name;
+    the proxy resolves once and dials one of *those* addresses. The check and
+    the connection cannot disagree, because there is one resolution.
+  - **Address literals.** `CONNECT 93.184.216.34:443` is refused as its own kind
+    of refusal rather than falling through to "not listed" — a policy grants
+    names, and the log should say which mistake was made.
+  - **TLS SNI against the Host header.** Neither is read. A `CONNECT` tunnel
+    carries bytes to the address the proxy dialled, so whatever the client
+    writes afterwards goes to a granted host. For plain HTTP the request target
+    decides and `Host` is ignored: two sources for one fact is how a filter and
+    a destination come to disagree.
+  - **A granted name pointing inward.** Every resolved address is checked
+    against loopback, link-local, private and carrier-grade ranges — not just
+    the one that gets used. `169.254.169.254` is in that list by name.
+- No dependencies, deliberately. This is the component a sandbox is trusted to
+  be right about, and every crate it pulls in is a crate that has to be right
+  too.
+- **GAP-001 is narrowed, not closed.** A filter only bounds what is routed
+  through it, and forcing a tool container's traffic through this one is
+  container lifecycle work that has not landed. Until it does, `Network::Hosts`
+  is still reported as unenforceable and `ingot run --sandbox` still refuses
+  without `--sandbox-allow-unenforced`.
+
 **A capability has a reach** (Language 0.2; closes
 [GAP-013](docs/gaps.md#gap-013); narrows [GAP-001](docs/gaps.md#gap-001),
 [GAP-007](docs/gaps.md#gap-007))

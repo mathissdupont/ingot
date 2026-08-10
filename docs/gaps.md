@@ -105,9 +105,40 @@ longer runs as though it had been kept: it refuses, and takes
 `--allow-unenforced-scopes` to proceed. What is left here is only the
 enforcement, and it can no longer be reached by accident.
 
-*What closing it needs.* An egress proxy in the runner, and a conformance test
-that a backend which cannot honour a scope **refuses** rather than ignoring it,
-per [Runtime 0.1 §2](../specs/runtime/v0.1.md).
+*Narrowed again 2026-08-10, the filter half.* The proxy exists:
+[`crates/ingot-egress`](../crates/ingot-egress/), reachable as
+`ingot egress --allow <host>`. It is a forward proxy that speaks `CONNECT` and
+plain HTTP, decides on the host, and terminates no TLS. Each of the failure
+modes named above is closed and has a test that connects a real socket:
+
+* *DNS rebinding* — the client never resolves anything. It hands over a name;
+  the proxy resolves once and dials one of those addresses. The check and the
+  connection cannot disagree because there is one resolution.
+* *IP-literal requests* — refused as their own kind of refusal. A policy grants
+  names, so an address is never in the list, and saying which mistake was made
+  matters when reading a log.
+* *TLS SNI versus Host header* — neither is read. A `CONNECT` tunnel carries
+  bytes to the address the proxy dialled, so the destination holds whatever the
+  client writes afterwards. For plain HTTP the request target decides and the
+  `Host` header is ignored, because two sources for one fact is how a filter and
+  a destination come to disagree.
+* *A granted name pointing inward* — every resolved address is checked against
+  loopback, link-local, private and carrier-grade ranges, not just the one that
+  gets used. `169.254.169.254` is in there by name.
+
+*What is left is the topology.* A filter only bounds what is routed through it.
+Forcing a tool container's traffic through this one needs a second container on
+a Docker `--internal` network with no route out, the proxy bridging that network
+to the outside, and `HTTP_PROXY` pointing the server at the only door — the
+variables are how a client *finds* the door, and the network is what makes it
+the only one. That is container lifecycle work: create a network, start a
+proxy, tear both down on every exit path. Until it lands, `Network::Hosts` is
+still reported as unenforceable and `ingot run --sandbox` still refuses without
+`--sandbox-allow-unenforced`.
+
+*What closing it needs.* That topology, and a container test that a request to
+an ungranted host actually fails from inside the box — the test that turns this
+entry from a claim into a demonstration.
 
 *Recorded in.* [`examples/research-agent/README.md`](../examples/research-agent/README.md),
 [Runtime 0.1 §7](../specs/runtime/v0.1.md),

@@ -124,6 +124,25 @@ enum Command {
     /// without one it refuses. `ingot run --contained` is the command.
     #[command(hide = true)]
     Exec,
+    /// The egress proxy a contained server's traffic leaves through.
+    ///
+    /// Hidden because it is a part rather than a command: a boundary starts one
+    /// and points a container at it. Runnable on its own so the thing a sandbox
+    /// is trusted to be right about can be watched directly.
+    #[command(hide = true)]
+    Egress(EgressArgs),
+}
+
+#[derive(Args, Debug)]
+struct EgressArgs {
+    /// A host the proxy will forward to. Repeatable. Matched exactly, because
+    /// that is what a policy means by a host.
+    #[arg(long = "allow", value_name = "HOST")]
+    allow: Vec<String>,
+
+    /// Address to listen on.
+    #[arg(long, default_value = "127.0.0.1:0", value_name = "ADDR")]
+    bind: String,
 }
 
 #[derive(Args, Debug)]
@@ -588,6 +607,7 @@ fn main() -> ExitCode {
         Command::Tools(args) => run_tools(args, color),
         Command::Sandbox(args) => run_sandbox(args, color),
         Command::Explain(args) => run_explain(args),
+        Command::Egress(args) => run_egress(args),
         Command::Exec => contained::exec(),
     };
 
@@ -875,6 +895,34 @@ fn create_from_workflow(args: &NewArgs, color: RenderColor) -> Result<u8> {
     println!("Record the offline test once, against a configured provider:");
     println!("  {}", record_command(&inputs));
     Ok(EXIT_OK)
+}
+
+/// Run the egress proxy until interrupted.
+///
+/// Every decision is printed, allowed and refused alike. A filter that only
+/// reported what it stopped would leave an operator unable to tell "nothing was
+/// blocked" from "nothing was tried".
+fn run_egress(args: &EgressArgs) -> Result<u8> {
+    let bind: std::net::SocketAddr = args
+        .bind
+        .parse()
+        .with_context(|| format!("`--bind {}` is not an address:port", args.bind))?;
+
+    let allow = ingot_egress::Allowlist::new(&args.allow);
+    if allow.is_empty() {
+        eprintln!("egress: no hosts allowed; every request will be refused");
+    } else {
+        eprintln!("egress: allowing {}", allow.hosts().join(", "));
+    }
+
+    let proxy = ingot_egress::Proxy::start(bind, allow, |decision| eprintln!("egress: {decision}"))
+        .context("starting the egress proxy")?;
+    println!("{}", proxy.address());
+
+    // Held until the process is stopped; there is nothing else to wait for.
+    loop {
+        std::thread::park();
+    }
 }
 
 fn provider_label(args: &NewArgs) -> &'static str {

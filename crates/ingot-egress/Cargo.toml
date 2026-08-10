@@ -1,0 +1,13 @@
+[package]
+name = "ingot-egress"
+description = "Host-filtering egress proxy: bounds a contained tool server to the hosts its policy names."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+# No dependencies on purpose. This is the component a sandbox is trusted to be
+# right about, and every crate it pulls in is a crate that has to be right too.
+[dependencies]

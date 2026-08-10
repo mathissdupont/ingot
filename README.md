@@ -780,6 +780,7 @@ With `--sandbox` the MCP servers move inside a policy-derived boundary
 | `ingot-lsp` | stdio language server adapter for editor diagnostics, formatting and navigation |
 | `ingot-mcp` | the MCP tool host, and the `ingot-mcp-fs` reference server |
 | `ingot-sandbox` | a `policy` block turned into a container boundary |
+| `ingot-egress` | the host-filtering proxy a bounded server's traffic leaves through |
 | `ingot-supervisor` | the channel between a contained run and the host serving it |
 | `ingot-cli` | the `ingot` binary |
 

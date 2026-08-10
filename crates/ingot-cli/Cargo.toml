@@ -27,6 +27,7 @@ ingot-compiler.workspace = true
 ingot-runtime.workspace = true
 ingot-mcp.workspace = true
 ingot-sandbox.workspace = true
+ingot-egress.workspace = true
 ingot-supervisor.workspace = true
 ingot-backend-python.workspace = true
 ingot-ir.workspace = true
