@@ -43,6 +43,7 @@ pub mod cassette;
 pub mod catalogue;
 pub mod events;
 mod interp;
+pub mod price;
 pub mod provider;
 pub mod router;
 pub mod schema;
@@ -86,6 +87,11 @@ pub struct RunReport {
     pub outputs: BTreeMap<String, Artifact>,
     pub usage: Usage,
     pub steps: u32,
+    /// What the run cost, and every model it could not price.
+    ///
+    /// Empty when the artifact states no `cost` budget: pricing a run nobody
+    /// bounded would be arithmetic for its own sake.
+    pub spend: price::Spend,
 }
 
 /// Why a run stopped.

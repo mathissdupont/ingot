@@ -1505,6 +1505,9 @@ fn run_check(args: &PathArgs, color: RenderColor) -> Result<u8> {
     let target = resolve_target(args.path.as_deref())?;
     let compilation = compile(&target)?;
     report(&compilation, color);
+    if !compilation.has_errors() {
+        warn_unchargeable_cost(&compilation, &target);
+    }
     Ok(exit_code(&compilation))
 }
 
@@ -1587,6 +1590,8 @@ fn run_build(args: &BuildArgs, color: RenderColor) -> Result<u8> {
         println!("nothing to build: the program declares no agent");
         return Ok(EXIT_OK);
     }
+
+    warn_unchargeable_cost(&compilation, &target);
 
     // Before anything is written. A build is the last moment a credential is
     // still only in the working tree, and the first moment it would be in an
@@ -1776,6 +1781,7 @@ fn run_run(args: &RunArgs, color: RenderColor) -> Result<u8> {
     if compilation.has_errors() {
         return Ok(EXIT_DIAGNOSTICS);
     }
+    warn_unchargeable_cost(&compilation, &target);
 
     run::execute(
         &compilation,
@@ -1866,6 +1872,7 @@ fn run_test(args: &TestArgs, color: RenderColor) -> Result<u8> {
         &TestConfig {
             cassette_dir,
             filter: args.filter.clone(),
+            pricing: target.model().pricing(),
         },
     )
 }
@@ -1944,6 +1951,46 @@ fn run_explain(args: &ExplainArgs) -> Result<u8> {
 
 pub(crate) fn compile(target: &Target) -> Result<Compilation> {
     compile_path(&target.entry).with_context(|| format!("compiling {}", target.entry.display()))
+}
+
+/// Warn when an agent states a `cost` budget this project cannot charge.
+///
+/// The compiler cannot know this. A price is deployment configuration, and the
+/// source is deliberately deployment-independent — so the check lives where both
+/// halves are visible, which is here. Saying it at `check` time is the point:
+/// the alternative is learning it after the money is spent.
+///
+/// Only fires when the project configures **no** price at all. With some
+/// configured, whether the one that answers is among them is a question only the
+/// run can settle, and the run reports every model it could not price.
+pub(crate) fn warn_unchargeable_cost(compilation: &Compilation, target: &Target) {
+    if !target.model().prices.is_empty() {
+        return;
+    }
+    let budgeted: Vec<&str> = compilation
+        .agents
+        .iter()
+        .filter(|agent| agent.budget.cost.is_some())
+        .map(|agent| agent.agent.as_str())
+        .collect();
+    let Some(first) = budgeted.first() else {
+        return;
+    };
+
+    eprintln!(
+        "warning[{}]: `{}` states a cost budget that nothing can charge",
+        codes::COST_BUDGET_NOT_CHARGED,
+        first
+    );
+    for agent in budgeted.iter().skip(1) {
+        eprintln!("             so does `{agent}`");
+    }
+    eprintln!("  = note: this project configures no `[[model.price]]`, so the budget is");
+    eprintln!("          reported as uncharged rather than enforced");
+    eprintln!(
+        "  = help: add a price, or remove the budget; `ingot explain {}`",
+        codes::COST_BUDGET_NOT_CHARGED
+    );
 }
 
 /// Print diagnostics, then a one-line summary.

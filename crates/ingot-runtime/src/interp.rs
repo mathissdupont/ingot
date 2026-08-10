@@ -18,6 +18,7 @@ use ingot_ir::{AgentIr, Decision, Node, NodeKind, RefScope, TemplatePart, Value 
 use serde_json::{json, Value};
 
 use crate::events::{Artifact, EventSink, RunEvent, VerifyOutcome};
+use crate::price::{parse_micros, Pricing, Spend};
 use crate::provider::{CompletionRequest, ModelProvider, ModelSelection, ProviderError, Usage};
 use crate::schema;
 use crate::tools::{ApprovalMode, ApprovalRequest, ToolError, ToolHost, ToolInvocation};
@@ -39,6 +40,13 @@ pub struct RunOptions {
     /// Stop after this many steps even if the artifact allows more. A backstop
     /// for artifacts with no `steps` budget.
     pub max_steps: u32,
+    /// What each model costs, so `budget.cost` can be charged.
+    ///
+    /// Empty by default. A run with no prices charges nothing and reports every
+    /// model it could not price, because
+    /// [Runtime 0.1 §8](../../../specs/runtime/v0.1.md) says a backend that
+    /// cannot price a request must not pretend to.
+    pub pricing: Pricing,
 }
 
 impl Default for RunOptions {
@@ -47,6 +55,7 @@ impl Default for RunOptions {
             inputs: BTreeMap::new(),
             approval: ApprovalMode::Deny,
             max_steps: 1_000,
+            pricing: Pricing::default(),
         }
     }
 }
@@ -69,6 +78,8 @@ struct Interp<'a> {
     steps: u32,
     max_steps: u32,
     usage: Usage,
+    pricing: Pricing,
+    spend: Spend,
 }
 
 /// Execute an agent.
@@ -84,6 +95,7 @@ pub fn run(
         inputs,
         mut approval,
         max_steps,
+        pricing,
     } = options;
     run_nested(
         ir,
@@ -94,6 +106,7 @@ pub fn run(
         inputs,
         &mut approval,
         max_steps,
+        &pricing,
     )
 }
 
@@ -114,6 +127,9 @@ fn run_nested(
     inputs: BTreeMap<String, Value>,
     approval: &mut ApprovalMode,
     step_ceiling: u32,
+    // Prices are a property of the deployment, not of an agent, so a sub-agent
+    // is charged with the same ones its caller was.
+    pricing: &Pricing,
 ) -> Result<RunReport, RunError> {
     check_ir_version(ir)?;
 
@@ -165,6 +181,8 @@ fn run_nested(
         steps: 0,
         max_steps,
         usage: Usage::default(),
+        pricing: pricing.clone(),
+        spend: Spend::default(),
     };
 
     let result = interp.run_region(ir.entry.as_deref());
@@ -176,6 +194,7 @@ fn run_nested(
                 outputs: interp.outputs,
                 usage: interp.usage,
                 steps: interp.steps,
+                spend: interp.spend.clone(),
             };
             sink.emit(RunEvent::RunFinished {
                 steps: report.steps,
@@ -261,6 +280,34 @@ impl Interp<'_> {
             return Err(RunError::BudgetExceeded {
                 budget: "steps".to_string(),
                 limit: self.max_steps.to_string(),
+                node: node.id.clone(),
+            });
+        }
+        Ok(())
+    }
+
+    /// Charge what a call cost, and stop when the artifact's ceiling is passed.
+    ///
+    /// A call that could not be priced is remembered rather than skipped: the
+    /// total is only a total if nothing was missed, and enforcing a budget
+    /// against a partial total would be the pretending
+    /// [Runtime 0.1 §8](../../../specs/runtime/v0.1.md) forbids.
+    fn charge_cost(&mut self, node: &Node, model: &str, usage: Usage) -> Result<(), RunError> {
+        let Some(budget) = self.ir.budget.cost.clone() else {
+            // No ceiling stated. Nothing to charge against, and pricing a run
+            // nobody bounded would be arithmetic for its own sake.
+            return Ok(());
+        };
+        self.spend
+            .add(model, self.pricing.charge(model, usage, &budget.currency));
+
+        let Some(limit) = parse_micros(&budget.amount) else {
+            return Ok(());
+        };
+        if self.spend.is_complete() && self.spend.micros() > limit {
+            return Err(RunError::BudgetExceeded {
+                budget: "cost".to_string(),
+                limit: format!("{} {}", budget.amount, budget.currency.to_ascii_uppercase()),
                 node: node.id.clone(),
             });
         }
@@ -389,6 +436,7 @@ impl Interp<'_> {
             usage: response.usage,
         });
         self.charge_tokens(node, response.usage)?;
+        self.charge_cost(node, &response.model, response.usage)?;
         self.bind(node, response.value);
         Ok(())
     }
@@ -503,6 +551,7 @@ impl Interp<'_> {
             inputs,
             &mut *self.approval,
             self.max_steps.saturating_sub(self.steps).max(1),
+            &self.pricing,
         )
         .map_err(|error| RunError::SubAgent {
             node: node.id.clone(),

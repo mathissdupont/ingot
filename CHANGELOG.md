@@ -8,7 +8,29 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
 
 ## [Unreleased]
 
-Nothing yet.
+**A `cost` budget is charged, or says it was not** (Runtime 0.2;
+closes [GAP-003](docs/gaps.md#gap-003))
+
+- `budget { cost <= 5 usd }` is now enforced, against prices the project
+  supplies per model in `[[model.price]]`. Exceeding it ends the run the way
+  `steps` and `tokens` do, and `ingot run` and `ingot test` print what a run
+  cost.
+- Prices are deployment configuration, not part of the artifact. A price is
+  provider- and time-dependent, so an artifact carrying one would be stale the
+  moment it was published — and so would a table compiled into this binary.
+- The model is matched **exactly** as the provider reports it. A prefix rule
+  would price `claude-opus-5-mini` at `claude-opus-5`'s rate, and a wrong price
+  is worse than none.
+- A budget is enforced only against a total that missed nothing. A call that
+  could not be priced leaves the budget unenforced and the run names the model
+  and why; `ingot check` warns with `ING5007` when the project configures no
+  price at all. Silence was the old behaviour and it was a way of pretending.
+- No cost calculation touches a float. Accumulation is in millionths of a
+  currency unit as integers, the same six-digit precision Agent IR renders a
+  `Cost` with, so a total is exact and identical on every platform. An amount
+  finer than that is refused rather than rounded.
+- Currencies are never converted. A rate is a second time-dependent input, and
+  guessing one would make a budget mean something the operator did not write.
 
 ## [0.4.0-rc.2] — 2026-08-09
 

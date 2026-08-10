@@ -81,6 +81,7 @@ pub const UNKNOWN_BUDGET_KEY: &str = "ING5003";
 pub const DUPLICATE_BUDGET_KEY: &str = "ING5004";
 pub const MISSING_COST_CURRENCY: &str = "ING5005";
 pub const STATIC_STEPS_EXCEED_BUDGET: &str = "ING5006";
+pub const COST_BUDGET_NOT_CHARGED: &str = "ING5007";
 
 // --- ING6xxx: lowering and IR --------------------------------------------
 
@@ -195,6 +196,20 @@ pub fn explain(code: &str) -> Option<&'static str> {
              `emit` after the branch. Loops never count as guaranteed, because a \
              bounded loop may run zero times."
         }
+        COST_BUDGET_NOT_CHARGED => {
+            "The agent states a `cost` budget, and this project configures no \
+             price to charge it against.\n\n\
+             A price is provider- and time-dependent, so it is deployment \
+             configuration rather than part of the artifact: an artifact \
+             carrying a price list would be stale the moment it was published. \
+             Ingot therefore charges `cost` only against prices the project \
+             supplies, and reports the budget as uncharged when it has none — \
+             rather than letting a limit that looks enforced go unenforced.\n\n\
+             Add a `[[model.price]]` entry naming the model exactly as the \
+             provider reports it, or remove the budget. A run names every model \
+             it could not price, so the string to configure is the one it \
+             prints."
+        }
         VERIFIER_NOT_PERFORMED => {
             "The flow names a verifier, and nothing can carry one out.\n\n\
              Agent IR records a verifier's name and signature. It has no \
@@ -260,6 +275,7 @@ pub const EXPLAINED_CODES: &[&str] = &[
     OUTPUT_NEVER_EMITTED,
     UNUSED_BINDING,
     OUTPUT_NOT_ON_ALL_PATHS,
+    COST_BUDGET_NOT_CHARGED,
     VERIFIER_NOT_PERFORMED,
     INVALID_IN_PARALLEL,
     RECURSIVE_AGENT,

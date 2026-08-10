@@ -219,6 +219,7 @@ pub fn execute(compilation: &Compilation, config: &RunConfig) -> Result<u8> {
             inputs,
             approval,
             max_steps: config.max_steps,
+            pricing: config.models.pricing(),
         },
     );
 
@@ -245,6 +246,7 @@ pub fn execute(compilation: &Compilation, config: &RunConfig) -> Result<u8> {
         }
     };
 
+    report_cost(&report);
     write_outputs(&report, config)?;
     Ok(super::EXIT_OK)
 }
@@ -779,6 +781,25 @@ fn openai(selection: &ProviderSelection) -> Result<Box<dyn ModelProvider>> {
     }
 }
 
+/// Say what the run cost, and say plainly when it could not be worked out.
+///
+/// Silence would be the failure mode: a `cost` budget that is never mentioned
+/// looks enforced. [Runtime 0.1 §8](../../../specs/runtime/v0.1.md) says a
+/// backend that cannot price a request must not pretend to, and not mentioning
+/// it is a way of pretending.
+fn report_cost(report: &RunReport) {
+    let spend = &report.spend;
+    if let Some(rendered) = spend.rendered() {
+        eprintln!("cost      {rendered}");
+    }
+    for (model, reason) in spend.unpriced() {
+        eprintln!("cost      not charged for `{model}`: {reason}");
+    }
+    if !spend.is_complete() {
+        eprintln!("          the budget was not enforced; add `[[model.price]]` to charge it");
+    }
+}
+
 pub(crate) fn write_outputs(report: &RunReport, config: &RunConfig) -> Result<()> {
     let Some(dir) = &config.out_dir else {
         // No directory given: the artifacts go to stdout, so the command
@@ -814,6 +835,7 @@ fn artifact_path(dir: &Path, artifact: &Artifact) -> PathBuf {
 pub struct TestConfig {
     pub cassette_dir: PathBuf,
     pub filter: Option<String>,
+    pub pricing: ingot_runtime::price::Pricing,
 }
 
 /// Replay every cassette in a directory and report pass/fail.
@@ -882,6 +904,10 @@ pub fn test(compilation: &Compilation, config: &TestConfig) -> Result<u8> {
                 inputs,
                 approval: ApprovalMode::Deny,
                 max_steps: 1_000,
+                // The same prices a live run uses, so `cost <= 5 usd` is a
+                // property `ingot test` can hold the agent to rather than a
+                // line nothing checks.
+                pricing: config.pricing.clone(),
             },
         );
 
@@ -904,8 +930,18 @@ pub fn test(compilation: &Compilation, config: &TestConfig) -> Result<u8> {
                     }
                     failed += 1;
                 } else {
+                    let cost = match report.spend.rendered() {
+                        Some(rendered) => format!(", {rendered}"),
+                        None => String::new(),
+                    };
+                    // A budget nothing could charge is named here too. A test
+                    // that quietly did not enforce one is a test that says a
+                    // limit holds when nobody checked.
+                    for (model, reason) in report.spend.unpriced() {
+                        eprintln!("     {name}: cost not charged for `{model}`: {reason}");
+                    }
                     println!(
-                        "ok   {name}  ({} step(s), {} token(s))",
+                        "ok   {name}  ({} step(s), {} token(s){cost})",
                         report.steps,
                         report.usage.total()
                     );

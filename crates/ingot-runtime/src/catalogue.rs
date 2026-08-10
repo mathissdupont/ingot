@@ -79,11 +79,23 @@ pub struct ModelConfig {
     pub default: Option<String>,
     #[serde(default, rename = "provider", skip_serializing_if = "Vec::is_empty")]
     pub providers: Vec<ProviderConfig>,
+    /// What each model costs, so `budget.cost` can be charged.
+    ///
+    /// Deployment configuration rather than part of the program, for the same
+    /// reason `[[mcp.server]]` is: a price is provider- and time-dependent, and
+    /// an artifact carrying one would be stale the moment it was published.
+    #[serde(default, rename = "price", skip_serializing_if = "Vec::is_empty")]
+    pub prices: Vec<crate::price::ModelPrice>,
 }
 
 impl ModelConfig {
     pub fn is_empty(&self) -> bool {
-        self.providers.is_empty() && self.default.is_none()
+        self.providers.is_empty() && self.default.is_none() && self.prices.is_empty()
+    }
+
+    /// The prices a run is given, as the interpreter wants them.
+    pub fn pricing(&self) -> crate::price::Pricing {
+        crate::price::Pricing::new(self.prices.clone())
     }
 
     /// Reject what cannot work, before a key is read or a request is built.
@@ -240,6 +252,7 @@ mod tests {
     fn a_local_server_needs_no_key() {
         // The common case for Ollama, llama.cpp or LM Studio: no auth at all.
         let config = ModelConfig {
+            prices: Vec::new(),
             providers: vec![provider("local")],
             ..ModelConfig::default()
         };
@@ -250,6 +263,7 @@ mod tests {
     #[test]
     fn duplicate_names_are_refused() {
         let config = ModelConfig {
+            prices: Vec::new(),
             providers: vec![provider("local"), provider("local")],
             ..ModelConfig::default()
         };
@@ -260,6 +274,7 @@ mod tests {
     #[test]
     fn a_name_containing_a_slash_is_refused_because_that_is_the_separator() {
         let config = ModelConfig {
+            prices: Vec::new(),
             providers: vec![provider("my/llm")],
             ..ModelConfig::default()
         };
@@ -272,6 +287,7 @@ mod tests {
         let mut bare = provider("local");
         bare.base_url = "  ".to_string();
         let config = ModelConfig {
+            prices: Vec::new(),
             providers: vec![bare],
             ..ModelConfig::default()
         };
@@ -284,6 +300,7 @@ mod tests {
         let mut confused = provider("local");
         confused.api_key_env = Some(String::new());
         let config = ModelConfig {
+            prices: Vec::new(),
             providers: vec![confused],
             ..ModelConfig::default()
         };
@@ -294,6 +311,7 @@ mod tests {
     #[test]
     fn a_default_may_name_a_built_in_without_redeclaring_it() {
         let config = ModelConfig {
+            prices: Vec::new(),
             default: Some("anthropic".to_string()),
             providers: Vec::new(),
         };
@@ -303,6 +321,7 @@ mod tests {
     #[test]
     fn a_default_naming_nothing_lists_what_there_is() {
         let config = ModelConfig {
+            prices: Vec::new(),
             default: Some("mistral".to_string()),
             providers: vec![provider("local")],
         };

@@ -1149,3 +1149,86 @@ fn a_not_performed_verify_never_serialises_as_a_pass() {
         .to_line()
         .contains("verify CitationCheck: not performed"));
 }
+
+// --- cost -----------------------------------------------------------------
+
+fn priced(amount: &str) -> AgentIr {
+    let mut ir = summarizer();
+    ir.budget.cost = Some(ingot_ir::Cost {
+        amount: amount.to_string(),
+        currency: "usd".to_string(),
+    });
+    ir
+}
+
+fn usd(model: &str, input: &str, output: &str) -> crate::price::Pricing {
+    crate::price::Pricing::new(vec![crate::price::ModelPrice {
+        model: model.to_string(),
+        input: input.to_string(),
+        output: output.to_string(),
+        cache_read: None,
+        currency: "usd".to_string(),
+    }])
+}
+
+fn run_priced(ir: &AgentIr, pricing: crate::price::Pricing) -> Result<crate::RunReport, RunError> {
+    let mut provider = ScriptedProvider::new(vec![json!("# Brief")]).with_usage(Usage {
+        input_tokens: 1_000,
+        output_tokens: 500,
+        cache_read_tokens: 0,
+    });
+    let mut tools = StaticToolHost::default();
+    let mut sink = CollectingSink::default();
+    run(
+        ir,
+        &BTreeMap::new(),
+        &mut provider,
+        &mut tools,
+        &mut sink,
+        RunOptions {
+            inputs: BTreeMap::from([("document".to_string(), json!("the source"))]),
+            pricing,
+            ..RunOptions::default()
+        },
+    )
+}
+
+#[test]
+fn a_cost_budget_is_charged_against_the_prices_the_run_was_given() {
+    // 1000 input at $3/M and 500 output at $15/M is $0.0105.
+    let report = run_priced(&priced("5"), usd("scripted", "3", "15")).expect("within budget");
+    assert!(report.spend.is_complete());
+    assert_eq!(report.spend.rendered().as_deref(), Some("0.0105 USD"));
+}
+
+#[test]
+fn a_cost_budget_that_is_exhausted_ends_the_run() {
+    let error = run_priced(&priced("0.001"), usd("scripted", "3", "15")).unwrap_err();
+    let RunError::BudgetExceeded { budget, limit, .. } = &error else {
+        panic!("expected a budget failure, got {error:?}");
+    };
+    assert_eq!(budget, "cost");
+    assert_eq!(limit, "0.001 USD");
+}
+
+#[test]
+fn an_unpriced_model_leaves_the_budget_uncharged_rather_than_satisfied() {
+    // The failure this guards against: a budget that looks enforced because
+    // nothing exceeded a total that was never computed.
+    let report = run_priced(&priced("0.000001"), crate::price::Pricing::default())
+        .expect("an uncharged budget cannot be exceeded");
+    assert!(
+        !report.spend.is_complete(),
+        "a total that missed every call is not a total"
+    );
+    let unpriced: Vec<&str> = report.spend.unpriced().map(|(model, _)| model).collect();
+    assert_eq!(unpriced, vec!["scripted"]);
+    assert_eq!(report.spend.rendered(), None);
+}
+
+#[test]
+fn an_artifact_with_no_cost_budget_is_not_priced_at_all() {
+    let report = run_priced(&summarizer(), usd("scripted", "3", "15")).expect("no budget");
+    assert_eq!(report.spend.rendered(), None);
+    assert!(report.spend.is_complete());
+}

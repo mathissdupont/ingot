@@ -369,6 +369,36 @@ a signature and a trust root to check it against
 The normative rules are [Ingot Package 0.1](specs/image/v0.1.md); the reasoning
 is [RFC-0012](rfcs/0012-the-ingot-package.md).
 
+### Charging what a run costs
+
+`budget { cost <= 5 usd }` is enforced against prices the project supplies, per
+model, in the manifest:
+
+```toml
+[[model.price]]
+model = "claude-opus-5"     # exactly as the provider reports it
+input = "3"                 # per million input tokens
+output = "15"
+cache-read = "0.3"          # optional; absent means the input rate
+currency = "usd"
+```
+
+Prices live here rather than in the artifact because they are provider- and
+time-dependent: an artifact carrying a price list would be stale the moment it
+was published.
+
+With prices configured, exceeding the budget ends the run the way `steps` and
+`tokens` do, and `ingot run` and `ingot test` both print what a run cost:
+
+```text
+ok   brief  (1 step(s), 690 token(s), 0.00459 USD)
+```
+
+Without them the budget is **not enforced**, and everything says so rather than
+letting a limit that looks enforced go unchecked — `ingot check` warns
+(`ING5007`) and a run names each model it could not price. A budget is only ever
+charged against a total that missed nothing.
+
 ### Choosing a model
 
 Which model an agent uses is part of the agent, not part of the command line:

@@ -123,6 +123,10 @@ pub fn execute(
                 outputs: finished.outputs,
                 usage: finished.usage,
                 steps: finished.steps,
+                // The guest charged its own budget inside the box; what crossed
+                // back is the outcome, not the ledger. Reporting a spend the
+                // host did not compute would be inventing one.
+                spend: Default::default(),
             };
             crate::run::write_outputs(&report, config)?;
             Ok(super::EXIT_OK)
@@ -418,6 +422,11 @@ pub fn exec() -> Result<u8> {
             // out there where the operator is.
             approval: ApprovalMode::Ask(Box::new(guest.approvals())),
             max_steps: config.max_steps,
+            // No prices inside. The manifest does not cross the boundary — only
+            // the artifact, the inputs and the tool configuration do — so a
+            // contained run reports its cost budget as uncharged rather than
+            // charging it against prices it was not given.
+            pricing: Default::default(),
         },
     );
 

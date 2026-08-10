@@ -37,7 +37,6 @@ to you*.
 | ID | Gap | Class | Closes with |
 |----|-----|-------|-------------|
 | [GAP-001](#gap-001) | A policy's host allowlist is not enforced | Unenforced | an egress proxy in the runner |
-| [GAP-003](#gap-003) | `cost` budgets are never charged | Unenforced | per-model pricing in the runtime |
 | [GAP-005](#gap-005) | No streaming; one call, 16k output ceiling | Refused | a streaming provider interface (RFC) |
 | [GAP-007](#gap-007) | MCP over stdio only | Refused | GAP-013, then a transport |
 | [GAP-008](#gap-008) | `checkpoint` cannot be resumed from | Refused | a resumption model (RFC) |
@@ -105,28 +104,6 @@ language-side half: expressing a scope per call rather than per agent.
 *Recorded in.* [`examples/research-agent/README.md`](../examples/research-agent/README.md),
 [Runtime 0.1 §7](../specs/runtime/v0.1.md),
 [RFC-0004](../rfcs/0004-ingot-containers.md).
-
-### GAP-003
-
-**`cost` budgets are never charged.**
-
-`cost <= 5 usd` parses, is checked for a supported currency, and reaches the IR.
-The interpreter charges steps and tokens; it never charges cost.
-
-*How it shows up.* A run that exceeds its stated cost budget completes normally.
-Step and token budgets do bound it, so this is not unbounded spend — it is an
-unenforced *second* bound.
-
-*Why not yet.* Charging cost means knowing the price of the model actually used,
-which is provider- and time-dependent data the compiler must not embed: a price
-table in an artifact would make it stale the moment it is published.
-
-*What closing it needs.* A price source the provider supplies at run time, plus
-a decision on what to do when a provider cannot price a request.
-[Runtime 0.1 §8](../specs/runtime/v0.1.md) already says a backend that cannot
-price must not pretend to.
-
-*Recorded in.* [Runtime 0.1 §8](../specs/runtime/v0.1.md).
 
 ---
 
@@ -318,10 +295,40 @@ the compiler guarantees a `parallel` body contains no state write, no emission
 and no checkpoint, so iterations cannot observe one another. Only the wall clock
 differs.
 
-*What closing it needs.* Concurrency in the interpreter, and a decision about
-what a provider rate limit does to a fan-out.
+*Nothing here misleads.* [Runtime 0.1 §5.1](../specs/runtime/v0.1.md) already
+says the node marks an opportunity for concurrency rather than an obligation,
+and that conformance asserts the result and never the schedule. This entry is a
+performance gap, which is why it is Degraded rather than Unenforced.
 
-*Recorded in.* [Runtime 0.1 §5.1](../specs/runtime/v0.1.md).
+*What closing it needs — the full price.* This entry used to say "concurrency in
+the interpreter, and a decision about what a provider rate limit does to a
+fan-out". That undersold it. Concurrency in a fan-out makes the order of model
+and tool calls nondeterministic, and three things depend on that order today:
+
+- **Replay matches by position.** `ReplayProvider` and `ReplayToolHost` both take
+  the next recorded row. Concurrent calls arriving in a different order than they
+  were recorded would make `ingot test` flaky, so replay would have to match by
+  digest instead.
+- **The event stream is compared across backends.**
+  `the_event_streams_agree_on_kind_and_order` asserts that the reference
+  interpreter and the Python backend emit the same events in the same order. The
+  Python backend is sequential, so a concurrent reference diverges unless each
+  iteration's events are buffered and spliced back in index order.
+- **`ModelProvider::complete` takes `&mut self`.** Calling it concurrently means
+  making the central backend contract thread-safe — a change to the interface
+  every backend implements, for a wall-clock win.
+
+None of that is impossible; it is a deterministic-concurrency design, and the
+honest version of it keeps every property above. It is simply much larger than
+"concurrency in the interpreter", and it should not be started by someone who
+believes the shorter sentence.
+
+*What must not be done.* Concurrency for live providers and sequential execution
+under replay. It is the cheap version, and it makes an artifact behave one way in
+a test and another in production — the divergence this project exists to refuse.
+
+*Recorded in.* [Runtime 0.1 §5.1](../specs/runtime/v0.1.md),
+`crates/ingot-cli/tests/differential.rs`.
 
 ### GAP-025
 
@@ -472,6 +479,38 @@ remain.
 When a gap closes it moves here with the release that closed it, and its section
 stays where a link can find it. Identifiers are never reused: a link to GAP-007
 must keep meaning what it meant.
+
+### GAP-003
+
+**`cost` budgets are never charged.**
+*Closed in Unreleased (Runtime 0.2).*
+
+The interpreter charges cost alongside steps and tokens, against prices the
+project supplies per model in `[[model.price]]`
+([Runtime 0.2 §3](../specs/runtime/v0.2.md)). Exceeding the budget ends the run.
+
+*Where the prices had to come from.* Not the artifact and not the binary: a price
+is provider- and time-dependent, so either would be stale the moment it was
+published. They live where the API keys and the tool servers already live — the
+project manifest, which is deployment configuration the operator owns.
+
+*What "must not pretend to" turned into.* A budget is enforced only against a
+total that missed nothing. A call the run could not price — no price configured,
+or a price in a currency the budget is not in — leaves the budget **unenforced**,
+and the run names each model and why. `ingot check` says it earlier still
+(`ING5007`) when the project configures no price at all, because learning it
+after the money is spent is not learning it.
+
+*Arithmetic.* Millionths of a currency unit, as integers. No cost calculation
+touches a float, so a total is exact and identical on every platform — the same
+reason [Agent IR](../specs/ir/v0.1.md) stores an amount as a decimal string.
+
+*What is deliberately not done.* Currency conversion. A rate is a second
+time-dependent input, and guessing one would make a budget mean something the
+operator did not write. A price in the wrong currency is reported as unpriceable.
+
+*Recorded in.* [Runtime 0.2 §3](../specs/runtime/v0.2.md),
+[Runtime 0.1 §8](../specs/runtime/v0.1.md).
 
 ### GAP-006
 
