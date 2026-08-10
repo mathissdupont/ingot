@@ -747,11 +747,24 @@ impl<'a> Parser<'a> {
 
         let mut effects = Vec::new();
         while self.at(&TokenKind::Bang) {
+            let start = self.span();
             self.bump();
-            let Some(effect) = self.expect_ident_like("an effect name") else {
+            let Some(name) = self.expect_ident_like("an effect name") else {
                 break;
             };
-            effects.push(effect);
+            // `!network("arxiv.org")` — where this tool goes. Optional, because
+            // an effect without a reach keeps the meaning it has always had.
+            let mut values = Vec::new();
+            let parenthesised = self.at(&TokenKind::LParen);
+            if parenthesised {
+                values = self.parse_effect_reach();
+            }
+            effects.push(EffectDecl {
+                span: start.merge(self.previous_span()),
+                name,
+                values,
+                parenthesised,
+            });
         }
 
         let span = start.merge(self.previous_span());
@@ -1253,6 +1266,44 @@ impl<'a> Parser<'a> {
         let qualifier = Ident::new(text.clone(), self.span());
         self.bump();
         Some(qualifier)
+    }
+
+    /// The parenthesised values of a scoped effect: `("arxiv.org", "github.com")`.
+    ///
+    /// Parenthesised rather than bracketed, so that a tool's declaration does
+    /// not look like a policy rule. They mean different things — one states a
+    /// need, the other grants a permission — and reading alike would invite the
+    /// reader to check only one of them.
+    fn parse_effect_reach(&mut self) -> Vec<StringLit> {
+        let mut values = Vec::new();
+        if !self.expect(TokenKind::LParen) {
+            return values;
+        }
+        while !self.at(&TokenKind::RParen) && !self.at_barrier() {
+            let before = self.position;
+            if let TokenKind::Str(raw) = self.peek().kind.clone() {
+                let span = self.span();
+                self.bump();
+                values.push(self.build_string_literal(&raw, span));
+            } else {
+                let found = self.peek().kind.describe();
+                let span = self.span();
+                self.error(
+                    Diagnostic::error(
+                        codes::EXPECTED_TOKEN,
+                        format!("expected a string literal, found {found}"),
+                    )
+                    .with_primary(span, "an effect's reach is a list of quoted values"),
+                );
+                self.bump();
+            }
+            self.eat(&TokenKind::Comma);
+            if self.position == before {
+                self.bump();
+            }
+        }
+        self.expect(TokenKind::RParen);
+        values
     }
 
     fn parse_string_list(&mut self) -> Vec<StringLit> {

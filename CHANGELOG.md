@@ -8,6 +8,50 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
 
 ## [Unreleased]
 
+**A capability has a reach** (Language 0.2; closes
+[GAP-013](docs/gaps.md#gap-013); narrows [GAP-001](docs/gaps.md#gap-001),
+[GAP-007](docs/gaps.md#gap-007))
+
+- A tool declares where it goes, and the compiler checks it against what the
+  agent granted:
+
+  ```ingot
+  tool web.search(query: string) -> search_result[] !network("arxiv.org")
+
+  policy { network allow ["arxiv.org"] }
+  ```
+
+  Reaching a host the policy does not grant is `ING4009`, which names both the
+  declaration and the grant: the two halves of the mistake are in different
+  places and either one may be the wrong one.
+- **What a policy value became.** Before this, adding a host to
+  `network allow [...]` changed nothing a compiler could see, and removing one
+  changed nothing either. The list was a claim with no reader. It has one now.
+- Both sides state it on purpose. A scope written only in the policy would have
+  left the compiler with one statement and nothing to compare it against;
+  containment needs two. A scope written at the call site was rejected for
+  scattering security decisions through the flow and for making a backend
+  discover mid-run that it cannot honour something.
+- A reach uses the vocabulary a policy of that subject already uses — a host for
+  `network`, a workspace-relative path for the filesystem pair. An effect that
+  names no resource, an empty `!network()`, a wildcard, a URL, or a path that
+  leaves the workspace are all refused (`ING4010`) rather than narrowed: a value
+  that reads like a constraint and is not one is the failure this syntax exists
+  to end.
+- **A declared reach is not advisory.** A policy's value list has always been
+  advisory where nothing enforces it, and Ingot says so. `!network("arxiv.org")`
+  says this tool *must* be bounded to that host, so a run that cannot keep it
+  refuses before starting anything — before a tool server, before a model call,
+  before the cassette is even opened. `--allow-unenforced-scopes` proceeds and
+  names every declaration it is proceeding without.
+- Nothing bounds egress to a host yet (GAP-001), so a declared `network` reach
+  refuses everywhere today. A declared filesystem reach is kept under
+  `--sandbox` and `--contained`, whose mounts come from the policy the compiler
+  proved contains it.
+- Opt-in throughout. An effect without parentheses keeps its meaning, so source
+  written before this compiles unchanged and produces byte-identical IR — no
+  package digest moves and no cassette is invalidated.
+
 **A third protocol: Gemini** (CLI; opens [GAP-033](docs/gaps.md#gap-033))
 
 - `kind = "google"` and `--provider google` reach Google's Generative Language

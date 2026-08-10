@@ -25,6 +25,9 @@ pub struct DevConfig {
     pub events: EventFormat,
     pub yes: bool,
     pub max_steps: u32,
+    /// Mirrors `ingot run --allow-unenforced-scopes`, so the inner loop is not
+    /// a place where the rule quietly differs.
+    pub allow_unenforced_scopes: bool,
     pub color: RenderColor,
 }
 
@@ -133,6 +136,7 @@ fn cycle(target: Target, revision: u64, last_good: &mut Option<u64>, config: &De
             no_tools: false,
             sandbox: false,
             sandbox_allow_unenforced: false,
+            allow_unenforced_scopes: config.allow_unenforced_scopes,
             workspace: match crate::workspace(None, &target) {
                 Ok(workspace) => workspace,
                 Err(error) => {

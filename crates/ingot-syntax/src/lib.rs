@@ -187,8 +187,28 @@ pub struct ToolDecl {
     pub params: Vec<ParamDecl>,
     pub ret: TypeExpr,
     /// Declared effects, written as `!network !filesystem_write`.
-    pub effects: Vec<Ident>,
+    pub effects: Vec<EffectDecl>,
     pub doc: Option<String>,
+    pub span: Span,
+}
+
+/// One declared effect on a tool: `!network`, or `!network("arxiv.org")`.
+///
+/// The parenthesised list is the effect's **reach** — where this tool goes, in
+/// the same vocabulary a policy of that subject uses. It is separate from the
+/// policy's grant on purpose: the tool states what it needs and the agent states
+/// what it permits, so the compiler has two statements to compare rather than
+/// one to take on trust. See [RFC-0014](../../../rfcs/0014-a-capabilitys-reach.md).
+///
+/// `values` is empty for an effect written without parentheses, which declares
+/// no reach and is not the same as declaring an empty one — that is refused.
+#[derive(Debug, Clone)]
+pub struct EffectDecl {
+    pub name: Ident,
+    pub values: Vec<StringLit>,
+    /// Whether a list was written at all, so `!network` and the refused
+    /// `!network()` stay distinguishable after parsing.
+    pub parenthesised: bool,
     pub span: Span,
 }
 

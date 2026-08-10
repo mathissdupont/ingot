@@ -258,6 +258,7 @@ mod tests {
                 name: (*name).to_string(),
                 transport: "mcp".to_string(),
                 effects: Vec::new(),
+                scopes: std::collections::BTreeMap::new(),
                 signature: ToolSignature {
                     params: Vec::new(),
                     result: "text".to_string(),

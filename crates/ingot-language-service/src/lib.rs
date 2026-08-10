@@ -13,9 +13,9 @@ use ingot_compiler::{
 use ingot_diagnostics::{DiagnosticBag, Severity};
 use ingot_source::{SourceFile, SourceMap, Span};
 use ingot_syntax::{
-    AgentDecl, Arg, BudgetLimit, DottedName, Expr, FieldDecl, FlowBlock, FunctionDecl, Ident,
-    InterpolationPath, ModelRequirement, OutputDecl, PathRoot, PolicyAction, PolicyRule, Program,
-    Stmt, StringLit, StringPart, ToolDecl, TypeDecl, TypeExpr, VerifierDecl,
+    AgentDecl, Arg, BudgetLimit, DottedName, EffectDecl, Expr, FieldDecl, FlowBlock, FunctionDecl,
+    Ident, InterpolationPath, ModelRequirement, OutputDecl, PathRoot, PolicyAction, PolicyRule,
+    Program, Stmt, StringLit, StringPart, ToolDecl, TypeDecl, TypeExpr, VerifierDecl,
 };
 use ingot_types::{PolicySubject, MODEL_CAPABILITIES};
 use serde::Serialize;
@@ -1062,7 +1062,11 @@ fn params_text(params: &[FieldDecl]) -> String {
         .join(", ")
 }
 
-fn effects_text(effects: &[Ident]) -> String {
+/// `!network("arxiv.org") !filesystem_read`, for hover and completion detail.
+///
+/// The reach is shown, not summarised: hovering a tool to find out where it
+/// goes and being told only that it goes somewhere is the question unanswered.
+fn effects_text(effects: &[EffectDecl]) -> String {
     if effects.is_empty() {
         String::new()
     } else {
@@ -1070,7 +1074,18 @@ fn effects_text(effects: &[Ident]) -> String {
             " {}",
             effects
                 .iter()
-                .map(|effect| format!("!{}", effect.text))
+                .map(|effect| {
+                    let mut text = format!("!{}", effect.name.text);
+                    if effect.parenthesised {
+                        let values: Vec<String> = effect
+                            .values
+                            .iter()
+                            .map(|value| format!("\"{}\"", value.template()))
+                            .collect();
+                        text.push_str(&format!("({})", values.join(", ")));
+                    }
+                    text
+                })
                 .collect::<Vec<_>>()
                 .join(" ")
         )

@@ -119,7 +119,18 @@ fn print_tool_decl(out: &mut String, decl: &ToolDecl) {
         decl.ret.text()
     );
     for effect in &decl.effects {
-        let _ = write!(out, " !{}", effect.text);
+        let _ = write!(out, " !{}", effect.name.text);
+        // Round-tripped even when empty, because `!network()` is a mistake the
+        // formatter must leave visible rather than tidy into `!network`, which
+        // means something else and compiles.
+        if effect.parenthesised {
+            let values: Vec<String> = effect
+                .values
+                .iter()
+                .map(|value| format!("\"{}\"", value.template()))
+                .collect();
+            let _ = write!(out, "({})", values.join(", "));
+        }
     }
     out.push('\n');
 }

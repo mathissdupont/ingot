@@ -72,6 +72,8 @@ pub const DUPLICATE_POLICY_RULE: &str = "ING4005";
 pub const INVALID_POLICY_ACTION: &str = "ING4006";
 pub const MISSING_POLICY_RULE: &str = "ING4007";
 pub const UNKNOWN_MODEL_CAPABILITY: &str = "ING4008";
+pub const REACH_BEYOND_POLICY: &str = "ING4009";
+pub const INVALID_EFFECT_REACH: &str = "ING4010";
 
 // --- ING5xxx: budgets and static bounds ----------------------------------
 
@@ -169,6 +171,27 @@ pub fn explain(code: &str) -> Option<&'static str> {
              policy rule at all.\n\nBecause Ingot is default-deny, an absent rule \
              is a denial. Add an explicit rule so the intent is visible in the \
              source and in the compiled artifact."
+        }
+        REACH_BEYOND_POLICY => {
+            "A tool declares that it reaches somewhere the agent's policy does \
+             not grant.\n\nA tool says what it needs — `!network(\"arxiv.org\")` \
+             — and the policy says what is permitted. This code means the first \
+             is not inside the second. Two declarations are involved and either \
+             one may be the wrong one: widen the policy if the tool is right, or \
+             use a different tool if the policy is.\n\nA policy that allows an \
+             effect with no value list is unbounded and contains any reach, so \
+             this only fires where the policy actually named something."
+        }
+        INVALID_EFFECT_REACH => {
+            "A tool's declared reach cannot mean what it appears to mean.\n\n\
+             A reach uses the same values a policy of that subject uses: a host \
+             name for `network`, a workspace-relative path for `filesystem_read` \
+             and `filesystem_write`. An effect that names no resource takes no \
+             reach at all, an empty `!network()` describes a tool that does not \
+             need the effect, and a path that is absolute or climbs out of the \
+             workspace would mean different things on two machines.\n\n\
+             Refused rather than narrowed, because a value that reads like a \
+             constraint and is not one is the failure this syntax exists to end."
         }
         APPROVAL_INSERTED => {
             "The policy marks this effect as `require approval`, so the compiler \
@@ -270,6 +293,8 @@ pub const EXPLAINED_CODES: &[&str] = &[
     EMIT_TYPE_MISMATCH,
     DENIED_CAPABILITY,
     MISSING_POLICY_RULE,
+    REACH_BEYOND_POLICY,
+    INVALID_EFFECT_REACH,
     APPROVAL_INSERTED,
     UNBOUNDED_LOOP,
     OUTPUT_NEVER_EMITTED,

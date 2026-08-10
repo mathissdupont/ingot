@@ -446,6 +446,15 @@ struct RunArgs {
     #[arg(long)]
     sandbox_allow_unenforced: bool,
 
+    /// Run even where nothing will keep a reach the artifact declared.
+    ///
+    /// `!network("arxiv.org")` on a tool says that tool must be bounded to that
+    /// host. No arrangement bounds egress yet, so a program that states one
+    /// stops rather than running as if it had been kept. This proceeds anyway,
+    /// and says which declarations are advisory while it does.
+    #[arg(long)]
+    allow_unenforced_scopes: bool,
+
     /// The root the artifact's policy paths are relative to.
     #[arg(long, value_name = "DIR")]
     workspace: Option<PathBuf>,
@@ -496,6 +505,11 @@ struct DevArgs {
     /// must not silently make a model call.
     #[arg(long)]
     run: bool,
+
+    /// Run even where nothing will keep a reach the artifact declared. The same
+    /// flag `ingot run` takes, so the inner loop does not have a looser rule.
+    #[arg(long)]
+    allow_unenforced_scopes: bool,
 
     /// An example input as `name=value`; repeat for each input.
     #[arg(
@@ -1802,6 +1816,7 @@ fn run_run(args: &RunArgs, color: RenderColor) -> Result<u8> {
             no_tools: args.no_tools,
             sandbox: args.sandbox,
             sandbox_allow_unenforced: args.sandbox_allow_unenforced,
+            allow_unenforced_scopes: args.allow_unenforced_scopes,
             workspace: workspace(args.workspace.as_deref(), &target)?,
             models: target.model(),
             contained: args.contained,
@@ -1904,6 +1919,7 @@ fn run_dev(args: &DevArgs, color: RenderColor) -> Result<u8> {
             events: args.events,
             yes: args.yes,
             max_steps: args.max_steps,
+            allow_unenforced_scopes: args.allow_unenforced_scopes,
             color,
         },
     )

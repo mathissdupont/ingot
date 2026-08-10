@@ -58,6 +58,31 @@ impl Effect {
         matches!(self, Effect::ModelAccess)
     }
 
+    /// Whether a tool may declare *where* this effect reaches.
+    ///
+    /// True for the three that name a resource, and they borrow the vocabulary
+    /// a policy of the same subject already uses: a host name for `network`, a
+    /// workspace-relative path for the filesystem pair. The rest name no
+    /// resource, and inventing a value language for them here would be a
+    /// second policy syntax nobody documented.
+    ///
+    /// See [RFC-0014](../../../rfcs/0014-a-capabilitys-reach.md).
+    pub fn takes_reach(self) -> bool {
+        matches!(
+            self,
+            Effect::Network | Effect::FilesystemRead | Effect::FilesystemWrite
+        )
+    }
+
+    /// What one value of this effect's reach is called, for a diagnostic.
+    pub fn reach_noun(self) -> &'static str {
+        match self {
+            Effect::Network => "host",
+            Effect::FilesystemRead | Effect::FilesystemWrite => "path",
+            _ => "value",
+        }
+    }
+
     pub fn all() -> [Effect; 6] {
         [
             Effect::ExternalWrite,

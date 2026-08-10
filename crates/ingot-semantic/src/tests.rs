@@ -720,3 +720,163 @@ agent A(topic: string) -> report<markdown> {
     sorted.sort_unstable();
     assert_eq!(positions, sorted, "diagnostics must be ordered by position");
 }
+
+// --- a capability's reach (RFC-0014) --------------------------------------
+
+/// An agent that calls one scoped tool, so a test varies only the two
+/// declarations the containment check compares.
+fn reaching(effects: &str, policy: &str) -> Analysis {
+    check(&format!(
+        r#"
+tool feed.fetch(url: string) -> string {effects}
+
+agent A(topic: string) -> report<markdown> {{
+  tools {{ mcp feed.fetch }}
+  policy {{ {policy} }}
+  flow {{
+    page = call feed.fetch(topic)
+    emit report = ask<markdown>("done", context: page)
+  }}
+}}
+"#
+    ))
+}
+
+#[test]
+fn a_tool_that_reaches_beyond_the_policy_is_a_compile_error() {
+    // The check the values in a policy never had. Before it, adding a host to
+    // the list changed nothing a compiler could see.
+    let analysis = reaching(
+        r#"!network("arxiv.org", "github.com")"#,
+        r#"network allow ["arxiv.org"]"#,
+    );
+    assert!(
+        codes_of(&analysis).contains(&codes::REACH_BEYOND_POLICY),
+        "{:?}",
+        codes_of(&analysis)
+    );
+    let reported = analysis
+        .diagnostics
+        .iter()
+        .find(|d| d.code == codes::REACH_BEYOND_POLICY)
+        .expect("the containment failure");
+    assert!(reported.message.contains("github.com"), "{reported:?}");
+    assert!(
+        !reported.message.contains("arxiv.org"),
+        "only the ungranted host is the problem: {reported:?}"
+    );
+}
+
+#[test]
+fn a_tool_within_the_policy_compiles() {
+    let analysis = reaching(
+        r#"!network("arxiv.org")"#,
+        r#"network allow ["arxiv.org", "github.com"]"#,
+    );
+    assert!(
+        !codes_of(&analysis).contains(&codes::REACH_BEYOND_POLICY),
+        "{:?}",
+        codes_of(&analysis)
+    );
+}
+
+#[test]
+fn an_unbounded_grant_contains_any_reach() {
+    // A policy that names no value is unbounded, which is what keeps every
+    // artifact written before RFC-0014 compiling.
+    let analysis = reaching(r#"!network("anywhere.example")"#, "network allow");
+    assert!(
+        !codes_of(&analysis).contains(&codes::REACH_BEYOND_POLICY),
+        "{:?}",
+        codes_of(&analysis)
+    );
+}
+
+#[test]
+fn a_denied_effect_is_reported_once_rather_than_twice() {
+    // Saying the effect is denied *and* that its reach is ungranted buries the
+    // answer under the elaboration.
+    let analysis = reaching(r#"!network("arxiv.org")"#, "network deny");
+    assert!(codes_of(&analysis).contains(&codes::DENIED_CAPABILITY));
+    assert!(!codes_of(&analysis).contains(&codes::REACH_BEYOND_POLICY));
+}
+
+#[test]
+fn an_empty_reach_is_refused() {
+    let analysis = reaching("!network()", r#"network allow ["arxiv.org"]"#);
+    let reported = analysis
+        .diagnostics
+        .iter()
+        .find(|d| d.code == codes::INVALID_EFFECT_REACH)
+        .expect("an empty reach must be refused");
+    assert!(reported.message.contains("empty reach"), "{reported:?}");
+}
+
+#[test]
+fn an_effect_with_no_value_vocabulary_takes_no_reach() {
+    let analysis = check(
+        r#"
+tool vault.read(name: string) -> string !secret_access("PROD_TOKEN")
+
+agent A(topic: string) -> report<markdown> {
+  tools { mcp vault.read }
+  policy { secret_access allow }
+  flow {
+    value = call vault.read(topic)
+    emit report = ask<markdown>("done", context: value)
+  }
+}
+"#,
+    );
+    let reported = analysis
+        .diagnostics
+        .iter()
+        .find(|d| d.code == codes::INVALID_EFFECT_REACH)
+        .expect("secret_access names no resource");
+    assert!(reported.message.contains("no resource"), "{reported:?}");
+}
+
+#[test]
+fn a_reach_path_may_not_leave_the_workspace() {
+    // A path that means something different on two machines would make
+    // containment a check against a moving target.
+    for escape in ["/etc", "../secrets", "src/../.."] {
+        let analysis = reaching(
+            &format!("!filesystem_read({escape:?})"),
+            r#"filesystem_read allow ["src"]"#,
+        );
+        assert!(
+            codes_of(&analysis).contains(&codes::INVALID_EFFECT_REACH),
+            "`{escape}` must be refused: {:?}",
+            codes_of(&analysis)
+        );
+    }
+}
+
+#[test]
+fn a_host_reach_is_a_host_rather_than_a_url_or_a_pattern() {
+    for bad in ["*.arxiv.org", "https://arxiv.org/abs"] {
+        let analysis = reaching(
+            &format!("!network({bad:?})"),
+            r#"network allow ["arxiv.org"]"#,
+        );
+        assert!(
+            codes_of(&analysis).contains(&codes::INVALID_EFFECT_REACH),
+            "`{bad}` must be refused: {:?}",
+            codes_of(&analysis)
+        );
+    }
+}
+
+#[test]
+fn a_reach_is_sorted_and_deduplicated_at_the_declaration() {
+    // So the canonical IR encoding is a property of the document rather than
+    // of whoever wrote the declaration.
+    let analysis = reaching(
+        r#"!network("github.com", "arxiv.org", "github.com")"#,
+        r#"network allow ["arxiv.org", "github.com"]"#,
+    );
+    let tool = analysis.tools.get("feed.fetch").expect("the tool");
+    let values: Vec<&str> = tool.reach.iter().map(|r| r.value.as_str()).collect();
+    assert_eq!(values, vec!["arxiv.org", "github.com"]);
+}

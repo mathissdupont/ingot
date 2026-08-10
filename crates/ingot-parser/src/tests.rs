@@ -109,7 +109,7 @@ fn records_declared_tool_effects() {
     assert_eq!(tool.name.text(), "web.search");
     assert_eq!(tool.ret.text(), "search_result[]");
     assert_eq!(tool.effects.len(), 1);
-    assert_eq!(tool.effects[0].text, "network");
+    assert_eq!(tool.effects[0].name.text, "network");
 }
 
 #[test]

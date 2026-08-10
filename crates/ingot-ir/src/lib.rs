@@ -139,6 +139,18 @@ pub struct ToolBinding {
     pub name: String,
     pub transport: String,
     pub effects: Vec<String>,
+    /// Where this tool goes, per effect, as the source declared it.
+    ///
+    /// Sorted and deduplicated by the compiler, and omitted entirely when the
+    /// tool declared no reach — so an artifact that uses none encodes exactly
+    /// as it did before [RFC-0014], and no package digest moves.
+    ///
+    /// Every key here is also in `effects`. Kept separate rather than folded
+    /// into that list because `effects` is a set a backend already walks to
+    /// check the policy, and an entry that is sometimes a string and sometimes
+    /// an object is the shape that makes a second implementation guess.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub scopes: BTreeMap<String, Vec<String>>,
     pub signature: ToolSignature,
 }
 

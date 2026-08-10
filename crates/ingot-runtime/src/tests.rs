@@ -131,6 +131,7 @@ fn searcher(decision: Option<Decision>) -> AgentIr {
         reference: "mcp:web.search".into(),
         name: "web.search".into(),
         transport: "mcp".into(),
+        scopes: BTreeMap::new(),
         effects: vec!["network".into()],
         signature: ToolSignature {
             params: vec![FieldType {
@@ -680,6 +681,7 @@ fn gated() -> AgentIr {
         reference: "mcp:mailer.send".into(),
         name: "mailer.send".into(),
         transport: "mcp".into(),
+        scopes: BTreeMap::new(),
         effects: vec!["external_write".into()],
         signature: ToolSignature {
             params: Vec::new(),
@@ -793,6 +795,7 @@ fn gated_after_a_sub_agent() -> (AgentIr, crate::AgentRegistry) {
         reference: "mcp:mailer.send".into(),
         name: "mailer.send".into(),
         transport: "mcp".into(),
+        scopes: BTreeMap::new(),
         effects: vec!["external_write".into()],
         signature: ToolSignature {
             params: Vec::new(),

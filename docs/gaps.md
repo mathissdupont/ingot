@@ -37,13 +37,12 @@ to you*.
 | ID | Gap | Class | Closes with |
 |----|-----|-------|-------------|
 | [GAP-001](#gap-001) | A policy's host allowlist is not enforced | Unenforced | an egress proxy in the runner |
-| [GAP-007](#gap-007) | MCP over stdio only | Refused | GAP-013, then a transport |
+| [GAP-007](#gap-007) | MCP over stdio only | Refused | a transport, now that GAP-013 is closed |
 | [GAP-008](#gap-008) | `checkpoint` cannot be resumed from | Refused | a resumption model (RFC) |
 | [GAP-009](#gap-009) | MCP prompts, resources and sampling unsupported | Refused | language support for each |
 | [GAP-010](#gap-010) | `parallel` executes sequentially | Degraded | a scheduler in the interpreter |
 | [GAP-011](#gap-011) | No package semantics beyond project-local imports | Absent | a package model (RFC) |
 | [GAP-012](#gap-012) | No generics | Absent | evidence, then an RFC |
-| [GAP-013](#gap-013) | A capability cannot be scoped to an endpoint or a path | Absent | a policy subject for resources (RFC) |
 | [GAP-014](#gap-014) | No persistent memory or state migration | Absent | a memory model (RFC) |
 | [GAP-017](#gap-017) | No conformance suite or backend author guide | Absent | M8 |
 | [GAP-020](#gap-020) | The boundary needs Linux containers | Refused | a second expression of the boundary |
@@ -97,10 +96,18 @@ piece of infrastructure with its own failure modes — DNS rebinding, IP-literal
 requests, TLS SNI versus Host header — and doing it badly would be worse than
 not doing it, because a sandbox that is trusted and wrong is the bad case.
 
+*Narrowed again 2026-08-10.* The language-side half is done. A tool now declares
+where it goes — `!network("arxiv.org")` — the compiler checks that against the
+grant, and the artifact carries it ([GAP-013], [RFC-0014](../rfcs/0014-a-capabilitys-reach.md)).
+Two things follow. A runner that gains an egress proxy now has something precise
+to enforce, per call rather than per agent. And a program that states a reach no
+longer runs as though it had been kept: it refuses, and takes
+`--allow-unenforced-scopes` to proceed. What is left here is only the
+enforcement, and it can no longer be reached by accident.
+
 *What closing it needs.* An egress proxy in the runner, and a conformance test
 that a backend which cannot honour a scope **refuses** rather than ignoring it,
-per [Runtime 0.1 §2](../specs/runtime/v0.1.md). [GAP-013] is the separate,
-language-side half: expressing a scope per call rather than per agent.
+per [Runtime 0.1 §2](../specs/runtime/v0.1.md).
 
 *Recorded in.* [`examples/research-agent/README.md`](../examples/research-agent/README.md),
 [Runtime 0.1 §7](../specs/runtime/v0.1.md),
@@ -122,9 +129,15 @@ an organisation may already run — cannot be used. The workaround is a local
 proxy process, which is a real cost.
 
 *Why not yet.* Reaching a server over a network is itself a `network` effect,
-and the language cannot yet scope that to an endpoint ([GAP-013]). The honest
+and until [GAP-013] the language could not scope that to an endpoint. The honest
 alternatives were to make every HTTP tool call require blanket `network allow`,
 which makes the effect useless, or to design the scoping properly first.
+
+*Unblocked 2026-08-10.* GAP-013 is closed: a tool can now declare the host it
+reaches and the compiler checks it against the grant. What remains here is the
+transport itself, and one decision it forces — whether the endpoint a remote
+server lives at is part of the `[[mcp.server]]` declaration, the tool's reach,
+or both.
 
 *Recorded in.* [ADR-0005](adr/0005-mcp-over-stdio-only.md),
 [MCP binding 0.1 §1](../specs/tools/mcp-v0.1.md).
@@ -502,21 +515,6 @@ them — and then an RFC. Not the other way round.
 *Recorded in.* [Language 0.2](../specs/language/v0.2.md),
 [RFC-0011](../rfcs/0011-language-v0.2-generics-decision.md).
 
-### GAP-013
-
-**A capability cannot be scoped to an endpoint or a path at the call site.**
-
-A policy grants `network`; it cannot grant "network to this host, for this
-tool". The `values` list looks like it does that, and does not ([GAP-001]).
-
-This is the root cause of [GAP-001] and [GAP-007], and it is the most valuable
-language change on this list: it is what would let the effect system make a
-statement about *reach* rather than only about *kind*.
-
-*What closing it needs.* An RFC. At minimum: what a scope is, whether it
-attaches to the policy or the tool declaration, how a backend that cannot
-enforce it must refuse, and how it composes with a sub-agent's own policy.
-
 ### GAP-030
 
 **A verifier cannot be executed at all.**
@@ -574,6 +572,55 @@ remain.
 When a gap closes it moves here with the release that closed it, and its section
 stays where a link can find it. Identifiers are never reused: a link to GAP-007
 must keep meaning what it meant.
+
+### GAP-013
+
+**A capability cannot be scoped to an endpoint or a path at the call site.**
+*Closed in Unreleased (Language 0.2 §9).*
+
+A tool now declares where it goes, and the compiler checks that against what the
+agent granted:
+
+```ingot
+tool web.search(query: string) -> search_result[] !network("arxiv.org")
+
+policy { network allow ["arxiv.org", "github.com"] }
+```
+
+Reaching a host the policy does not grant is `ING4009`, naming both the
+declaration and the grant — the two halves of the mistake are in different
+places and either one may be the wrong one
+([Language 0.2 §9](../specs/language/v0.2.md),
+[RFC-0014](../rfcs/0014-a-capabilitys-reach.md)).
+
+*Why both sides state it.* This entry called scoping "the most valuable language
+change on this list", and the reason was that the effect system could speak
+about kind and not about reach. A scope written only in the policy would not
+have fixed that: the compiler would still have had one statement and nothing to
+compare it against. Two statements — the tool says what it needs, the agent says
+what it permits — is what makes containment checkable. The alternative of
+scoping at the call site was rejected for scattering security decisions through
+the flow, and for making a backend discover mid-run that it cannot honour
+something.
+
+*What a policy value became.* Before this, adding a host to `network allow [...]`
+changed nothing a compiler could see, and removing one changed nothing either.
+The list was a claim with no reader. It has one now.
+
+*And the run refuses.* A declared reach is a stronger statement than a policy
+value, so an arrangement that cannot keep it stops before starting anything,
+rather than running as though it had. `--allow-unenforced-scopes` proceeds and
+names every declaration it is proceeding without. This is opt-in: an artifact
+written before this change declares no reach and is unaffected, and produces
+byte-identical IR.
+
+*What it did not do.* Nothing bounds egress to a host yet — that is the
+enforcement half, [GAP-001](#gap-001), which this narrows rather than closes. No
+wildcards, no ports, no URL paths: a host is still matched exactly.
+
+*Recorded in.* [Language 0.2 §9](../specs/language/v0.2.md),
+[RFC-0014](../rfcs/0014-a-capabilitys-reach.md),
+[GAP-001](#gap-001), [GAP-007](#gap-007).
 
 ### GAP-005
 

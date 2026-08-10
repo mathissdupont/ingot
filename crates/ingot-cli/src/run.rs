@@ -81,6 +81,12 @@ pub struct RunConfig {
     pub sandbox: bool,
     /// Proceed even where the boundary cannot honour a policy rule.
     pub sandbox_allow_unenforced: bool,
+    /// Proceed even where nothing will keep a reach the artifact declared.
+    ///
+    /// Separate from `sandbox_allow_unenforced`, which is about a boundary
+    /// falling short of a policy. This one is about the artifact's own stronger
+    /// statement, and it applies with or without a boundary.
+    pub allow_unenforced_scopes: bool,
     /// The root policy paths are relative to.
     pub workspace: PathBuf,
     /// Model services declared in the manifest, beyond the built-in ones.
@@ -171,9 +177,95 @@ pub fn build_model_provider(selection: &ProviderSelection) -> Result<Box<dyn Mod
     }
 }
 
+/// Effects this arrangement can actually bound to named values.
+///
+/// A boundary derives its mounts from the policy, and the compiler has already
+/// checked that a tool's declared paths are inside it — so under a boundary, a
+/// declared path reach is kept. Egress is bounded by nothing anywhere yet, so
+/// `network` is on no list ([GAP-001](../../../docs/gaps.md#gap-001)). A run
+/// with no boundary at all keeps nothing, and says so rather than implying
+/// otherwise.
+fn boundable(config: &RunConfig) -> &'static [&'static str] {
+    if config.sandbox || config.containment().is_some() {
+        &["filesystem_read", "filesystem_write"]
+    } else {
+        &[]
+    }
+}
+
+/// Refuse before starting when the artifact declares a reach nothing will keep.
+///
+/// A policy's value list has always been advisory where nothing enforces it,
+/// and Ingot says so. `!network("arxiv.org")` is not advisory: it states that
+/// this tool must be bounded to that host. Running it under something that
+/// cannot do that, without being asked, would make the strongest statement in
+/// the language the least reliable one.
+///
+/// Opt-in, so nothing written before [RFC-0014](../../../rfcs/0014-a-capabilitys-reach.md)
+/// changes: an artifact that declares no reach reaches this function and leaves
+/// immediately.
+fn check_declared_reach(
+    ir: &ingot_ir::AgentIr,
+    registry: &AgentRegistry,
+    config: &RunConfig,
+) -> Result<()> {
+    let boundable = boundable(config);
+    let mut unkept: Vec<String> = Vec::new();
+    let mut any_network = false;
+
+    for agent in std::iter::once(ir).chain(registry.values()) {
+        for tool in &agent.tools {
+            for (effect, values) in &tool.scopes {
+                if boundable.contains(&effect.as_str()) {
+                    continue;
+                }
+                any_network |= effect == "network";
+                unkept.push(format!(
+                    "  `{}` declares {effect}({})\n    in agent `{}`",
+                    tool.name,
+                    values
+                        .iter()
+                        .map(|value| format!("{value:?}"))
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    agent.agent
+                ));
+            }
+        }
+    }
+    unkept.sort();
+    unkept.dedup();
+    if unkept.is_empty() {
+        return Ok(());
+    }
+
+    if !config.allow_unenforced_scopes {
+        // Two different situations, and pointing at the wrong remedy is worse
+        // than pointing at none: a path reach is kept by a boundary that exists
+        // today, and a host reach is kept by nothing anywhere.
+        let advice = if any_network {
+            "bounding egress to a host needs a proxy no arrangement has yet (GAP-001)"
+        } else {
+            "this run has no boundary, so nothing bounds a tool to anything; \
+             run with --sandbox"
+        };
+        bail!(
+            "this program states where its tools may reach, and this run cannot keep it:\n{}\n\n  \
+             {advice}\n  \
+             pass --allow-unenforced-scopes to proceed knowing the declaration is advisory here",
+            unkept.join("\n")
+        );
+    }
+    for note in &unkept {
+        eprintln!("warning: proceeding with a reach nothing enforces\n{note}");
+    }
+    Ok(())
+}
+
 /// Compile, execute, and write the artifacts.
 pub fn execute(compilation: &Compilation, config: &RunConfig) -> Result<u8> {
     let (ir, registry) = select_agent(compilation, config.agent.as_deref())?;
+    check_declared_reach(&ir, &registry, config)?;
 
     let inputs = parse_inputs(&config.inputs)?;
     let mut approval = approval_mode(config);

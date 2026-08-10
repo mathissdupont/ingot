@@ -52,7 +52,25 @@ pub struct ToolInfo {
     pub params: Vec<Param>,
     pub result: Ty,
     pub effects: EffectSet,
+    /// Where this tool goes, as it declared it. Empty when it declared nothing,
+    /// which is not the same as reaching nothing.
+    pub reach: Vec<DeclaredReach>,
     pub doc: Option<String>,
+    pub span: Span,
+}
+
+/// One value of a tool's declared reach: `!network("arxiv.org")`.
+///
+/// Flat rather than a map from effect to values, because every use is either a
+/// scan for containment or a sort into the IR, and both read better over a
+/// list. The span is the value's own, so a diagnostic can underline the host
+/// that is not granted rather than the whole declaration.
+///
+/// See [RFC-0014](../../rfcs/0014-a-capabilitys-reach.md).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeclaredReach {
+    pub effect: Effect,
+    pub value: String,
     pub span: Span,
 }
 

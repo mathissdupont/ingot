@@ -170,6 +170,16 @@ fn lower_tools(analysis: &Analysis, agent: &AgentInfo) -> Vec<ToolBinding> {
                 name: grant.tool.clone(),
                 transport: grant.transport.clone(),
                 effects: tool.effects.names(),
+                scopes: {
+                    let mut scopes: BTreeMap<String, Vec<String>> = BTreeMap::new();
+                    for declared in &tool.reach {
+                        scopes
+                            .entry(declared.effect.as_str().to_string())
+                            .or_default()
+                            .push(declared.value.clone());
+                    }
+                    scopes
+                },
                 signature: ToolSignature {
                     params: tool
                         .params

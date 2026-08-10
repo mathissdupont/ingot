@@ -273,19 +273,23 @@ impl<'a> Checker<'a> {
             let params = self.resolve_params(&decl.params);
             let result = self.resolve_type(&decl.ret);
             let mut effects = EffectSet::new();
+            let mut reach = Vec::new();
             for effect in &decl.effects {
-                match Effect::from_name(&effect.text) {
+                match Effect::from_name(&effect.name.text) {
                     Some(Effect::ModelAccess) => {
                         self.error(
                             Diagnostic::error(
                                 codes::UNKNOWN_EFFECT,
                                 "`model_access` cannot be declared on a tool",
                             )
-                            .with_primary(effect.span, "implicit on `ask`, never on a tool")
+                            .with_primary(effect.name.span, "implicit on `ask`, never on a tool")
                             .with_help("remove this effect"),
                         );
                     }
-                    Some(resolved) => effects.insert(resolved),
+                    Some(resolved) => {
+                        effects.insert(resolved);
+                        self.collect_reach(resolved, effect, &mut reach);
+                    }
                     None => {
                         let known: Vec<String> = Effect::all()
                             .iter()
@@ -294,11 +298,11 @@ impl<'a> Checker<'a> {
                             .collect();
                         let mut diagnostic = Diagnostic::error(
                             codes::UNKNOWN_EFFECT,
-                            format!("unknown effect `{}`", effect.text),
+                            format!("unknown effect `{}`", effect.name.text),
                         )
-                        .with_primary(effect.span, "not a declarable effect")
+                        .with_primary(effect.name.span, "not a declarable effect")
                         .with_note(format!("declarable effects: {}", known.join(", ")));
-                        if let Some(suggestion) = closest_match(&effect.text, &known) {
+                        if let Some(suggestion) = closest_match(&effect.name.text, &known) {
                             diagnostic =
                                 diagnostic.with_help(format!("did you mean `{suggestion}`?"));
                         }
@@ -306,6 +310,14 @@ impl<'a> Checker<'a> {
                     }
                 }
             }
+            // Sorted and deduplicated here rather than at every use, so that
+            // the canonical IR encoding is a property of the document instead
+            // of a property of whoever wrote the declaration.
+            reach.sort_by(|left, right| {
+                (left.effect.as_str(), &left.value).cmp(&(right.effect.as_str(), &right.value))
+            });
+            reach.dedup_by(|left, right| left.effect == right.effect && left.value == right.value);
+
             self.tools.insert(
                 name.clone(),
                 ToolInfo {
@@ -313,10 +325,77 @@ impl<'a> Checker<'a> {
                     params,
                     result,
                     effects,
+                    reach,
                     doc: decl.doc.clone(),
                     span: decl.name.span,
                 },
             );
+        }
+    }
+
+    /// Validate one effect's declared reach and collect its values.
+    ///
+    /// Everything refused here is refused because the alternative is a value
+    /// that reads like a constraint and is not one.
+    fn collect_reach(
+        &mut self,
+        effect: Effect,
+        decl: &ingot_syntax::EffectDecl,
+        reach: &mut Vec<DeclaredReach>,
+    ) {
+        if !decl.parenthesised {
+            return;
+        }
+        if !effect.takes_reach() {
+            self.error(
+                Diagnostic::error(
+                    codes::INVALID_EFFECT_REACH,
+                    format!("`{effect}` names no resource, so it takes no reach"),
+                )
+                .with_primary(decl.span, "remove the parentheses")
+                .with_note(
+                    "only `network`, `filesystem_read` and `filesystem_write` reach somewhere \
+                     a policy can name",
+                ),
+            );
+            return;
+        }
+        if decl.values.is_empty() {
+            self.error(
+                Diagnostic::error(
+                    codes::INVALID_EFFECT_REACH,
+                    format!("`{effect}()` declares an empty reach"),
+                )
+                .with_primary(decl.span, "reaches nothing")
+                .with_note("a tool that reaches nothing does not need the effect")
+                .with_help(format!(
+                    "list what it reaches, or drop `!{effect}` from the declaration"
+                )),
+            );
+            return;
+        }
+
+        for literal in &decl.values {
+            let value = literal.template();
+            if let Some(reason) = invalid_reach_value(effect, &value) {
+                self.error(
+                    Diagnostic::error(
+                        codes::INVALID_EFFECT_REACH,
+                        format!("`{value}` is not a usable {}", effect.reach_noun()),
+                    )
+                    .with_primary(literal.span, reason)
+                    .with_note(
+                        "a reach uses the same values a policy of that subject does; see \
+                         Language 0.1 §7.1",
+                    ),
+                );
+                continue;
+            }
+            reach.push(DeclaredReach {
+                effect,
+                value,
+                span: literal.span,
+            });
         }
     }
 
@@ -2106,6 +2185,7 @@ impl<'a> Checker<'a> {
                 );
             }
             self.check_effects_against_policy(&tool.effects, &name, span, policy);
+            self.check_reach_against_policy(&tool, policy);
             let arg_order =
                 self.match_arguments(&tool.params, args, &arg_types, span, &tool.name, "tool");
             self.calls.insert(
@@ -2220,6 +2300,69 @@ impl<'a> Checker<'a> {
                     );
                 }
             }
+        }
+    }
+
+    /// Containment: what a tool reaches must be inside what the agent granted.
+    ///
+    /// This is the check the values in a policy never had. Before it, adding a
+    /// host to `network allow [...]` changed nothing a compiler could see, and
+    /// removing one changed nothing either — the list was a claim with no
+    /// reader. It has one now.
+    ///
+    /// A grant with no values is unbounded and contains everything, which is
+    /// what keeps every artifact written before [RFC-0014] compiling. A tool
+    /// that declares no reach is not checked: the policy still bounds it
+    /// wherever anything bounds anything, and what is missing is only this
+    /// earlier, cheaper answer.
+    fn check_reach_against_policy(
+        &mut self,
+        tool: &ToolInfo,
+        policy: &BTreeMap<PolicySubject, PolicyRuleInfo>,
+    ) {
+        for declared in &tool.reach {
+            let Some(subject) = PolicySubject::for_effect(declared.effect) else {
+                continue;
+            };
+            let Some(rule) = policy.get(&subject) else {
+                // No rule at all is already ING4007 on the effect kind. Saying
+                // it twice would bury the answer under the elaboration.
+                continue;
+            };
+            if rule.decision == PolicyDecision::Deny {
+                continue; // Already ING4001.
+            }
+            if rule.values.is_empty() {
+                continue; // An unbounded grant contains any reach.
+            }
+            if rule.values.contains(&declared.value) {
+                continue;
+            }
+
+            let noun = declared.effect.reach_noun();
+            self.error(
+                Diagnostic::error(
+                    codes::REACH_BEYOND_POLICY,
+                    format!(
+                        "`{}` reaches the {noun} `{}`, which this agent's policy does not grant",
+                        tool.name, declared.value
+                    ),
+                )
+                .with_primary(declared.span, format!("declared {noun}"))
+                .with_secondary(rule.span, format!("`{subject}` is granted here"))
+                .with_note(format!(
+                    "granted: {}",
+                    rule.values
+                        .iter()
+                        .map(|value| format!("`{value}`"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ))
+                .with_help(format!(
+                    "add \"{}\" to `{subject} allow [...]`, or call a tool that does not need it",
+                    declared.value
+                )),
+            );
         }
     }
 
@@ -2626,6 +2769,39 @@ fn edit_distance(a: &str, b: &str) -> usize {
         std::mem::swap(&mut previous, &mut current);
     }
     previous[b.len()]
+}
+
+/// Why a declared reach value cannot be used, or `None` if it can.
+///
+/// The rules are [Language 0.1 §7.1](../../../specs/language/v0.1.md)'s, applied
+/// to the other side of the comparison: a value that means something different
+/// on two machines would make containment a check against a moving target.
+fn invalid_reach_value(effect: Effect, value: &str) -> Option<&'static str> {
+    if value.trim().is_empty() {
+        return Some("a reach value may not be empty");
+    }
+    match effect {
+        Effect::FilesystemRead | Effect::FilesystemWrite => {
+            if value.starts_with('/') || value.starts_with('\\') || value.contains(':') {
+                return Some("a path is relative to the workspace and may not be absolute");
+            }
+            if value.split(['/', '\\']).any(|segment| segment == "..") {
+                return Some("a path may not climb out of the workspace with `..`");
+            }
+            None
+        }
+        Effect::Network => {
+            if value.contains('*') {
+                return Some("a host is matched exactly; there are no wildcards");
+            }
+            if value.contains('/') || value.contains(' ') {
+                return Some("a host is a host name, not a URL");
+            }
+            None
+        }
+        // Refused earlier, by `takes_reach`.
+        _ => None,
+    }
 }
 
 #[cfg(test)]
