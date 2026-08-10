@@ -8,6 +8,23 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.4.0-rc.2] — 2026-08-09
+
+**Fixed: the first candidate produced no archives.** `x86_64-apple-darwin`
+asked for the `macos-13` runner image, which GitHub has retired. A job asking
+for a retired image does not fail — it queues indefinitely — so rc.1 built
+Linux, Windows and Apple silicon and then waited for a runner that was never
+coming. The Intel binary is now cross-compiled from Apple silicon and still
+executed before it ships, which is the property that job exists to hold.
+
+- Language version: **0.2** (unchanged)
+- Agent IR version: **0.2** (unchanged)
+- Runtime version: **0.2** (cassettes now record tool calls)
+- Ingot Package version: **0.1** (unchanged)
+- CLI version: **0.4.0-rc.2**
+
 **A tool-using agent can be tested offline** (cassette 0.2;
 closes [GAP-006](docs/gaps.md#gap-006))
 
@@ -33,10 +50,10 @@ closes [GAP-006](docs/gaps.md#gap-006))
 
 ## [0.4.0-rc.1] — 2026-08-09
 
-**The first tagged release.** The version headings below it record development
-milestones that were never published: there was no tag, no GitHub Release and no
-prebuilt binary until this one, which is why it is a release candidate — the
-release machinery had never run.
+**The first tagged release, and it published nothing.** The version headings
+below it record development milestones that were never tagged; this one was
+tagged and then queued forever on a retired runner image, so no archive came out
+of it either. Fixed in 0.4.0-rc.2 — which is what a candidate is for.
 
 - Language version: **0.2** (imports, optionals and unions, pure helper functions)
 - Agent IR version: **0.2** (portable node source spans)
@@ -745,5 +762,6 @@ Backends, packaging and the language server are not part of this release.
 - `Ingot` is a working name. Trademark, domain and registry clearance has not
   been carried out and requires legal review before any public release.
 
-[Unreleased]: https://github.com/mathissdupont/ingot/compare/v0.4.0-rc.1...HEAD
+[Unreleased]: https://github.com/mathissdupont/ingot/compare/v0.4.0-rc.2...HEAD
+[0.4.0-rc.2]: https://github.com/mathissdupont/ingot/compare/v0.4.0-rc.1...v0.4.0-rc.2
 [0.4.0-rc.1]: https://github.com/mathissdupont/ingot/releases/tag/v0.4.0-rc.1

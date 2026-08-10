@@ -441,7 +441,7 @@ with installing a Rust toolchain, which is a large first step for someone
 deciding whether the idea is worth ten minutes.
 
 *What closing it needs.* One command —
-`git tag v0.4.0-rc.1 && git push origin v0.4.0-rc.1`. The machinery is in place:
+`git tag v0.4.0-rc.2 && git push origin v0.4.0-rc.2`. The machinery is in place:
 [`.github/workflows/release.yml`](../.github/workflows/release.yml) builds
 `ingot` and `ingot-mcp-fs` for Linux, macOS on both architectures, and Windows;
 refuses a tag that disagrees with the workspace version; runs each archived

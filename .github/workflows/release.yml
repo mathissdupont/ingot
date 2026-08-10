@@ -2,7 +2,7 @@ name: Release
 
 # Cutting a release is one command:
 #
-#     git tag v0.4.0-rc.1 && git push origin v0.4.0-rc.1
+#     git tag v0.4.0-rc.2 && git push origin v0.4.0-rc.2
 #
 # Everything below is what happens next. `workflow_dispatch` builds the same
 # archives without publishing anything, so the machinery can be exercised
