@@ -578,6 +578,65 @@ fn shell_words(line: &str) -> Vec<String> {
 }
 
 #[test]
+fn every_ingot_snippet_in_the_guide_compiles() {
+    // A guide is a promise about what the language does. The specs are checked
+    // by the compiler's own tests; prose is not checked by anything unless
+    // something like this exists, and prose is what a newcomer reads first.
+    let guide = repo_root().join("docs/guide");
+    let mut checked = 0usize;
+
+    let entries = std::fs::read_dir(&guide).expect("docs/guide must exist");
+    for entry in entries.filter_map(Result::ok) {
+        let path = entry.path();
+        if path.extension().map(|ext| ext != "md").unwrap_or(true) {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path).expect("a readable guide page");
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+
+        for (index, snippet) in fenced_blocks(&text, "ingot").into_iter().enumerate() {
+            let dir = TempDir::new(&format!("guide-{}-{index}", name.replace('.', "-")));
+            let source = dir.path().join("main.ing");
+            std::fs::write(&source, &snippet).expect("writing the snippet");
+
+            let output = run(&["check", &source.display().to_string()]);
+            assert_eq!(
+                code(&output),
+                EXIT_OK,
+                "{name}: ```ingot block {index} does not compile:\n\
+                 ----- snippet -----\n{snippet}\n----- diagnostics -----\n{}",
+                stderr(&output)
+            );
+            checked += 1;
+        }
+    }
+
+    // A guide whose snippets all vanished would pass this test silently.
+    assert!(checked >= 8, "only {checked} snippet(s) were checked");
+}
+
+/// Every fenced block in `text` tagged with `language`.
+fn fenced_blocks(text: &str, language: &str) -> Vec<String> {
+    let mut blocks = Vec::new();
+    let mut current: Option<String> = None;
+    for line in text.lines() {
+        match (&mut current, line.trim_end()) {
+            (Some(block), "```") => {
+                blocks.push(std::mem::take(block));
+                current = None;
+            }
+            (Some(block), line) => {
+                block.push_str(line);
+                block.push('\n');
+            }
+            (None, fence) if fence == format!("```{language}") => current = Some(String::new()),
+            (None, _) => {}
+        }
+    }
+    blocks
+}
+
+#[test]
 fn model_assistance_leaves_a_project_that_works_without_the_model() {
     let dir = TempDir::new("new-offline-project");
     let project = dir.path().join("audience-brief");

@@ -497,7 +497,7 @@ must keep meaning what it meant.
 ### GAP-025
 
 **The product loop is a sequence of commands with no single surface.**
-*Closed in Unreleased.*
+*Closed in 0.4.0.*
 
 `ingot studio` serves one page over the reports the other commands print:
 projects, a project's diagnostics, readiness, boundary and agents, its run
@@ -544,7 +544,7 @@ solving it properly is the canvas's problem, not this one's.
 ### GAP-001
 
 **A policy's host allowlist is not enforced.**
-*Closed in Unreleased.*
+*Closed in 0.4.0.*
 
 `network allow ["arxiv.org"]` now bounds a contained tool server to that host.
 A request to anywhere else is refused, from inside the box, and there is a
@@ -592,7 +592,7 @@ in the Unenforced class. That is the class that could mislead, and it is empty.
 ### GAP-013
 
 **A capability cannot be scoped to an endpoint or a path at the call site.**
-*Closed in Unreleased (Language 0.2 §9).*
+*Closed in 0.4.0 (Language 0.2 §9).*
 
 A tool now declares where it goes, and the compiler checks that against what the
 agent granted:
@@ -641,7 +641,7 @@ wildcards, no ports, no URL paths: a host is still matched exactly.
 ### GAP-005
 
 **No streaming; one call, and a 16k output ceiling.**
-*Closed in Unreleased (Runtime 0.3).*
+*Closed in 0.4.0 (Runtime 0.3).*
 
 A provider may now deliver an answer as it is produced, and `ingot run` shows
 the text as it arrives. A streamed call may ask for up to 64,000 output tokens
@@ -717,7 +717,7 @@ format may change before 1.0, and the archives say so.
 ### GAP-003
 
 **`cost` budgets are never charged.**
-*Closed in Unreleased (Runtime 0.2).*
+*Closed in 0.4.0 (Runtime 0.2).*
 
 The interpreter charges cost alongside steps and tokens, against prices the
 project supplies per model in `[[model.price]]`
@@ -750,7 +750,7 @@ operator did not write. A price in the wrong currency is reported as unpriceable
 
 **Cassettes carry no tool results, so `ingot test` cannot test a tool-using
 agent.**
-*Closed in Unreleased (cassette 0.2).*
+*Closed in 0.4.0 (cassette 0.2).*
 
 A cassette now records tool invocations and their results alongside the model
 exchanges, keyed by a digest of the invocation the way model requests already
@@ -783,7 +783,7 @@ per example with a key exported — the same one-recorded-run price
 ### GAP-024
 
 **A wedged contained run is not timed out.**
-*Closed in Unreleased.*
+*Closed in 0.4.0.*
 
 The host now reads the guest's output on its own thread and waits on a channel,
 so a wait can end. Two deadlines, because the two silences mean different things:
@@ -813,7 +813,7 @@ default.
 ### GAP-002
 
 **`verify` reported a check that never ran.**
-*Closed in Unreleased (Runtime 0.2).*
+*Closed in 0.4.0 (Runtime 0.2).*
 
 The event carried `passed: true` for a node nothing had performed. A boolean can
 describe two states and there are three, so the field was replaced rather than
@@ -865,7 +865,7 @@ legal review; this entry is a record of a maintainer's decision, not advice.
 ### GAP-015
 
 **No OCI artifact, lockfile or digest addressing.**
-*Closed in Unreleased (M6).*
+*Closed in 0.4.0 (M6).*
 
 `ingot package` writes a standard OCI image layout holding one artifact manifest:
 the Agent IR blobs verbatim, a lockfile, and optionally a portability report per
@@ -887,7 +887,7 @@ for images is separately open as [GAP-029](#gap-029).
 ### GAP-004
 
 **No build-time secret scan.**
-*Closed in Unreleased (M6).*
+*Closed in 0.4.0 (M6).*
 
 `ingot build` and `ingot package` scan the project's source, the compiled Agent
 IR bytes and every cassette for credential-shaped **values**, and refuse rather
@@ -911,7 +911,7 @@ a secret to reach an artifact, and the scanner does not replace it.
 ### GAP-027
 
 **Agent IR carried no portable source spans.**
-*Closed in Unreleased (IR 0.2).*
+*Closed in 0.4.0 (IR 0.2).*
 
 Agent IR 0.2 adds optional `sourceSpan` metadata to every node the compiler
 lowers from Ingot source. The field stores a project-relative, slash-normalized
@@ -931,7 +931,7 @@ artifacts.
 ### GAP-026
 
 **The reference contained run needed a manually prepared image.**
-*Closed in Unreleased (M11).*
+*Closed in 0.4.0 (M11).*
 
 `ingot image build` now finds the Ingot source checkout, verifies its workspace
 version against the running binary, and builds the shipped recipe under the
@@ -951,7 +951,7 @@ reference; signed acquisition is separately open as [GAP-029](#gap-029).
 ### GAP-018
 
 **The IR had one consumer, so the portability claim was undemonstrated.**
-*Closed in Unreleased (M5).*
+*Closed in 0.4.0 (M5).*
 
 Closed by the independent Python backend in
 [RFC-0006](../rfcs/0006-a-second-backend.md). It shares no runtime code with the

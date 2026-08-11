@@ -8,6 +8,15 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-08-11
+
+The release that makes the `policy` block true and gives the whole loop one
+surface. Since 0.4.0-rc.2: a model's answer streams as it is written, Gemini
+joins Anthropic and OpenAI, a tool can declare how far its capability reaches
+and the compiler checks it, a network allowlist is enforced by a real proxy on a
+network with no other route out, and `ingot studio` shows a project's
+diagnostics, readiness, boundary and run history in one page.
+
 **One surface over the whole loop** (new crate `ingot-studio`, new command
 `ingot studio`; closes [GAP-025](docs/gaps.md#gap-025), specified in
 [RFC-0015](rfcs/0015-ingot-studio.md))
@@ -1065,6 +1074,7 @@ Backends, packaging and the language server are not part of this release.
 - `Ingot` is a working name. Trademark, domain and registry clearance has not
   been carried out and requires legal review before any public release.
 
-[Unreleased]: https://github.com/mathissdupont/ingot/compare/v0.4.0-rc.2...HEAD
+[Unreleased]: https://github.com/mathissdupont/ingot/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/mathissdupont/ingot/compare/v0.4.0-rc.2...v0.4.0
 [0.4.0-rc.2]: https://github.com/mathissdupont/ingot/compare/v0.4.0-rc.1...v0.4.0-rc.2
 [0.4.0-rc.1]: https://github.com/mathissdupont/ingot/releases/tag/v0.4.0-rc.1

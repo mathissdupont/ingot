@@ -8,29 +8,35 @@ another agent framework and not a runtime: it is the toolchain layer above them.
 A single `.ing` source compiles to a target-neutral **Agent IR**, which backends
 lower into the configuration a real runtime consumes.
 
-```
-ingot init research-agent
-ingot check                       # types, effects, policy, budgets
-ingot build                       # -> target/ingot/ResearchAgent.ir.json
-ingot build --target python       # -> target/ingot/ResearchAgent.py
-ingot run --input topic=…         # execute it
+## Thirty seconds, and no API key
+
+```bash
+cargo install --git https://github.com/mathissdupont/ingot ingot-cli
+# or download a binary: https://github.com/mathissdupont/ingot/releases
+
+ingot init hello && cd hello
+ingot check                                                  # types, effects, policy, budgets
+ingot run --provider replay --input topic="compiler design"  # prints a real artifact
 ```
 
-Status: **pre-1.0, active product-loop development**. The compiler front end is
-complete, a reference interpreter executes Agent IR against real model
-providers, MCP tools can be discovered and preflighted, and runs can be recorded
-to cassettes and replayed offline. A second, independent backend emits
-self-contained Python 3 and reports unsupported constructs before build. The
-policy-derived boundary now covers tool servers and, with `--contained`, the
-agent process itself. The editor-facing authoring stack is usable through the
-shared language service, `ingot-lsp`, and a reference VS Code extension.
-Language 0.2 adds project-local imports, optional/union type expressions and
-expression-only pure helper functions; generics are deliberately deferred until
-real source shows the need. `ingot new` can hand authoring to a model and have
-the compiler verify what comes back, on a new project or as a diff against an
-existing one. `ingot package` writes the checked artifact as a reproducible OCI
-package with a lockfile, and a build-time scan refuses a credential before it can
-leave the machine. See [the roadmap](#roadmap).
+A new project ships with a recorded fixture, so that last command produces an
+answer without contacting anything. Point it at a live model when you want one:
+
+```bash
+export ANTHROPIC_API_KEY=…          # or OPENAI_API_KEY, or GEMINI_API_KEY
+ingot run --input topic="compiler design"
+```
+
+And `ingot studio` puts the whole thing on one page — every project, what
+compiles, what it may reach, and every run it has had.
+
+Status: **pre-1.0 and moving.** The compiler front end is complete, a reference
+interpreter runs Agent IR against Anthropic, OpenAI and Gemini, a second backend
+emits self-contained Python 3, and the `policy` block is enforced by a real
+container boundary rather than checked and hoped for. The language, the Agent IR
+and the artifact format can still change between releases. The
+[gap register](docs/gaps.md) lists every known limitation; the
+[changelog](CHANGELOG.md) says what landed when.
 
 ---
 
@@ -146,6 +152,18 @@ agent ResearchAgent(topic: string) -> report<markdown> {
 Four complete examples live in [`examples/`](examples/).
 
 ## Install
+
+### With cargo
+
+Requires a stable Rust toolchain (MSRV 1.85). This builds and installs `ingot`
+alone; the reference tool server and language server are separate binaries in
+the same workspace.
+
+```bash
+cargo install --git https://github.com/mathissdupont/ingot ingot-cli
+```
+
+### A prebuilt archive
 
 Each release carries `ingot`, `ingot-mcp-fs` and `ingot-lsp` for Linux, macOS
 (Intel and Apple silicon) and Windows. Download the archive for your platform from
@@ -825,6 +843,15 @@ With `--sandbox` the MCP servers move inside a policy-derived boundary
 | `ingot-supervisor` | the channel between a contained run and the host serving it |
 | `ingot-studio` | the loopback server and single page behind `ingot studio`; holds no compiler, so it can show only what the CLI computed |
 | `ingot-cli` | the `ingot` binary |
+
+## Documentation
+
+Start here:
+
+* **[Getting started](docs/guide/getting-started.md)** — install, a project, an
+  offline run, a live one, tools, the boundary, and shipping it.
+* **[The language](docs/guide/the-language.md)** — a tour of every construct, in
+  one example that grows. Each snippet is compiled by the test suite.
 
 ## Specifications
 
