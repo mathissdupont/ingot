@@ -128,6 +128,9 @@ fn cycle(target: Target, revision: u64, last_good: &mut Option<u64>, config: &De
             effort: None,
             agent: config.agent.clone(),
             out_dir: Some(target.out_dir.join("dev-run")),
+            // A watch loop runs on every save. Keeping a record of each would
+            // bury the runs somebody meant to keep under the ones they did not.
+            history: None,
             events: config.events,
             yes: config.yes,
             max_steps: config.max_steps,

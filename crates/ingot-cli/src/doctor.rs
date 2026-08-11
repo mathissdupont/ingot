@@ -21,7 +21,7 @@ const REPORT_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
-enum Status {
+pub enum Status {
     Pass,
     Warn,
     Fail,
@@ -29,7 +29,7 @@ enum Status {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct Check {
+pub struct Check {
     id: String,
     status: Status,
     summary: String,
@@ -58,16 +58,37 @@ impl Check {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct DoctorReport {
-    schema_version: u32,
-    ready: bool,
-    source: PathBuf,
-    manifest: Option<PathBuf>,
-    checks: Vec<Check>,
+pub struct DoctorReport {
+    pub schema_version: u32,
+    pub ready: bool,
+    pub source: PathBuf,
+    pub manifest: Option<PathBuf>,
+    pub checks: Vec<Check>,
 }
 
 /// Inspect every prerequisite that can be learned without executing the agent.
 pub fn inspect(target: &Target, compilation: &Compilation, json: bool) -> Result<u8> {
+    let report = report(target, compilation);
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        render(&report);
+    }
+
+    Ok(if report.ready {
+        crate::EXIT_OK
+    } else {
+        crate::EXIT_DIAGNOSTICS
+    })
+}
+
+/// The same inspection as a value, for a caller that is not a terminal.
+///
+/// `ingot studio` shows this report rather than one of its own. Two readiness
+/// answers about one project would be a second source of truth about whether it
+/// is ready, which is exactly the thing a surface must not become.
+pub fn report(target: &Target, compilation: &Compilation) -> DoctorReport {
     let manifest = target
         .manifest
         .as_ref()
@@ -99,25 +120,13 @@ pub fn inspect(target: &Target, compilation: &Compilation, json: bool) -> Result
     inspect_tools(target, compilation, &mut checks);
     inspect_containment(target, &mut checks);
 
-    let report = DoctorReport {
+    DoctorReport {
         schema_version: REPORT_SCHEMA_VERSION,
         ready: !checks.iter().any(|check| check.status == Status::Fail),
         source: target.entry.clone(),
         manifest,
         checks,
-    };
-
-    if json {
-        println!("{}", serde_json::to_string_pretty(&report)?);
-    } else {
-        render(&report);
     }
-
-    Ok(if report.ready {
-        crate::EXIT_OK
-    } else {
-        crate::EXIT_DIAGNOSTICS
-    })
 }
 
 fn inspect_providers(target: &Target, compilation: &Compilation, checks: &mut Vec<Check>) {
@@ -261,20 +270,11 @@ fn provider_readiness(
     let mut ready = BTreeMap::new();
 
     // A vendor may answer to more than one variable name. Recognising only the
-    // first would leave a configured machine told it has no provider.
-    for (name, variables, included) in [
-        (
-            "anthropic",
-            &["ANTHROPIC_API_KEY"][..],
-            cfg!(feature = "anthropic"),
-        ),
-        (
-            "google",
-            &["GEMINI_API_KEY", "GOOGLE_API_KEY"][..],
-            cfg!(feature = "google"),
-        ),
-        ("openai", &["OPENAI_API_KEY"][..], cfg!(feature = "openai")),
-    ] {
+    // first would leave a configured machine told it has no provider. The table
+    // is `crate::run::BUILT_IN` and not a copy of it, so `ingot studio` and this
+    // cannot disagree about which vendors exist.
+    for built_in in crate::run::BUILT_IN {
+        let (name, variables, included) = (built_in.name, built_in.variables, built_in.included);
         if declared.contains(name) {
             continue;
         }

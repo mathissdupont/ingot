@@ -1,0 +1,801 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Ingot Studio</title>
+
+<style>
+/* One stylesheet, inline, because the whole studio is one document: nothing
+   has to be fetched afterwards with a token attached, and the page cannot
+   half-load. */
+
+:root {
+  color-scheme: light dark;
+
+  --bg: #f4f6f8;
+  --surface: #ffffff;
+  --surface-sunk: #eef1f4;
+  --ink: #12161c;
+  --muted: #5b6673;
+  --faint: #8a94a1;
+  --line: #dde2e8;
+  --line-strong: #c6ced8;
+  --accent: #a4491a;
+  --accent-soft: #f6ebe4;
+  --ok: #1c7048;
+  --ok-soft: #e4f1ea;
+  --warn: #7d5a00;
+  --warn-soft: #f6efdc;
+  --fail: #9c2528;
+  --fail-soft: #f8e7e7;
+
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  --sans: ui-sans-serif, system-ui, "Segoe UI", Inter, Roboto, "Helvetica Neue", sans-serif;
+  --radius: 8px;
+  --sidebar: 268px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0d1015;
+    --surface: #151a21;
+    --surface-sunk: #10141a;
+    --ink: #e5eaf1;
+    --muted: #97a2b1;
+    --faint: #6c7684;
+    --line: #232a34;
+    --line-strong: #333c48;
+    --accent: #ff9758;
+    --accent-soft: #2a1d15;
+    --ok: #55cd90;
+    --ok-soft: #14251d;
+    --warn: #e2b747;
+    --warn-soft: #262015;
+    --fail: #f37e80;
+    --fail-soft: #2a1719;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 14px/1.55 var(--sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+code, .mono { font-family: var(--mono); font-size: 12.5px; }
+
+#shell { display: flex; min-height: 100vh; }
+
+/* --- the rail ---------------------------------------------------------- */
+
+#rail {
+  width: var(--sidebar);
+  flex: 0 0 var(--sidebar);
+  background: var(--surface);
+  border-right: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+}
+
+#brand {
+  padding: 18px 18px 14px;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+#brand b { font-size: 15px; letter-spacing: -0.01em; }
+#brand span { color: var(--faint); font-size: 11px; font-family: var(--mono); }
+
+#rail nav { padding: 10px; display: flex; flex-direction: column; gap: 2px; }
+
+.rail-link {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  width: 100%;
+}
+.rail-link:hover { background: var(--surface-sunk); color: var(--ink); }
+.rail-link[aria-current="true"] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+
+#rail h2 {
+  margin: 14px 0 6px;
+  padding: 0 20px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+#project-list { padding: 0 10px; overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 2px; }
+
+.project-link {
+  width: 100%;
+  border: 0;
+  background: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  padding: 7px 10px;
+  border-radius: 6px;
+  color: var(--ink);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.project-link:hover { background: var(--surface-sunk); }
+.project-link[aria-current="true"] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.project-link .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+#rail footer { padding: 10px 18px 14px; border-top: 1px solid var(--line); color: var(--faint); font-size: 11px; }
+
+/* --- the page ---------------------------------------------------------- */
+
+#page { flex: 1; min-width: 0; padding: 26px 32px 64px; }
+#page > .inner { max-width: 1040px; margin: 0 auto; }
+
+header.page-head { margin-bottom: 22px; }
+header.page-head h1 { margin: 0; font-size: 22px; letter-spacing: -0.015em; text-wrap: balance; }
+header.page-head p { margin: 4px 0 0; color: var(--muted); }
+header.page-head .path { font-family: var(--mono); font-size: 12px; color: var(--faint); word-break: break-all; }
+
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin: 18px 0 20px; }
+.tab {
+  border: 0; background: none; font: inherit; cursor: pointer;
+  padding: 8px 12px; color: var(--muted); border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.tab:hover { color: var(--ink); }
+.tab[aria-current="true"] { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  margin-bottom: 16px;
+  overflow: hidden;
+}
+.card > h3 {
+  margin: 0;
+  padding: 12px 16px;
+  font-size: 12px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+.card > .body { padding: 14px 16px; }
+.card > .body.flush { padding: 0; }
+
+.row {
+  display: flex;
+  gap: 12px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+  align-items: baseline;
+}
+.row:last-child { border-bottom: 0; }
+.row .grow { flex: 1; min-width: 0; }
+.row .sub { color: var(--muted); font-size: 12.5px; }
+.row .where { font-family: var(--mono); font-size: 11.5px; color: var(--faint); word-break: break-all; }
+.row .fix { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+.row.click { cursor: pointer; }
+.row.click:hover { background: var(--surface-sunk); }
+
+.chip {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.chip.pass { background: var(--ok-soft); color: var(--ok); }
+.chip.warn { background: var(--warn-soft); color: var(--warn); }
+.chip.fail { background: var(--fail-soft); color: var(--fail); }
+.chip.idle { background: var(--surface-sunk); color: var(--muted); }
+
+.stripe { width: 3px; align-self: stretch; border-radius: 2px; flex: 0 0 3px; }
+.stripe.pass { background: var(--ok); }
+.stripe.warn { background: var(--warn); }
+.stripe.fail { background: var(--fail); }
+.stripe.idle { background: var(--line-strong); }
+
+dl.facts { display: grid; grid-template-columns: max-content 1fr; gap: 6px 18px; margin: 0; }
+dl.facts dt { color: var(--muted); font-size: 12.5px; }
+dl.facts dd { margin: 0; font-family: var(--mono); font-size: 12.5px; word-break: break-all; }
+
+.muted { color: var(--muted); }
+.empty { padding: 22px 16px; color: var(--muted); text-align: center; }
+
+button.action {
+  font: inherit;
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+}
+button.action:hover { border-color: var(--accent); color: var(--accent); }
+button.action.quiet { border-color: transparent; color: var(--muted); padding: 4px 8px; font-size: 12px; }
+button.action.quiet:hover { border-color: var(--line-strong); color: var(--fail); }
+
+input.text {
+  font: inherit;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--line-strong);
+  background: var(--bg);
+  color: var(--ink);
+  flex: 1;
+  min-width: 0;
+}
+input.text:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+
+.add { display: flex; gap: 8px; }
+
+pre.block {
+  margin: 0;
+  padding: 12px 16px;
+  overflow-x: auto;
+  background: var(--surface-sunk);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre;
+}
+
+ul.plain { margin: 0; padding: 0; list-style: none; }
+ul.bullets { margin: 4px 0 0; padding-left: 18px; }
+ul.bullets li { font-family: var(--mono); font-size: 12.5px; }
+
+.trace { max-height: 60vh; overflow: auto; }
+.trace .line { display: flex; gap: 10px; padding: 3px 16px; font-family: var(--mono); font-size: 12px; }
+.trace .line:hover { background: var(--surface-sunk); }
+.trace .kind { color: var(--faint); flex: 0 0 128px; }
+.trace .what { white-space: pre-wrap; word-break: break-word; min-width: 0; }
+.trace .line.bad .what { color: var(--fail); }
+
+.banner {
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--fail);
+  background: var(--fail-soft);
+  color: var(--fail);
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  margin-bottom: 16px;
+  font-size: 13px;
+}
+.banner.note { border-left-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+@media (max-width: 860px) {
+  #shell { flex-direction: column; }
+  #rail { width: auto; flex: none; height: auto; position: static; border-right: 0; border-bottom: 1px solid var(--line); }
+  #project-list { max-height: 180px; }
+  #page { padding: 18px; }
+}
+</style>
+
+<div id="shell">
+  <aside id="rail">
+    <div id="brand"><b>Ingot Studio</b><span id="version"></span></div>
+    <nav>
+      <button class="rail-link" data-view="projects">Projects</button>
+      <button class="rail-link" data-view="machine">Connections</button>
+    </nav>
+    <h2>Bookmarked</h2>
+    <div id="project-list"></div>
+    <footer>Everything here is read from the same reports the commands print.</footer>
+  </aside>
+  <main id="page"><div class="inner" id="inner"></div></main>
+</div>
+
+<script>
+"use strict";
+
+// The token arrives in the URL this process printed and stays in memory. It is
+// stripped from the address bar so it does not end up in history or in a
+// screenshot of one.
+const TOKEN = new URLSearchParams(location.search).get("token") || "";
+history.replaceState(null, "", location.pathname);
+
+// Every value shown below is somebody's path, diagnostic or model output. The
+// page builds nodes and sets textContent; there is no innerHTML anywhere, so
+// none of it can become markup.
+function el(tag, attrs, children) {
+  const node = document.createElement(tag);
+  for (const key in attrs || {}) {
+    const value = attrs[key];
+    if (value === null || value === undefined || value === false) continue;
+    if (key === "class") node.className = value;
+    else if (key === "text") node.textContent = value;
+    else if (key.startsWith("on")) node.addEventListener(key.slice(2), value);
+    else node.setAttribute(key, value === true ? "" : value);
+  }
+  for (const child of [].concat(children || [])) {
+    if (child === null || child === undefined || child === false) continue;
+    node.appendChild(typeof child === "string" ? document.createTextNode(child) : child);
+  }
+  return node;
+}
+
+async function api(route, options) {
+  const settings = Object.assign({ headers: { "X-Ingot-Token": TOKEN } }, options || {});
+  const response = await fetch("/api/" + route, settings);
+  const text = await response.text();
+  let parsed = null;
+  try { parsed = JSON.parse(text); } catch (_) { /* a plain-text refusal */ }
+  if (!response.ok) throw new Error((parsed && parsed.error) || text || response.statusText);
+  return parsed;
+}
+
+const q = (params) => new URLSearchParams(params).toString();
+
+// --- state ----------------------------------------------------------------
+
+const state = {
+  view: "projects",     // projects | project | machine
+  projects: [],
+  path: null,           // the selected project
+  tab: "overview",      // overview | runs | boundary
+  runId: null,
+  detail: null,
+  runs: null,
+  run: null,
+  machine: null,
+  error: null,
+  poll: null,
+};
+
+function show(view, extra) {
+  Object.assign(state, { view, error: null }, extra || {});
+  render();
+  load();
+}
+
+// --- loading ---------------------------------------------------------------
+
+async function refreshProjects() {
+  try {
+    state.projects = (await api("projects")).projects;
+  } catch (error) {
+    state.error = String(error.message || error);
+  }
+  render();
+}
+
+async function load() {
+  stopPolling();
+  try {
+    if (state.view === "machine" && !state.machine) {
+      state.machine = await api("machine");
+    }
+    if (state.view === "project") {
+      if (state.tab === "overview" && !state.detail) {
+        state.detail = await api("project?" + q({ path: state.path }));
+      }
+      if (state.tab === "boundary" && !state.detail) {
+        state.detail = await api("project?" + q({ path: state.path }));
+      }
+      if (state.tab === "runs") {
+        if (state.runId) state.run = await api("run?" + q({ path: state.path, id: state.runId }));
+        else state.runs = (await api("runs?" + q({ path: state.path }))).runs;
+        startPollingIfLive();
+      }
+    }
+  } catch (error) {
+    state.error = String(error.message || error);
+  }
+  render();
+}
+
+// A run that has not recorded a result is either still going or was
+// interrupted; the page cannot tell which, so it re-reads while it is on
+// screen and says exactly that in the meantime.
+function startPollingIfLive() {
+  const live = state.runId
+    ? state.run && state.run.state === "unfinished"
+    : (state.runs || []).some((run) => run.state === "unfinished");
+  if (!live) return;
+  state.poll = setTimeout(async () => {
+    if (document.hidden) return startPollingIfLive();
+    try {
+      if (state.runId) state.run = await api("run?" + q({ path: state.path, id: state.runId }));
+      else state.runs = (await api("runs?" + q({ path: state.path }))).runs;
+      render();
+      startPollingIfLive();
+    } catch (_) { /* the studio went away; stop quietly */ }
+  }, 2000);
+}
+
+function stopPolling() {
+  if (state.poll) clearTimeout(state.poll);
+  state.poll = null;
+}
+
+// --- rendering -------------------------------------------------------------
+
+function render() {
+  renderRail();
+  const inner = document.getElementById("inner");
+  inner.textContent = "";
+  if (state.error) inner.appendChild(el("div", { class: "banner", text: state.error }));
+  if (state.view === "projects") renderProjects(inner);
+  else if (state.view === "machine") renderMachine(inner);
+  else if (state.view === "project") renderProject(inner);
+}
+
+function renderRail() {
+  for (const link of document.querySelectorAll(".rail-link")) {
+    const current = link.dataset.view === state.view || (state.view === "project" && link.dataset.view === "projects");
+    link.setAttribute("aria-current", String(current));
+  }
+  const list = document.getElementById("project-list");
+  list.textContent = "";
+  if (!state.projects.length) {
+    list.appendChild(el("div", { class: "empty", text: "No projects yet." }));
+  }
+  for (const project of state.projects) {
+    list.appendChild(el("button", {
+      class: "project-link",
+      "aria-current": String(state.view === "project" && state.path === project.path),
+      title: project.path,
+      onclick: () => show("project", { path: project.path, tab: "overview", runId: null, detail: null, runs: null, run: null }),
+    }, [
+      el("span", { class: "stripe " + (project.problem ? "fail" : "idle") }),
+      el("span", { class: "name", text: project.name || project.path }),
+    ]));
+  }
+}
+
+function head(title, subtitle, path) {
+  return el("header", { class: "page-head" }, [
+    el("h1", { text: title }),
+    subtitle ? el("p", { text: subtitle }) : null,
+    path ? el("p", { class: "path", text: path }) : null,
+  ]);
+}
+
+function card(title, body, aside) {
+  return el("div", { class: "card" }, [
+    el("h3", {}, [el("span", { text: title }), aside || null]),
+    body,
+  ]);
+}
+
+function rows(items, empty) {
+  if (!items.length) return el("div", { class: "body flush" }, [el("div", { class: "empty", text: empty })]);
+  return el("div", { class: "body flush" }, items);
+}
+
+// --- projects --------------------------------------------------------------
+
+function renderProjects(inner) {
+  inner.appendChild(head("Projects", "A project is a directory with an ingot.toml. This list is a bookmark file and nothing else — every fact below is read from the directory itself."));
+
+  const input = el("input", {
+    class: "text",
+    placeholder: "path to a project directory",
+    spellcheck: "false",
+    onkeydown: (event) => { if (event.key === "Enter") add(); },
+  });
+  async function add() {
+    const path = input.value.trim();
+    if (!path) return;
+    try {
+      state.projects = (await api("projects?" + q({ path }), { method: "POST" })).projects;
+      input.value = "";
+      state.error = null;
+    } catch (error) {
+      state.error = String(error.message || error);
+    }
+    render();
+  }
+
+  inner.appendChild(card("Add a project", el("div", { class: "body" }, [
+    el("div", { class: "add" }, [input, el("button", { class: "action", text: "Add", onclick: add })]),
+  ])));
+
+  const items = state.projects.map((project) => el("div", { class: "row click", onclick: () => show("project", { path: project.path, tab: "overview", detail: null, runs: null, run: null, runId: null }) }, [
+    el("span", { class: "stripe " + (project.problem ? "fail" : "idle") }),
+    el("div", { class: "grow" }, [
+      el("div", {}, [
+        el("b", { text: project.name || "(unnamed)" }),
+        project.version ? el("span", { class: "sub", text: "  " + project.version }) : null,
+      ]),
+      el("div", { class: "where", text: project.path }),
+      project.problem ? el("div", { class: "fix", text: project.problem }) : null,
+    ]),
+    el("span", { class: "sub", text: project.runs === 1 ? "1 run" : project.runs + " runs" }),
+    el("button", {
+      class: "action quiet",
+      text: "Remove",
+      title: "Remove the bookmark. Nothing on disk is touched.",
+      onclick: async (event) => {
+        event.stopPropagation();
+        try {
+          state.projects = (await api("projects?" + q({ path: project.path }), { method: "DELETE" })).projects;
+          if (state.path === project.path) { state.view = "projects"; state.path = null; }
+        } catch (error) { state.error = String(error.message || error); }
+        render();
+      },
+    }),
+  ]));
+  inner.appendChild(card("Bookmarked", rows(items, "Add the directory that holds an ingot.toml.")));
+}
+
+// --- one project -----------------------------------------------------------
+
+function renderProject(inner) {
+  const project = state.projects.find((candidate) => candidate.path === state.path);
+  inner.appendChild(head(project ? (project.name || state.path) : state.path, project && project.description, state.path));
+
+  const tabs = el("div", { class: "tabs" }, ["overview", "runs", "boundary"].map((name) =>
+    el("button", {
+      class: "tab",
+      "aria-current": String(state.tab === name),
+      text: name === "overview" ? "Overview" : name === "runs" ? "Runs" : "Boundary",
+      onclick: () => show("project", { tab: name, runId: null, run: null }),
+    })));
+  inner.appendChild(tabs);
+
+  if (state.tab === "runs") return renderRuns(inner);
+  if (!state.detail) return inner.appendChild(el("div", { class: "empty", text: "Reading the project…" }));
+  if (state.tab === "boundary") return renderBoundary(inner, state.detail);
+  renderOverview(inner, state.detail);
+}
+
+function renderOverview(inner, detail) {
+  const readiness = detail.readiness;
+  const failed = readiness.checks.filter((check) => check.status === "fail").length;
+  const warned = readiness.checks.filter((check) => check.status === "warn").length;
+
+  inner.appendChild(card("Readiness",
+    rows(readiness.checks.map((check) => el("div", { class: "row" }, [
+      el("span", { class: "stripe " + check.status }),
+      el("div", { class: "grow" }, [
+        el("div", { text: check.summary }),
+        el("div", { class: "where", text: check.location }),
+        check.fix ? el("div", { class: "fix", text: "fix: " + check.fix }) : null,
+      ]),
+      el("span", { class: "chip " + check.status, text: check.status }),
+    ])), "Nothing to check."),
+    el("span", { class: "chip " + (readiness.ready ? "pass" : "fail"), text: readiness.ready ? "ready" : failed + " failing" })));
+
+  inner.appendChild(card("Diagnostics",
+    rows(detail.diagnostics.map((diagnostic) => el("div", { class: "row" }, [
+      el("span", { class: "stripe " + (diagnostic.severity === "error" ? "fail" : "warn") }),
+      el("div", { class: "grow" }, [
+        el("div", {}, [el("code", { text: diagnostic.code || "—" }), " ", diagnostic.message]),
+        el("div", { class: "where", text: diagnostic.location }),
+      ]),
+      el("span", { class: "chip " + (diagnostic.severity === "error" ? "fail" : "warn"), text: diagnostic.severity }),
+    ])), detail.compiles ? "The source compiles with nothing to report." : "—"),
+    el("span", { class: "sub", text: warned ? warned + " warning(s) in readiness" : "" })));
+
+  inner.appendChild(card("Agents",
+    rows(detail.agents.map((agent) => el("div", { class: "row" }, [
+      el("div", { class: "grow" }, [
+        el("div", {}, [el("b", { text: agent.name }), el("span", { class: "sub", text: "  " + agent.steps + " step(s)" })]),
+        el("div", { class: "sub", text: signature(agent) }),
+        agent.effects.length ? el("div", { class: "sub" }, ["effects: ", el("code", { text: agent.effects.join(", ") })]) : null,
+        agent.tools.length ? el("ul", { class: "bullets" }, agent.tools.map((tool) =>
+          el("li", { text: tool.name + (tool.reach.length ? "  →  " + tool.reach.join(", ") : "") }))) : null,
+      ]),
+      el("span", { class: "chip idle", text: agent.model }),
+    ])), "This program declares no agents.")));
+}
+
+function signature(agent) {
+  const side = (list) => list.map((entry) => entry.name + ": " + entry.type).join(", ") || "—";
+  return side(agent.inputs) + "  →  " + side(agent.outputs);
+}
+
+function renderBoundary(inner, detail) {
+  const boundary = detail.boundary;
+  if (boundary.problems.length) {
+    inner.appendChild(el("div", { class: "banner", text: boundary.problems.join("\n") }));
+  }
+  if (!boundary.plans.length) {
+    inner.appendChild(card("Boundaries", el("div", { class: "body" }, [
+      el("p", { class: "muted", text: "No tool server is configured, so nothing would be contained. A boundary is planned for each server-and-agent pair, from the agent's own policy." }),
+    ])));
+    return;
+  }
+  for (const plan of boundary.plans) {
+    inner.appendChild(card(plan.server + "  ·  " + plan.agent,
+      el("div", { class: "body flush" }, [
+        el("pre", { class: "block", text: plan.rendered }),
+      ]),
+      el("span", { class: "chip " + (plan.enforced ? "pass" : "warn"), text: plan.enforced ? "fully enforced" : "partly unenforced" })));
+  }
+}
+
+// --- runs ------------------------------------------------------------------
+
+const STATE_CHIP = { finished: "pass", failed: "fail", unfinished: "warn" };
+const STATE_WORD = { finished: "finished", failed: "failed", unfinished: "no result recorded" };
+
+function when(unix) {
+  if (!unix) return "—";
+  return new Date(unix * 1000).toLocaleString();
+}
+
+function lasted(run) {
+  if (!run.finishedUnix || !run.startedUnix) return "";
+  const seconds = run.finishedUnix - run.startedUnix;
+  return seconds < 60 ? seconds + "s" : Math.floor(seconds / 60) + "m " + (seconds % 60) + "s";
+}
+
+function renderRuns(inner) {
+  if (state.runId) return renderRun(inner);
+  if (!state.runs) return inner.appendChild(el("div", { class: "empty", text: "Reading run history…" }));
+
+  inner.appendChild(el("div", { class: "banner note", text: "A run writes its own event stream here as it goes. This is the only thing the studio stores about a project, it lives under the project's build directory, and deleting it loses only the history." }));
+
+  const items = state.runs.map((run) => el("div", { class: "row click", onclick: () => show("project", { tab: "runs", runId: run.id, run: null }) }, [
+    el("span", { class: "stripe " + STATE_CHIP[run.state] }),
+    el("div", { class: "grow" }, [
+      el("div", {}, [el("b", { text: run.agent }), el("span", { class: "sub", text: "  " + when(run.startedUnix) })]),
+      el("div", { class: "sub", text: [run.provider, run.contained ? "contained" : null, lasted(run)].filter(Boolean).join("  ·  ") }),
+      run.reason ? el("div", { class: "fix", text: run.reason }) : null,
+    ]),
+    el("div", { class: "sub", text: run.usage ? run.usage.inputTokens + " in / " + run.usage.outputTokens + " out" : "" }),
+    run.cost ? el("div", { class: "sub", text: run.cost }) : null,
+    el("span", { class: "chip " + STATE_CHIP[run.state], text: STATE_WORD[run.state] }),
+  ]));
+
+  inner.appendChild(card("Runs", rows(items, "No run has been recorded for this project yet. `ingot run` writes one each time.")));
+}
+
+function renderRun(inner) {
+  if (!state.run) return inner.appendChild(el("div", { class: "empty", text: "Reading the run…" }));
+  const run = state.run;
+
+  inner.appendChild(el("div", { class: "add", style: "margin-bottom:16px" }, [
+    el("button", { class: "action", text: "← All runs", onclick: () => show("project", { tab: "runs", runId: null, run: null }) }),
+    el("button", {
+      class: "action quiet",
+      text: "Delete this record",
+      onclick: async () => {
+        try {
+          await api("run?" + q({ path: state.path, id: run.id }), { method: "DELETE" });
+          show("project", { tab: "runs", runId: null, run: null, runs: null });
+        } catch (error) { state.error = String(error.message || error); render(); }
+      },
+    }),
+  ]));
+
+  inner.appendChild(card("Run",
+    el("div", { class: "body" }, [
+      el("dl", { class: "facts" }, [
+        el("dt", { text: "agent" }), el("dd", { text: run.agent }),
+        el("dt", { text: "provider" }), el("dd", { text: run.provider }),
+        el("dt", { text: "started" }), el("dd", { text: when(run.startedUnix) }),
+        el("dt", { text: "finished" }), el("dd", { text: run.finishedUnix ? when(run.finishedUnix) + "  (" + lasted(run) + ")" : "—" }),
+        el("dt", { text: "steps" }), el("dd", { text: run.steps === null ? "—" : String(run.steps) }),
+        el("dt", { text: "tokens" }), el("dd", { text: run.usage ? run.usage.inputTokens + " in / " + run.usage.outputTokens + " out" : "—" }),
+        el("dt", { text: "cost" }), el("dd", { text: run.cost || "not priced" }),
+        run.reason ? el("dt", { text: "reason" }) : null,
+        run.reason ? el("dd", { text: run.reason }) : null,
+      ]),
+    ]),
+    el("span", { class: "chip " + STATE_CHIP[run.state], text: STATE_WORD[run.state] })));
+
+  const lines = run.events.map((event) => el("div", { class: "line" + (event.event === "runFailed" ? " bad" : "") }, [
+    el("span", { class: "kind", text: event.event }),
+    el("span", { class: "what", text: describe(event) }),
+  ]));
+  inner.appendChild(card("Event stream",
+    el("div", { class: "body flush trace" }, lines.length ? lines : [el("div", { class: "empty", text: "No event was recorded." })]),
+    el("span", { class: "sub", text: run.events.length + " event(s)" })));
+}
+
+// The events are shown as they were recorded. This only decides which of an
+// event's own fields to put on the line; it never computes a new fact.
+function describe(event) {
+  const parts = [];
+  for (const key of Object.keys(event)) {
+    if (key === "event") continue;
+    const value = event[key];
+    if (value === null || value === undefined) continue;
+    parts.push(key + "=" + (typeof value === "object" ? JSON.stringify(value) : String(value)));
+  }
+  return parts.join("  ");
+}
+
+// --- connections -----------------------------------------------------------
+
+function renderMachine(inner) {
+  inner.appendChild(head("Connections", "What this machine can reach. A key is never stored here or anywhere else Ingot writes: a provider is configured by naming the environment variable it reads."));
+  if (!state.machine) return inner.appendChild(el("div", { class: "empty", text: "Looking…" }));
+  const machine = state.machine;
+  document.getElementById("version").textContent = machine.version;
+
+  inner.appendChild(card("Model providers",
+    rows(machine.providers.map((provider) => el("div", { class: "row" }, [
+      el("span", { class: "stripe " + (provider.ready ? "pass" : provider.included ? "warn" : "idle") }),
+      el("div", { class: "grow" }, [
+        el("div", {}, [el("b", { text: provider.name }), el("span", { class: "sub", text: "  " + provider.protocol })]),
+        el("div", { class: "sub" }, [
+          provider.variables.length
+            ? el("span", {}, ["reads ", ...provider.variables.map((variable, index) => el("span", {}, [
+                index ? " or " : "",
+                el("code", { text: variable.name }),
+                el("span", { class: variable.set ? "" : "muted", text: variable.set ? " (set)" : " (not set)" }),
+              ]))])
+            : el("span", { text: "no credential required" }),
+        ]),
+        !provider.included ? el("div", { class: "fix", text: "this build does not include the " + provider.protocol + " protocol" }) : null,
+        provider.declared ? el("div", { class: "fix", text: "declared by this project's ingot.toml" }) : null,
+      ]),
+      el("span", { class: "chip " + (provider.ready ? "pass" : "idle"), text: provider.ready ? "ready" : "not ready" }),
+    ])), "This build includes no model provider.")));
+
+  const runtime = machine.runtime;
+  inner.appendChild(card("Container runtime",
+    el("div", { class: "body" }, [
+      runtime.available
+        ? el("dl", { class: "facts" }, [
+            el("dt", { text: "runtime" }), el("dd", { text: runtime.program + " " + runtime.version }),
+          ])
+        : el("p", { class: "muted", text: runtime.error }),
+      el("div", { style: "height:8px" }),
+      ...machine.images.map((image) => el("div", { class: "row", style: "padding-left:0;padding-right:0" }, [
+        el("span", { class: "stripe " + (image.present ? "pass" : "warn") }),
+        el("div", { class: "grow" }, [
+          el("div", {}, [el("code", { text: image.reference })]),
+          el("div", { class: "sub", text: image.purpose }),
+        ]),
+        el("span", { class: "chip " + (image.present ? "pass" : "warn"), text: image.present ? "present" : "not built" }),
+      ])),
+    ]),
+    el("span", { class: "chip " + (runtime.available ? "pass" : "warn"), text: runtime.available ? "available" : "unavailable" })));
+
+  inner.appendChild(card("How a provider is connected",
+    el("div", { class: "body" }, [
+      el("p", { class: "muted", text: "Ingot reads a credential from the environment at the moment it makes a request. Nothing writes it to a manifest, a lockfile, a package or a log, and the studio has no field to type one into. To add a service beyond the built-in three, name it and name the variable it reads:" }),
+      el("pre", { class: "block", text: '[[model.provider]]\nname = "my-gateway"\nkind = "openai"\nbase-url = "https://gateway.example/v1"\napi-key-env = "MY_GATEWAY_KEY"' }),
+    ])));
+}
+
+// --- start -----------------------------------------------------------------
+
+for (const link of document.querySelectorAll(".rail-link")) {
+  link.addEventListener("click", () => show(link.dataset.view, { path: link.dataset.view === "projects" ? null : state.path }));
+}
+document.addEventListener("visibilitychange", () => { if (!document.hidden && state.view === "project" && state.tab === "runs") load(); });
+
+refreshProjects().then(() => api("machine").then((machine) => {
+  state.machine = machine;
+  document.getElementById("version").textContent = machine.version;
+}).catch(() => {}));
+render();
+</script>

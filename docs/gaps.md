@@ -46,7 +46,6 @@ to you*.
 | [GAP-017](#gap-017) | No conformance suite or backend author guide | Absent | M8 |
 | [GAP-020](#gap-020) | The boundary needs Linux containers | Refused | a second expression of the boundary |
 | [GAP-023](#gap-023) | A contained run cannot cross a boundary to a sub-agent | Refused | a box per agent, over the supervisor |
-| [GAP-025](#gap-025) | The product loop is a sequence of commands with no single surface | Degraded | a surface over the existing contracts |
 | [GAP-028](#gap-028) | A model-authored project has no offline test until one run is recorded | Degraded | cassette synthesis, or nothing |
 | [GAP-029](#gap-029) | An image cannot be verified by signature, so acquisition stays manual | Refused | a signature scheme and a trust root |
 | [GAP-030](#gap-030) | A verifier cannot be executed at all | Absent | a verifier execution model (RFC) |
@@ -346,37 +345,6 @@ a test and another in production — the divergence this project exists to refus
 *Recorded in.* [Runtime 0.1 §5.1](../specs/runtime/v0.1.md),
 `crates/ingot-cli/tests/differential.rs`.
 
-### GAP-025
-
-**The product loop is a sequence of commands with no single surface.**
-
-*Narrowed.* This entry used to say integrated tool and safe-run guidance was
-missing. It is not: every work package it named has landed, and
-[RFC-0007](../rfcs/0007-the-ingot-product-loop.md)'s conformance list is
-complete. Templates, `ingot doctor`, `ingot dev`, the human trace, typed tool
-onboarding, contained-run readiness, model-assisted authoring and packaging all
-exist, and the editor and the CLI are tested to report the same diagnostics.
-
-What is left is not another command. It is that the loop is *nine* of them, each
-correct and each printing to a terminal, with no place that shows a project's
-state at once: what compiles, what it may reach, what a run did, what it cost,
-what is ready and what is not.
-
-*How it shows up.* Answering "is this agent alright?" means running `check`,
-`doctor`, `tools`, `test` and reading three kinds of output. Every fact is
-available; none of them are in the same place.
-
-*What closing it needs.* A surface over the interfaces that already exist —
-`doctor --json`, `tools --json`, the run event stream, the human trace,
-`package --json` — and **nothing behind it**. RFC-0007 rejected building a UI
-first precisely because it would have encoded missing semantics and become a
-second source of truth; those interfaces now exist, so a consumer of them would
-not. A surface that computed anything the CLI cannot would be that second source
-of truth arriving late.
-
-*Recorded in.* [Vision](vision.md#one-product-loop-around-the-language),
-[RFC-0007](../rfcs/0007-the-ingot-product-loop.md).
-
 ### GAP-032
 
 **The Python backend does not stream, so the two backends accept different
@@ -525,6 +493,45 @@ remain.
 When a gap closes it moves here with the release that closed it, and its section
 stays where a link can find it. Identifiers are never reused: a link to GAP-007
 must keep meaning what it meant.
+
+### GAP-025
+
+**The product loop is a sequence of commands with no single surface.**
+*Closed in Unreleased.*
+
+`ingot studio` serves one page over the reports the other commands print:
+projects, a project's diagnostics, readiness, boundary and agents, its run
+history, and what this machine can reach. Specified in
+[RFC-0015](../rfcs/0015-ingot-studio.md).
+
+*Why this is not the surface [RFC-0007](../rfcs/0007-the-ingot-product-loop.md)
+refused.* That non-goal names "a hosted no-code workflow editor as the source of
+truth", and the objection was that a surface built then would have invented the
+semantics the language lacked. This one cannot invent anything:
+[`crates/ingot-studio`](../crates/ingot-studio/) has no dependencies and no
+compiler, and receives everything it shows through one trait the CLI implements
+by calling `doctor::report`, `sandbox::plan_all`, `compile_path` and the
+language service — the same functions the subcommands call. The tests are
+equalities against `ingot doctor --json` and `ingot check` rather than
+assertions about the page's own arithmetic.
+
+*The one new thing it needed.* A run could not be re-derived after the terminal
+scrolled, so `ingot run` now writes `<out-dir>/runs/<id>.jsonl`: the JSON event
+stream verbatim, wrapped in two `record` lines carrying the wall clock, the
+process id and the outcome. Wall clock lives there and not in an event, because
+[Runtime 0.1 §9](../specs/runtime/v0.1.md) requires a replay to reproduce the
+event sequence byte for byte. `--no-history` writes nothing.
+
+*What it deliberately does not do.* Edit a program, edit a manifest, or start a
+run. Connecting a model service still means writing `[[model.provider]]` by hand
+and naming the variable it reads; the page shows the block and where it goes.
+Writing it would mean re-serializing a hand-written manifest and losing its
+comments, which is the same mistake as regenerating source from a diagram — and
+solving it properly is the canvas's problem, not this one's.
+
+*Recorded in.* [Vision](vision.md#one-product-loop-around-the-language),
+[RFC-0015](../rfcs/0015-ingot-studio.md),
+`crates/ingot-studio/tests/server.rs`, `crates/ingot-cli/tests/studio.rs`.
 
 ### GAP-001
 

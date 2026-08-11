@@ -202,6 +202,7 @@ export CARGO_TARGET_DIR=/c/build/ingot
 | `ingot dev [--run]` | watch source, check and build good revisions, optionally run them |
 | `ingot tools [--json] [--propose]` | discover, preflight and propose MCP tool declarations/routes |
 | `ingot sandbox` | show the boundary each tool server would run inside |
+| `ingot studio` | serve the local surface: projects, run history, and what this machine can reach |
 | `ingot explain <CODE>` | explain a diagnostic in full |
 
 Exit codes: `0` success, `1` the program has blocking diagnostics, `2` the
@@ -253,6 +254,40 @@ ingot dev --run --provider replay --cassette tests/cassettes/example.json \
 The compact status identifies each source revision and says when an older good
 artifact was kept. Run `ingot doctor` first when a live provider or configured
 tool is not ready.
+
+### One surface over all of it
+
+`ingot studio` serves a page on the loopback interface showing what the other
+commands print, in one place: your projects, and for each one its diagnostics,
+its readiness, the boundary each tool server would get, the agents it declares
+and the runs it has had.
+
+```bash
+ingot studio
+# http://127.0.0.1:7317/?token=…
+```
+
+The token in that URL belongs to the process and is stored nowhere. The studio
+refuses to bind anywhere but loopback, refuses a request whose `Host` is not its
+own address and port — which is what stops a name that merely resolves to
+`127.0.0.1` from being treated as local — and refuses a cross-site `Origin`.
+
+It computes nothing. [`ingot-studio`](crates/ingot-studio/) has no dependencies
+and no compiler; every fact reaches it through one trait the CLI implements by
+calling the same functions `ingot doctor`, `ingot sandbox`, `ingot check` and
+the editor call. The tests are equalities against `ingot doctor --json` and
+`ingot check` rather than assertions about the page.
+
+Run history is the one thing it needed that did not exist. `ingot run` now
+writes `<out-dir>/runs/<id>.jsonl` — the JSON event stream verbatim, wrapped in
+two lines carrying the wall clock and the outcome, which is where a clock is
+allowed to live because an event may not carry one. `--no-history` writes
+nothing.
+
+Connecting a model service is still something you do by hand: the page shows the
+`[[model.provider]]` block to write and the variable to export, and there is no
+field to type a credential into. See
+[RFC-0015](rfcs/0015-ingot-studio.md).
 
 ### Authoring with a model
 
@@ -782,6 +817,7 @@ With `--sandbox` the MCP servers move inside a policy-derived boundary
 | `ingot-sandbox` | a `policy` block turned into a container boundary |
 | `ingot-egress` | the host-filtering proxy a bounded server's traffic leaves through |
 | `ingot-supervisor` | the channel between a contained run and the host serving it |
+| `ingot-studio` | the loopback server and single page behind `ingot studio`; holds no compiler, so it can show only what the CLI computed |
 | `ingot-cli` | the `ingot` binary |
 
 ## Specifications
@@ -846,14 +882,13 @@ Every known limitation has an identifier and an entry in the
 not done, and what closing it would take. Read it before relying on anything
 here.
 
-The four worth knowing before you write an agent:
+The three worth knowing before you write an agent:
 
 | | |
 |---|---|
 | [GAP-030](docs/gaps.md#gap-030) | `verify` cannot be executed by anything. The run reports it as `notPerformed` rather than claiming a pass, so nothing misleads — but nothing checks either. |
 | [GAP-010](docs/gaps.md#gap-010) | `parallel map` runs its iterations one after another. The result is identical; only the wall clock differs. |
 | [GAP-017](docs/gaps.md#gap-017) | The differential tests are not yet a packaged conformance suite or backend author guide. |
-| [GAP-025](docs/gaps.md#gap-025) | Authoring, checking, tracing, testing and safe execution are separate manual workflows. |
 
 Nothing in the register is **unenforced** — the class for a limitation that
 looks like a guarantee and is not. Every entry either says what it did not do,

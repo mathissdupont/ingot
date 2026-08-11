@@ -67,6 +67,13 @@ pub struct RunConfig {
     pub effort: Option<String>,
     pub agent: Option<String>,
     pub out_dir: Option<PathBuf>,
+    /// Where this run writes itself down, or `None` to keep no record.
+    ///
+    /// Separate from `out_dir`, which is where the *agent's* artifacts go and
+    /// which an operator points at a pipeline. A run record is the toolchain's
+    /// own output and belongs with the build output whatever the agent's
+    /// results are doing.
+    pub history: Option<PathBuf>,
     pub events: EventFormat,
     pub yes: bool,
     pub max_steps: u32,
@@ -305,7 +312,7 @@ pub fn execute(compilation: &Compilation, config: &RunConfig) -> Result<u8> {
 
     let mut provider = build_provider(config, &ir.agent, &inputs)?;
     let mut sink = RunSink {
-        printer: EventPrinter::new(config.events, compilation),
+        printer: printer_for(config, compilation, false),
     };
 
     let result = run_agent(
@@ -340,14 +347,35 @@ pub fn execute(compilation: &Compilation, config: &RunConfig) -> Result<u8> {
     let report = match result {
         Ok(report) => report,
         Err(error) => {
+            sink.printer.finish_record(crate::runs::Outcome::Failed {
+                reason: &error.to_string(),
+            });
             report_failure(&error);
             return Ok(super::EXIT_DIAGNOSTICS);
         }
     };
 
+    sink.printer.finish_record(crate::runs::Outcome::Finished {
+        steps: report.steps,
+        usage: report.usage,
+        cost: report.spend.rendered(),
+    });
     report_cost(&report);
     write_outputs(&report, config)?;
     Ok(super::EXIT_OK)
+}
+
+/// A printer for this run, keeping a record when the command asked for one.
+pub(crate) fn printer_for(
+    config: &RunConfig,
+    compilation: &Compilation,
+    contained: bool,
+) -> EventPrinter {
+    let printer = EventPrinter::new(config.events, compilation);
+    match &config.history {
+        Some(out_dir) => printer.recording_to(out_dir, contained),
+        None => printer,
+    }
 }
 
 /// One event, in whichever form the operator asked for.
@@ -360,6 +388,19 @@ pub(crate) struct EventPrinter {
     trace: crate::trace::HumanTrace,
     /// Whether a model is mid-sentence on the current line.
     streaming: bool,
+    /// Where this run is being written down, when it is.
+    history: Option<History>,
+}
+
+/// The state a printer needs to keep a run record beside the terminal output.
+///
+/// The recorder is opened on the first event rather than up front, because
+/// `runStarted` is what names the agent and the provider — and because a run
+/// that never got as far as starting has nothing worth a file.
+struct History {
+    out_dir: PathBuf,
+    contained: bool,
+    recorder: Option<crate::runs::RunRecorder>,
 }
 
 impl EventPrinter {
@@ -372,17 +413,73 @@ impl EventPrinter {
                 compilation.file,
             ),
             streaming: false,
+            history: None,
         }
+    }
+
+    /// Also write this run down, under `out_dir`.
+    ///
+    /// Deltas are deliberately not recorded. They are not events — see
+    /// [`ingot_runtime::EventSink`] — and a record holding them would be a
+    /// record a replay could not reproduce.
+    pub(crate) fn recording_to(mut self, out_dir: &Path, contained: bool) -> Self {
+        self.history = Some(History {
+            out_dir: out_dir.to_path_buf(),
+            contained,
+            recorder: None,
+        });
+        self
     }
 
     pub(crate) fn print(&mut self, event: &RunEvent) {
         // A model that was mid-sentence has stopped being mid-sentence, and the
         // next line should not land in the middle of it.
         self.close_stream();
+        self.record(event);
         match self.format {
             EventFormat::Text => eprintln!("{}", self.trace.render(event)),
             EventFormat::Json => eprintln!("{}", event.to_json_line()),
             EventFormat::Quiet => {}
+        }
+    }
+
+    fn record(&mut self, event: &RunEvent) {
+        let Some(history) = &mut self.history else {
+            return;
+        };
+        if history.recorder.is_none() {
+            let RunEvent::RunStarted { agent, provider } = event else {
+                // Nothing before `runStarted` names the run, and nothing after
+                // it arrives without one.
+                return;
+            };
+            history.recorder = crate::runs::RunRecorder::begin(
+                &history.out_dir,
+                agent,
+                provider,
+                history.contained,
+            );
+        }
+        if let Some(recorder) = &mut history.recorder {
+            recorder.event(event);
+        }
+    }
+
+    /// Close the run record with what the command saw, and say where it went.
+    ///
+    /// Called by whichever path ran the agent. A record left unclosed is a run
+    /// that reported no result, which is a state the studio shows under that
+    /// name rather than one it guesses about.
+    pub(crate) fn finish_record(&mut self, outcome: crate::runs::Outcome<'_>) {
+        let Some(history) = &mut self.history else {
+            return;
+        };
+        let Some(recorder) = &mut history.recorder else {
+            return;
+        };
+        recorder.finish(outcome);
+        if self.format != EventFormat::Quiet {
+            eprintln!("history   {}", recorder.path().display());
         }
     }
 
@@ -847,6 +944,45 @@ fn build_provider(
 
 /// Vendors that need no declaring, when a key for them is exported.
 pub const BUILT_IN_PROVIDERS: &[&str] = &["anthropic", "google", "openai"];
+
+/// A vendor this binary can reach without a manifest.
+///
+/// One table rather than one per reader. `ingot doctor` and `ingot studio` both
+/// answer "is there a provider here?", and two copies of this list would let
+/// them answer it differently.
+pub struct BuiltIn {
+    /// What the router and the manifest call it.
+    pub name: &'static str,
+    /// The wire protocol it speaks, which is what a build includes or omits.
+    pub protocol: &'static str,
+    /// Every variable it answers to, most canonical first. A vendor may go by
+    /// more than one name and recognising only the first would tell a
+    /// configured machine it has no provider.
+    pub variables: &'static [&'static str],
+    /// Whether this build carries the protocol at all.
+    pub included: bool,
+}
+
+pub const BUILT_IN: &[BuiltIn] = &[
+    BuiltIn {
+        name: "anthropic",
+        protocol: "anthropic",
+        variables: &["ANTHROPIC_API_KEY"],
+        included: cfg!(feature = "anthropic"),
+    },
+    BuiltIn {
+        name: "google",
+        protocol: "google",
+        variables: &["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+        included: cfg!(feature = "google"),
+    },
+    BuiltIn {
+        name: "openai",
+        protocol: "openai",
+        variables: &["OPENAI_API_KEY"],
+        included: cfg!(feature = "openai"),
+    },
+];
 
 /// Whether a Gemini key is exported, under either name it goes by.
 ///

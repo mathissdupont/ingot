@@ -8,6 +8,68 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
 
 ## [Unreleased]
 
+**One surface over the whole loop** (new crate `ingot-studio`, new command
+`ingot studio`; closes [GAP-025](docs/gaps.md#gap-025), specified in
+[RFC-0015](rfcs/0015-ingot-studio.md))
+
+- `ingot studio` serves one page on the loopback interface: your projects, and
+  for each one its diagnostics, its readiness, the boundary each tool server
+  would get, the agents it declares and the runs it has had — plus what this
+  machine can reach. Nine commands' worth of output, in one place.
+- **It computes nothing.** `ingot-studio` has no dependencies and no compiler;
+  it is a socket, a guard and a page. Everything reaches it through one trait
+  the CLI implements by calling `doctor::report`, `sandbox::plan_all`,
+  `compile_path` and the language service — the same functions the subcommands
+  and the editor call. That is what makes it not the second source of truth
+  [RFC-0007](rfcs/0007-the-ingot-product-loop.md) refused: a crate with no way
+  to compute cannot become one. The tests are equalities against
+  `ingot doctor --json` and `ingot check`, not assertions about the page.
+- **The project list is a bookmark file and nothing more.** It holds paths;
+  every fact about a project is read from the project when it is asked for.
+  Deleting the file loses bookmarks and no information, and removing a bookmark
+  touches nothing on disk. `INGOT_CONFIG_DIR` says where it lives.
+- **Connections are read-only, on purpose.** The page shows which providers this
+  build includes, which variables each answers to and whether each is set — by
+  name, never by value — and shows the `[[model.provider]]` block to write. It
+  does not write it: re-serializing a hand-written manifest loses its comments,
+  which is the same mistake as regenerating source from a diagram, and solving
+  it properly belongs to the editing work rather than here.
+- **Who can reach it.** A session token, fresh per process and stored nowhere; a
+  `Host` header that must be a loopback authority naming this exact port, which
+  is what stops a name that merely resolves to `127.0.0.1` from being treated as
+  local; and a same-origin `Origin` when a browser sends one. A non-loopback
+  bind is **refused**, not warned about. Every reply carries
+  `default-src 'none'; connect-src 'self'`, so nothing the page renders can
+  reach off the machine.
+- No Node, no npm, no bundler. It ships in the binary that already ships.
+
+**A run writes itself down** (new; `ingot run` behaviour change)
+
+- `ingot run` now writes `<out-dir>/runs/<id>.jsonl`. The middle of the file is
+  the JSON event stream **verbatim** — the same bytes `--events json` prints,
+  from the same `to_json_line` — wrapped in two lines carrying `record` where an
+  event carries `event`.
+- **The clock lives on those two lines and nowhere else.** Wall-clock time, the
+  process id and the outcome are facts about one execution;
+  [Runtime 0.1 §9](specs/runtime/v0.1.md) requires a replay to reproduce the
+  event sequence byte for byte, so an event may not carry a clock. A reader
+  selecting on `event` sees exactly what a replay would reproduce, and a test
+  asserts no event carries one.
+- Deltas are not recorded: the live text a model produces is not an event, and a
+  record holding it would be a record no replay could reproduce.
+- A file with no closing line is a run that started and reported no result. It
+  may be going or it may have been killed; nothing guesses, and the studio shows
+  it under that name rather than claiming it is running.
+- `--no-history` writes nothing. `ingot dev --run` keeps no record — a watch
+  loop would bury the runs you meant to keep.
+
+**Internal** (no behaviour change)
+
+- `doctor::inspect` split into `report`, which returns the value, and `inspect`,
+  which renders it. The studio shows that report rather than one of its own.
+- The built-in provider table moved to `run::BUILT_IN`, so `ingot doctor` and
+  `ingot studio` cannot disagree about which vendors exist.
+
 **A network allowlist is enforced** (new crate `ingot-egress`; closes
 [GAP-001](docs/gaps.md#gap-001))
 

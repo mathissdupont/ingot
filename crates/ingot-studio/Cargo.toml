@@ -1,0 +1,15 @@
+[package]
+name = "ingot-studio"
+description = "The local server and single page behind `ingot studio`: transport for reports the toolchain already produces."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+# No dependencies on purpose, and the same reason as `ingot-egress`: this one
+# listens on a socket. It also holds no compiler, no manifest reader and no
+# provider, which is what keeps "the studio computes nothing the CLI cannot"
+# a fact about the code rather than a promise about the authors.
+[dependencies]

@@ -102,7 +102,7 @@ pub fn execute(
         provider: provider.name().to_string(),
     };
 
-    let mut printer = crate::run::EventPrinter::new(config.events, compilation);
+    let mut printer = crate::run::printer_for(config, compilation, true);
     let mut supervisor = Supervisor {
         config: wire,
         provider,
@@ -128,10 +128,20 @@ pub fn execute(
                 // host did not compute would be inventing one.
                 spend: Default::default(),
             };
+            printer.finish_record(crate::runs::Outcome::Finished {
+                steps: report.steps,
+                usage: report.usage,
+                // No cost for the same reason there is no spend: the ledger
+                // stayed inside the box.
+                cost: None,
+            });
             crate::run::write_outputs(&report, config)?;
             Ok(super::EXIT_OK)
         }
         Outcome::Failed(failed) => {
+            printer.finish_record(crate::runs::Outcome::Failed {
+                reason: &failed.reason,
+            });
             eprintln!("error: {}", failed.reason);
             if failed.operator_error {
                 eprintln!(

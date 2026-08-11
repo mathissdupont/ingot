@@ -19,6 +19,7 @@ members = [
     "crates/ingot-backend-python",
     "crates/ingot-language-service",
     "crates/ingot-lsp",
+    "crates/ingot-studio",
     "crates/ingot-cli",
 ]
 
@@ -50,6 +51,7 @@ ingot-supervisor = { path = "crates/ingot-supervisor", version = "0.4.0-rc.2" }
 ingot-backend-python = { path = "crates/ingot-backend-python", version = "0.4.0-rc.2" }
 ingot-language-service = { path = "crates/ingot-language-service", version = "0.4.0-rc.2" }
 ingot-lsp = { path = "crates/ingot-lsp", version = "0.4.0-rc.2" }
+ingot-studio = { path = "crates/ingot-studio", version = "0.4.0-rc.2" }
 
 anyhow = "1.0"
 clap = { version = "4.5", features = ["derive"] }

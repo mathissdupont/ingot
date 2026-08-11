@@ -26,7 +26,9 @@ mod image;
 mod manifest;
 mod package;
 mod run;
+mod runs;
 mod sandbox;
+mod studio;
 mod tools;
 mod trace;
 
@@ -110,6 +112,9 @@ enum Command {
     Image(ImageArgs),
     /// Watch, check and build each source revision; optionally run good ones.
     Dev(DevArgs),
+    /// Open the local surface: projects, run history and what this machine can
+    /// reach, over the reports the other commands print.
+    Studio(StudioArgs),
     /// Discover MCP schemas and preflight each tool the program declares.
     Tools(ToolsArgs),
     /// Show the boundary each tool server would run inside, derived from the
@@ -399,6 +404,15 @@ struct RunArgs {
     #[arg(long, value_name = "FILE")]
     record: Option<PathBuf>,
 
+    /// Keep no run record.
+    ///
+    /// A run otherwise writes its event stream to `<out-dir>/runs`, which is
+    /// what `ingot studio` reads to show a project's history. Unrelated to
+    /// `--record`, which writes a cassette of the model exchanges so a run can
+    /// be replayed; this only decides whether what happened is written down.
+    #[arg(long)]
+    no_history: bool,
+
     /// Override the model the artifact asks for.
     #[arg(long, value_name = "MODEL")]
     model: Option<String>,
@@ -587,6 +601,15 @@ struct ExplainArgs {
     code: String,
 }
 
+#[derive(Args, Debug)]
+struct StudioArgs {
+    /// Address to listen on. Must be loopback: the studio shows one person's
+    /// project paths, variable names and run history, and publishing that to a
+    /// network is refused rather than warned about.
+    #[arg(long, value_name = "ADDR")]
+    bind: Option<String>,
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let color = cli.color.resolve();
@@ -604,6 +627,9 @@ fn main() -> ExitCode {
         Command::Doctor(args) => run_doctor(args, color),
         Command::Image(args) => run_image(args),
         Command::Dev(args) => run_dev(args, color),
+        Command::Studio(args) => studio::serve(&studio::StudioConfig {
+            bind: args.bind.clone(),
+        }),
         Command::Tools(args) => run_tools(args, color),
         Command::Sandbox(args) => run_sandbox(args, color),
         Command::Explain(args) => run_explain(args),
@@ -1856,6 +1882,7 @@ fn run_run(args: &RunArgs, color: RenderColor) -> Result<u8> {
             effort: args.effort.clone(),
             agent: args.agent.clone(),
             out_dir: args.out_dir.clone(),
+            history: (!args.no_history).then(|| target.out_dir.clone()),
             events: args.events,
             yes: args.yes,
             max_steps: args.max_steps,

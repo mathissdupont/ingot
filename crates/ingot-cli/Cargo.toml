@@ -28,7 +28,11 @@ ingot-runtime.workspace = true
 ingot-mcp.workspace = true
 ingot-sandbox.workspace = true
 ingot-egress.workspace = true
+ingot-studio.workspace = true
 ingot-supervisor.workspace = true
+# `ingot studio` shows the diagnostics an editor shows, by asking the same
+# service for them rather than by formatting the compiler's output a second way.
+ingot-language-service.workspace = true
 ingot-backend-python.workspace = true
 ingot-ir.workspace = true
 ingot-package.workspace = true
