@@ -1,6 +1,6 @@
 # RFC-0016: The canvas, a two-way view of a flow
 
-- Status: **Proposed**
+- Status: **Accepted**
 - Created: 2026-08-11
 - Affects: `ingot-studio`, `ingot-language-service`, CLI
 - Builds on: [RFC-0015](0015-ingot-studio.md)
@@ -181,26 +181,63 @@ case into a message.
 * **Draw everything.** A construct the canvas cannot render is shown as source
   and marked read-only. A construct it cannot render is never one it will
   rewrite — the two are the same rule.
+* **Apply an edit without showing it.** Every gesture renders as a diff of the
+  lines it will change, before it changes them. This is cheap here and nowhere
+  else: the canvas already has the exact range and the exact replacement,
+  because that is all an edit is.
 * **Create an agent.** `ingot init` and `ingot new` do that, and they already
   work.
 
-## Open questions
+## The policy block is edited too
 
-These are genuinely open, and the reason this RFC is Proposed rather than
-Accepted.
+Decided 2026-08-11, against the recommendation in the first draft of this RFC,
+which proposed that the canvas be able to narrow a policy but not widen one.
+The objection was that granting a capability should be a deliberate act, and
+that a button in the same flow as building gets clicked the way a notification
+prompt gets clicked. That is on the record; the decision is that somebody who
+cannot open a text editor cannot finish the job otherwise, and a surface that
+leaves them stuck sends them to paste something they do not understand into a
+file, which is worse.
 
-1. **Does the canvas edit the policy block?** It is not part of the flow, but it
-   is the part a non-coder most needs to change and the part where a mistake
-   matters most. Editing `network allow ["…"]` through checkboxes is the same
-   span-replacement machinery. The argument against is that a policy is the one
-   thing that should be slow and deliberate to widen.
-2. **How is a leaf edit committed?** Per keystroke is unusable — every keystroke
-   recompiles and reflows the canvas. On blur is predictable. On an explicit
-   save is safest and most tedious. Leaning towards blur, with the diagnostic
-   panel updating behind it.
-3. **Is `parallel map` drawn as one container or as a fan-out of N?** One
-   container is honest — the collection's size is a runtime fact. N would look
-   better and would be a picture of something the program does not say.
+Mechanically it needs nothing new. `PolicyBlock`, `PolicyRule` and every
+`PolicyAction` carry spans, and each host or path in an `allow` list is a
+`StringLit` with its own. So the three granularities cover it unchanged: change
+`deny` to `allow ["arxiv.org"]` by replacing the action's span, add a host by
+replacing the list's, remove a rule by dropping its move unit, add one by
+inserting at a boundary inside the block.
+
+Two things stay true because they are structural rather than decisions anybody
+has to keep making:
+
+- **A policy edit is compiled like any other.** Widening a grant does not
+  bypass [RFC-0014](0014-a-capabilitys-reach.md): a tool whose declared reach
+  no longer sits inside the policy is still `ING4009`, and a run whose boundary
+  cannot keep a rule is still refused. The canvas cannot write its way past the
+  checks, because all it can do is write source.
+- **What will be written is shown before it is written.** Not friction — the
+  canvas renders a proposed edit as a diff for every gesture, and a policy
+  change is one gesture among them. It is the difference between "allow
+  internet" and "`network deny` → `network allow ["arxiv.org"]`", and the second
+  is what the file will say.
+
+## Two smaller decisions
+
+**A leaf edit is committed on blur.** Per keystroke would recompile and reflow
+the canvas under the caret; an explicit save button would be safest and would
+also be forgotten. Blur is what a form is expected to do, and the diagnostics
+update behind it.
+
+**`parallel map` is drawn as one container.** How many times it will run is a
+fact about a run, not about the program, so a fan-out of N would be a picture of
+something the source does not say. Once a run *has* happened, the run view
+already knows the answer and the block can say "ran 7 times" — which is a fact
+rather than a guess.
+
+**A construct the canvas cannot draw is shown as source, in place.** Read-only,
+in the position it occupies in the flow, so the order is still legible and it is
+obvious what has to be opened in an editor. The alternative — refusing to draw
+the canvas at all when a file contains one unknown construct — would mean the
+canvas never opens for most real projects.
 
 ## Conformance tests
 
@@ -218,3 +255,8 @@ survives**. So:
 * Apply an edit whose expected text no longer matches, and assert refusal.
 * A file that does not parse still yields a canvas, with the unreadable
   statement marked.
+* Widen a policy through the canvas so that a tool's declared reach falls
+  outside it, and assert `ING4009` — a policy edit is compiled like any other,
+  and the canvas cannot write its way past a check.
+* Edit a policy rule in a file whose policy block carries comments between the
+  rules, and assert every comment is byte-identical afterwards.
