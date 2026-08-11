@@ -4,7 +4,7 @@
 
 Do not open a public issue.
 
-Email **security@heptapusgroup.com** with a description, reproduction steps and
+Email **contact@sametunsal.com** with a description, reproduction steps and
 the affected version. Expect an acknowledgement within three working days and an
 assessment within ten. We will agree a disclosure timeline with you and credit
 you in the release notes unless you prefer otherwise.
