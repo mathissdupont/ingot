@@ -28,6 +28,25 @@ impl Answers for Counting {
                 request.param("path").unwrap_or_default().replace('\\', "/")
             )),
             (Method::Get, "/api/broken") => Reply::Failed("the report could not be built".into()),
+            // A route that starts a process, which is what `ingot studio` does
+            // when somebody presses Run. See the test that uses it.
+            (Method::Post, "/api/spawns") => {
+                let child = std::process::Command::new(
+                    std::env::current_exe().expect("this test binary has a path"),
+                )
+                .arg("--list")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn();
+                match child {
+                    Ok(mut child) => {
+                        let _ = child.wait();
+                        Reply::Json("{\"started\":true}".to_string())
+                    }
+                    Err(error) => Reply::Failed(error.to_string()),
+                }
+            }
             _ => Reply::Unknown,
         }
     }
@@ -258,6 +277,25 @@ fn a_delete_reaches_the_route_it_names() {
     ));
     assert_eq!(status(&reply), 200);
     assert_eq!(body(&reply), "{\"deleted\":true}");
+}
+
+#[test]
+fn a_route_that_starts_a_process_still_ends_its_reply_cleanly() {
+    // The bug this exists for: a child inherits a duplicate of the connection's
+    // socket on some platforms, so dropping the server's handle does not end
+    // the connection. A reader waiting for the end of the body then gets a
+    // reset instead of an end, and a correct reply looks like a broken one.
+    //
+    // `send` reads to EOF and panics on an error, so the assertion is that this
+    // returns at all.
+    let fixture = Fixture::start();
+    let reply = fixture.send(&format!(
+        "POST /api/spawns HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nX-Ingot-Token: {}\r\n\r\n",
+        fixture.address().port(),
+        fixture.token()
+    ));
+    assert_eq!(status(&reply), 200, "{reply}");
+    assert_eq!(body(&reply), "{\"started\":true}");
 }
 
 #[test]

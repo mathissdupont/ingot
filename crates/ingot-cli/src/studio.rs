@@ -40,6 +40,7 @@ use ingot_studio::{Answers, Head, Method, Reply, Studio};
 use serde::Serialize;
 use serde_json::json;
 
+use crate::launch;
 use crate::manifest::{resolve_target, MANIFEST_NAME};
 use crate::runs;
 
@@ -67,7 +68,7 @@ pub fn serve(config: &StudioConfig) -> Result<u8> {
         None => SocketAddr::from(([127, 0, 0, 1], PREFERRED_PORT)),
     };
 
-    let routes = Arc::new(Routes);
+    let routes = Arc::new(Routes::default());
     let mut studio = match Studio::start(bind, routes.clone()) {
         Ok(studio) => studio,
         Err(error) if config.bind.is_none() && error.kind() == std::io::ErrorKind::AddrInUse => {
@@ -92,19 +93,30 @@ pub fn serve(config: &StudioConfig) -> Result<u8> {
 
 // --- routing ---------------------------------------------------------------
 
-struct Routes;
+#[derive(Default)]
+struct Routes {
+    /// The runs this studio started, for as long as it is running. See
+    /// [`crate::launch`] for why a launch is not the same thing as a record.
+    launcher: launch::Launcher,
+}
 
 impl Answers for Routes {
-    fn answer(&self, request: &Head, _body: &[u8]) -> Reply {
+    fn answer(&self, request: &Head, body: &[u8]) -> Reply {
         let route = request.path.strip_prefix("/api/").unwrap_or_default();
         let result = match (request.method, route) {
             (Method::Get, "projects") => bookmarked(),
             (Method::Post, "projects") => with_path(request, |path| bookmark(path, true)),
             (Method::Delete, "projects") => with_path(request, |path| bookmark(path, false)),
             (Method::Get, "project") => with_path(request, project),
-            (Method::Get, "runs") => with_path(request, run_list),
+            (Method::Get, "runs") => with_path(request, |path| self.run_list(path)),
             (Method::Get, "run") => with_id(request, run_detail),
-            (Method::Delete, "run") => with_id(request, run_delete),
+            (Method::Delete, "run") => with_id(request, |path, id| self.run_delete(path, id)),
+            (Method::Post, "run") => with_path(request, |path| self.start(path, body)),
+            (Method::Delete, "launch") => with_path(request, |path| self.stop(request, path)),
+            (Method::Post, "launches") => with_path(request, |path| {
+                self.launcher.clear(path);
+                self.run_list(path)
+            }),
             (Method::Get, "machine") => machine(),
             _ => return Reply::Unknown,
         };
@@ -115,6 +127,51 @@ impl Answers for Routes {
             // rather than the server's.
             Err(error) => Reply::Refused(format!("{error:#}")),
         }
+    }
+}
+
+impl Routes {
+    /// The durable half and the transient half of a project's runs.
+    ///
+    /// One route rather than two because the page needs both to say anything
+    /// true: a record is what a run *did*, and a launch is what this studio
+    /// started — including the ones that failed before a record existed.
+    fn run_list(&self, path: &Path) -> Result<String> {
+        let target = resolve_target(Some(path))?;
+        Ok(serde_json::to_string(&json!({
+            "schemaVersion": STUDIO_SCHEMA_VERSION,
+            "runs": runs::list(&target.out_dir),
+            "launches": self.launcher.of(&resolve(path)),
+        }))?)
+    }
+
+    fn start(&self, path: &Path, body: &[u8]) -> Result<String> {
+        // The project has to be one this studio can resolve before anything is
+        // spawned: `ingot run` would say the same thing, but from a process
+        // whose failure the page would have to go looking for.
+        let target = resolve_target(Some(path))?;
+        let request: launch::StartRequest = if body.is_empty() {
+            serde_json::from_str("{}")?
+        } else {
+            serde_json::from_slice(body).context("reading the run request")?
+        };
+        let project = resolve(&target.root);
+        self.launcher.start(&project, &request)?;
+        self.run_list(path)
+    }
+
+    fn run_delete(&self, path: &Path, id: &str) -> Result<String> {
+        let target = resolve_target(Some(path))?;
+        runs::delete(&target.out_dir, id)?;
+        self.run_list(path)
+    }
+
+    fn stop(&self, request: &Head, path: &Path) -> Result<String> {
+        let Some(pid) = request.param("pid").and_then(|pid| pid.parse::<u32>().ok()) else {
+            bail!("this route needs a numeric `pid` parameter");
+        };
+        self.launcher.stop(&resolve(path), pid)?;
+        self.run_list(path)
     }
 }
 
@@ -476,23 +533,9 @@ fn describe_model(requirement: &ingot_ir::ModelRequirement) -> String {
 
 // --- runs -------------------------------------------------------------------
 
-fn run_list(path: &Path) -> Result<String> {
-    let target = resolve_target(Some(path))?;
-    Ok(serde_json::to_string(&json!({
-        "schemaVersion": STUDIO_SCHEMA_VERSION,
-        "runs": runs::list(&target.out_dir),
-    }))?)
-}
-
 fn run_detail(path: &Path, id: &str) -> Result<String> {
     let target = resolve_target(Some(path))?;
     Ok(serde_json::to_string(&runs::read(&target.out_dir, id)?)?)
-}
-
-fn run_delete(path: &Path, id: &str) -> Result<String> {
-    let target = resolve_target(Some(path))?;
-    runs::delete(&target.out_dir, id)?;
-    run_list(path)
 }
 
 // --- the machine -------------------------------------------------------------

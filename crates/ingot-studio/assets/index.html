@@ -243,7 +243,7 @@ button.action:hover { border-color: var(--accent); color: var(--accent); }
 button.action.quiet { border-color: transparent; color: var(--muted); padding: 4px 8px; font-size: 12px; }
 button.action.quiet:hover { border-color: var(--line-strong); color: var(--fail); }
 
-input.text {
+input.text, select.text {
   font: inherit;
   font-family: var(--mono);
   font-size: 12.5px;
@@ -255,7 +255,9 @@ input.text {
   flex: 1;
   min-width: 0;
 }
-input.text:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+select.text { flex: 0 1 auto; cursor: pointer; }
+input.text:focus, select.text:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+button.action:disabled { opacity: 0.5; cursor: progress; }
 
 .add { display: flex; gap: 8px; }
 
@@ -368,10 +370,16 @@ const state = {
   runId: null,
   detail: null,
   runs: null,
+  launches: null,
   run: null,
   machine: null,
   error: null,
   poll: null,
+  // The start panel is one live DOM node, reused across renders. Rebuilding it
+  // every two seconds while a run is going would take the caret out of whatever
+  // field somebody was typing in.
+  form: null,
+  formFor: null,
 };
 
 function show(view, extra) {
@@ -398,15 +406,13 @@ async function load() {
       state.machine = await api("machine");
     }
     if (state.view === "project") {
-      if (state.tab === "overview" && !state.detail) {
-        state.detail = await api("project?" + q({ path: state.path }));
-      }
-      if (state.tab === "boundary" && !state.detail) {
-        state.detail = await api("project?" + q({ path: state.path }));
-      }
+      // Every tab wants the project read. The runs tab wants it too: the start
+      // panel offers the agents the artifact declares and a field per input it
+      // takes, which is the artifact's own signature and not a guess at one.
+      if (!state.detail) state.detail = await api("project?" + q({ path: state.path }));
       if (state.tab === "runs") {
         if (state.runId) state.run = await api("run?" + q({ path: state.path, id: state.runId }));
-        else state.runs = (await api("runs?" + q({ path: state.path }))).runs;
+        else await refreshRuns();
         startPollingIfLive();
       }
     }
@@ -416,19 +422,26 @@ async function load() {
   render();
 }
 
-// A run that has not recorded a result is either still going or was
-// interrupted; the page cannot tell which, so it re-reads while it is on
-// screen and says exactly that in the meantime.
+async function refreshRuns() {
+  const answer = await api("runs?" + q({ path: state.path }));
+  state.runs = answer.runs;
+  state.launches = answer.launches;
+}
+
+// Two reasons to keep re-reading: a record with no result line, which is a run
+// that is going or was interrupted and the page cannot tell which; and a child
+// this studio started that has not exited yet.
 function startPollingIfLive() {
   const live = state.runId
     ? state.run && state.run.state === "unfinished"
-    : (state.runs || []).some((run) => run.state === "unfinished");
+    : (state.runs || []).some((run) => run.state === "unfinished") ||
+      (state.launches || []).some((launch) => launch.state === "running");
   if (!live) return;
   state.poll = setTimeout(async () => {
     if (document.hidden) return startPollingIfLive();
     try {
       if (state.runId) state.run = await api("run?" + q({ path: state.path, id: state.runId }));
-      else state.runs = (await api("runs?" + q({ path: state.path }))).runs;
+      else await refreshRuns();
       render();
       startPollingIfLive();
     } catch (_) { /* the studio went away; stop quietly */ }
@@ -654,9 +667,160 @@ function lasted(run) {
   return seconds < 60 ? seconds + "s" : Math.floor(seconds / 60) + "m " + (seconds % 60) + "s";
 }
 
+// The panel that starts a run.
+//
+// Built once per project and kept as a live node, so a poll two seconds later
+// does not take the caret out of the field being typed in.
+function startPanel() {
+  if (state.form && state.formFor === state.path) return state.form;
+
+  const agents = (state.detail && state.detail.agents) || [];
+  const chosen = { agent: agents.length ? agents[0].name : null, provider: "auto", cassette: "", inputs: {} };
+
+  const inputsBox = el("div", { style: "display:grid;gap:8px;margin-top:12px" });
+  function drawInputs() {
+    inputsBox.textContent = "";
+    const agent = agents.find((candidate) => candidate.name === chosen.agent);
+    if (!agent || !agent.inputs.length) {
+      inputsBox.appendChild(el("div", { class: "sub", text: agent ? "This agent takes no input." : "" }));
+      return;
+    }
+    for (const field of agent.inputs) {
+      const box = el("input", {
+        class: "text",
+        placeholder: field.type,
+        spellcheck: "false",
+        value: chosen.inputs[field.name] || "",
+        oninput: (event) => { chosen.inputs[field.name] = event.target.value; },
+      });
+      inputsBox.appendChild(el("label", { style: "display:flex;gap:10px;align-items:center" }, [
+        el("span", { class: "sub", style: "flex:0 0 132px", text: field.name }),
+        box,
+      ]));
+    }
+  }
+
+  const agentPicker = el("select", { class: "text", onchange: (event) => { chosen.agent = event.target.value; drawInputs(); } },
+    agents.map((agent) => el("option", { value: agent.name, text: agent.name })));
+  const providerPicker = el("select", { class: "text", onchange: (event) => { chosen.provider = event.target.value; cassetteRow.style.display = chosen.provider === "replay" ? "flex" : "none"; } },
+    ["auto", "anthropic", "google", "openai", "replay"].map((name) => el("option", { value: name, text: name })));
+  const cassetteBox = el("input", {
+    class: "text",
+    placeholder: "tests/cassettes/example.json",
+    spellcheck: "false",
+    oninput: (event) => { chosen.cassette = event.target.value; },
+  });
+  const cassetteRow = el("label", { style: "display:none;gap:10px;align-items:center;margin-top:12px" }, [
+    el("span", { class: "sub", style: "flex:0 0 132px", text: "cassette" }),
+    cassetteBox,
+  ]);
+
+  const button = el("button", { class: "action", text: "Start run" });
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    try {
+      const body = { provider: chosen.provider, inputs: chosen.inputs };
+      if (chosen.agent) body.agent = chosen.agent;
+      if (chosen.provider === "replay" && chosen.cassette) body.cassette = chosen.cassette;
+      const answer = await api("run?" + q({ path: state.path }), {
+        method: "POST",
+        headers: { "X-Ingot-Token": TOKEN, "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      state.runs = answer.runs;
+      state.launches = answer.launches;
+      state.error = null;
+    } catch (error) {
+      state.error = String(error.message || error);
+    }
+    button.disabled = false;
+    render();
+    startPollingIfLive();
+  });
+
+  const node = el("div", { class: "card" }, [
+    el("h3", {}, [el("span", { text: "Start a run" })]),
+    el("div", { class: "body" }, [
+      el("div", { style: "display:flex;gap:10px;align-items:center" }, [
+        el("span", { class: "sub", style: "flex:0 0 132px", text: "agent" }),
+        agentPicker,
+        el("span", { class: "sub", text: "provider" }),
+        providerPicker,
+      ]),
+      cassetteRow,
+      inputsBox,
+      el("div", { style: "margin-top:14px;display:flex;gap:10px;align-items:center" }, [
+        button,
+        el("span", { class: "sub", text: "Runs here are the same command as the terminal. An effect that needs a person is denied, not assumed — there is nobody at this one's keyboard." }),
+      ]),
+    ]),
+  ]);
+  drawInputs();
+  state.form = node;
+  state.formFor = state.path;
+  return node;
+}
+
+const LAUNCH_CHIP = { running: "warn", exited: "pass", failed: "fail" };
+
+function renderLaunches(inner) {
+  const launches = (state.launches || []).slice().reverse();
+  if (!launches.length) return;
+
+  const items = launches.map((launch) => el("div", { class: "row" }, [
+    el("span", { class: "stripe " + LAUNCH_CHIP[launch.state] }),
+    el("div", { class: "grow" }, [
+      el("div", {}, [
+        el("b", { text: launch.agent || "(default agent)" }),
+        el("span", { class: "sub", text: "  pid " + launch.pid + "  ·  " + launch.provider + "  ·  " + when(launch.startedUnix) }),
+      ]),
+      launch.state === "failed"
+        ? el("div", { class: "fix", text: "exit " + launch.exitCode + " — the log below is what it said" })
+        : null,
+      launch.log && launch.state !== "running" ? el("pre", { class: "block", style: "margin-top:8px", text: launch.log.trimEnd() }) : null,
+      launch.output ? el("pre", { class: "block", style: "margin-top:8px", text: launch.output.trimEnd() }) : null,
+      launch.truncated ? el("div", { class: "fix", text: "output was longer than the studio keeps" }) : null,
+    ]),
+    launch.state === "running"
+      ? el("button", {
+          class: "action quiet",
+          text: "Stop",
+          onclick: async () => {
+            try {
+              const answer = await api("launch?" + q({ path: state.path, pid: launch.pid }), { method: "DELETE" });
+              state.runs = answer.runs;
+              state.launches = answer.launches;
+            } catch (error) { state.error = String(error.message || error); }
+            render();
+          },
+        })
+      : null,
+    el("span", { class: "chip " + LAUNCH_CHIP[launch.state], text: launch.state }),
+  ]));
+
+  inner.appendChild(card("Started from here", rows(items, ""),
+    launches.some((launch) => launch.state !== "running")
+      ? el("button", {
+          class: "action quiet",
+          text: "Clear finished",
+          onclick: async () => {
+            try {
+              const answer = await api("launches?" + q({ path: state.path }), { method: "POST" });
+              state.runs = answer.runs;
+              state.launches = answer.launches;
+            } catch (error) { state.error = String(error.message || error); }
+            render();
+          },
+        })
+      : null));
+}
+
 function renderRuns(inner) {
   if (state.runId) return renderRun(inner);
   if (!state.runs) return inner.appendChild(el("div", { class: "empty", text: "Reading run history…" }));
+
+  inner.appendChild(startPanel());
+  renderLaunches(inner);
 
   inner.appendChild(el("div", { class: "banner note", text: "A run writes its own event stream here as it goes. This is the only thing the studio stores about a project, it lives under the project's build directory, and deleting it loses only the history." }));
 

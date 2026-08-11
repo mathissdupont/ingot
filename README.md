@@ -284,6 +284,12 @@ two lines carrying the wall clock and the outcome, which is where a clock is
 allowed to live because an event may not carry one. `--no-history` writes
 nothing.
 
+A run can also be started from the page. The form offers the agents the artifact
+declares and a field per input it takes, and then spawns the same command you
+would type — the studio interprets nothing itself. It cannot pass `--yes`: the
+child gets no terminal, so an effect that needs a person is denied rather than
+assumed.
+
 Connecting a model service is still something you do by hand: the page shows the
 `[[model.provider]]` block to write and the variable to export, and there is no
 field to type a credential into. See

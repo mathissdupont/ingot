@@ -23,6 +23,7 @@ mod dev;
 mod diff;
 mod doctor;
 mod image;
+mod launch;
 mod manifest;
 mod package;
 mod run;

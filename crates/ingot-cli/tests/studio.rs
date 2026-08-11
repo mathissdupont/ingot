@@ -28,17 +28,31 @@ struct Serving {
 
 impl Serving {
     fn start(tag: &str) -> Serving {
+        Serving::start_with(tag, &[])
+    }
+
+    /// A studio with these variables set, and every provider key cleared first.
+    ///
+    /// The child a launch spawns inherits this environment, which is the whole
+    /// reason a test can point a studio-started run at a stub.
+    fn start_with(tag: &str, env: &[(&str, &str)]) -> Serving {
         let config = TempDir::new(&format!("studio-config-{tag}"));
-        let mut child = Command::new(binary())
+        let mut command = Command::new(binary());
+        command
             .args(["studio", "--bind", "127.0.0.1:0"])
             // The list this studio keeps must be its own: a test that wrote to
             // the developer's real project list would be a test that edited
             // their machine.
             .env("INGOT_CONFIG_DIR", config.path())
             .env_remove("ANTHROPIC_API_KEY")
+            .env_remove("INGOT_ANTHROPIC_BASE_URL")
             .env_remove("OPENAI_API_KEY")
             .env_remove("GEMINI_API_KEY")
-            .env_remove("GOOGLE_API_KEY")
+            .env_remove("GOOGLE_API_KEY");
+        for (name, value) in env {
+            command.env(name, value);
+        }
+        let mut child = command
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
@@ -101,6 +115,56 @@ impl Serving {
         let (status, body) = self.request("POST", target);
         assert_eq!(status, 200, "POST {target} answered {status}: {body}");
         serde_json::from_str(&body).expect("a JSON reply")
+    }
+
+    /// A request with a JSON body, as the start panel makes it.
+    fn send_json(&self, method: &str, target: &str, body: &str) -> (u16, String) {
+        let mut stream =
+            TcpStream::connect(&self.authority).expect("the studio must accept a connection");
+        write!(
+            stream,
+            "{method} {target} HTTP/1.1\r\nHost: {authority}\r\nOrigin: http://{authority}\r\n\
+             X-Ingot-Token: {token}\r\nContent-Type: application/json\r\n\
+             Content-Length: {length}\r\n\r\n{body}",
+            authority = self.authority,
+            token = self.token,
+            length = body.len()
+        )
+        .expect("the request must be written");
+        stream.flush().expect("the request must flush");
+
+        let mut reply = String::new();
+        stream
+            .read_to_string(&mut reply)
+            .expect("the reply must be readable");
+        let status = reply
+            .split(' ')
+            .nth(1)
+            .and_then(|code| code.parse().ok())
+            .unwrap_or(0);
+        let payload = reply
+            .split_once("\r\n\r\n")
+            .map(|(_, payload)| payload.to_string())
+            .unwrap_or_default();
+        (status, payload)
+    }
+
+    /// Re-read a project's runs until `done` is satisfied, or give up.
+    ///
+    /// A launched child compiles before it records anything, so there is a real
+    /// gap between the request returning and there being something to see.
+    fn until(&self, path: &Path, done: impl Fn(&Value) -> bool) -> Value {
+        for _ in 0..200 {
+            let answer = self.get(&format!("/api/runs?path={}", encoded(path)));
+            if done(&answer) {
+                return answer;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        panic!(
+            "the studio never reached the expected state: {}",
+            self.get(&format!("/api/runs?path={}", encoded(path)))
+        );
     }
 }
 
@@ -531,6 +595,154 @@ fn the_machine_page_names_variables_and_never_carries_a_value() {
         .find(|provider| provider["name"] == "openai")
         .expect("openai must be listed");
     assert_eq!(openai["variables"][0]["set"], false);
+}
+
+#[test]
+fn a_run_started_from_the_studio_is_the_same_run_a_terminal_would_have_made() {
+    let dir = TempDir::new("studio-start");
+    project(dir.path());
+    let stub = stub_provider(vec![text_reply("# Compilers\n\nShort.")]);
+    let studio = Serving::start_with(
+        "start",
+        &[
+            ("ANTHROPIC_API_KEY", "stub-key"),
+            ("INGOT_ANTHROPIC_BASE_URL", &stub.url),
+        ],
+    );
+    studio.post(&format!("/api/projects?path={}", encoded(dir.path())));
+
+    let (status, body) = studio.send_json(
+        "POST",
+        &format!("/api/run?path={}", encoded(dir.path())),
+        r#"{"agent":"Note","provider":"anthropic","inputs":{"topic":"compilers"}}"#,
+    );
+    assert_eq!(status, 200, "{body}");
+    let started: Value = serde_json::from_str(&body).expect("a JSON reply");
+    let pid = started["launches"][0]["pid"].as_u64().expect("a pid");
+
+    // Both halves, because they arrive separately and that is the design: the
+    // child closes its record when the interpreter is done, and exits a moment
+    // later once its artifacts are written.
+    let answer = studio.until(dir.path(), |answer| {
+        let recorded = answer["runs"]
+            .as_array()
+            .map(|runs| runs.iter().any(|run| run["state"] == "finished"))
+            .unwrap_or(false);
+        let exited = answer["launches"]
+            .as_array()
+            .map(|launches| launches.iter().all(|launch| launch["state"] != "running"))
+            .unwrap_or(false);
+        recorded && exited
+    });
+
+    let run = &answer["runs"][0];
+    assert_eq!(run["agent"], "Note");
+    assert_eq!(run["provider"], "anthropic");
+    // A launch and a record are joined by the process id — the record's
+    // identifier ends in the pid of the process that wrote it — so nothing new
+    // has to cross between the studio and the run it started.
+    assert!(
+        run["id"]
+            .as_str()
+            .expect("an id")
+            .ends_with(&format!("-{pid}")),
+        "{run}"
+    );
+
+    let launch = answer["launches"]
+        .as_array()
+        .expect("an array")
+        .iter()
+        .find(|launch| launch["pid"] == pid)
+        .expect("the launch must still be listed");
+    assert_eq!(launch["state"], "exited");
+    assert_eq!(launch["exitCode"], 0);
+}
+
+#[test]
+fn a_run_that_fails_before_recording_anything_is_still_reported() {
+    // The failure this exists for: `ingot run` refusing at compile time writes
+    // no record at all, and a button that appears to do nothing is worse than
+    // an error. The launch is what carries the message.
+    let dir = TempDir::new("studio-start-broken");
+    project(dir.path());
+    std::fs::write(dir.path().join("main.ing"), "language 0.1\nagent Broken(\n")
+        .expect("writing a source that cannot compile");
+
+    let studio = Serving::start("start-broken");
+    studio.post(&format!("/api/projects?path={}", encoded(dir.path())));
+    let (status, body) = studio.send_json(
+        "POST",
+        &format!("/api/run?path={}", encoded(dir.path())),
+        r#"{"provider":"auto"}"#,
+    );
+    assert_eq!(status, 200, "{body}");
+
+    let answer = studio.until(dir.path(), |answer| {
+        answer["launches"]
+            .as_array()
+            .map(|launches| launches.iter().any(|launch| launch["state"] == "failed"))
+            .unwrap_or(false)
+    });
+    assert_eq!(answer["runs"].as_array().expect("an array").len(), 0);
+    let launch = &answer["launches"][0];
+    assert_ne!(launch["exitCode"], 0);
+    assert!(
+        launch["log"].as_str().expect("a log").contains("ING"),
+        "the log must carry the diagnostic: {launch}"
+    );
+}
+
+#[test]
+fn the_studio_will_not_start_a_run_with_a_field_the_page_invented() {
+    // `--yes` would turn an effect that asks for a person into one that does
+    // not, and `--no-history` would produce a run the studio could never show
+    // again. Neither is a field, and an unknown one is refused rather than
+    // ignored — the same rule the manifest keeps about a literal secret.
+    let dir = TempDir::new("studio-start-fields");
+    project(dir.path());
+    let studio = Serving::start("start-fields");
+    studio.post(&format!("/api/projects?path={}", encoded(dir.path())));
+
+    for hostile in [
+        r#"{"provider":"auto","yes":true}"#,
+        r#"{"provider":"auto","noHistory":true}"#,
+        r#"{"provider":"auto","args":["--yes"]}"#,
+    ] {
+        let (status, body) = studio.send_json(
+            "POST",
+            &format!("/api/run?path={}", encoded(dir.path())),
+            hostile,
+        );
+        assert_eq!(status, 400, "`{hostile}` was accepted: {body}");
+    }
+
+    let (status, body) = studio.send_json(
+        "POST",
+        &format!("/api/run?path={}", encoded(dir.path())),
+        r#"{"provider":"curl"}"#,
+    );
+    assert_eq!(status, 400, "{body}");
+    assert!(body.contains("not a provider"), "{body}");
+
+    // And nothing was started by any of it.
+    let answer = studio.get(&format!("/api/runs?path={}", encoded(dir.path())));
+    assert_eq!(answer["launches"].as_array().expect("an array").len(), 0);
+}
+
+#[test]
+fn stopping_a_process_this_studio_did_not_start_is_refused() {
+    let dir = TempDir::new("studio-stop");
+    project(dir.path());
+    let studio = Serving::start("stop");
+    studio.post(&format!("/api/projects?path={}", encoded(dir.path())));
+
+    let (status, body) = studio.request(
+        "DELETE",
+        &format!("/api/launch?path={}&pid=1", encoded(dir.path())),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert!(body.contains("did not start"), "{body}");
 }
 
 #[test]

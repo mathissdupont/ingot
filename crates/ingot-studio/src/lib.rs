@@ -42,7 +42,7 @@
 //! [RFC-0007]: ../../../rfcs/0007-the-ingot-product-loop.md
 
 use std::io::{self, BufReader};
-use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
@@ -202,48 +202,65 @@ fn serve(
     };
     let body = http::read_body(&mut reader, &head)?;
 
-    if let Err(reason) = admitted(&head, address, token) {
+    let (status, reason, content_type, payload) = decide(&head, &body, address, token, answers);
+    http::respond(
+        &mut client,
+        status,
+        reason,
+        content_type,
+        payload.as_bytes(),
+    )?;
+
+    // Say the connection is over rather than letting the socket go and hoping.
+    //
+    // `Connection: close` promises a clean end, and dropping the stream does
+    // not always deliver one: a route may have started a child process, which
+    // on some platforms inherits a duplicate of this very socket, so the
+    // connection outlives the handle this function is holding. The reader then
+    // waits for an end that never comes, or is cut off by a reset. `shutdown`
+    // acts on the connection rather than on one handle to it, so the caller
+    // sees the end of the body exactly when the body ends.
+    let _ = client.shutdown(Shutdown::Both);
+    Ok(())
+}
+
+/// What to answer, without writing anything.
+///
+/// Separated from the writing so that every path — refused, unknown, answered —
+/// leaves through the same close.
+fn decide(
+    head: &Head,
+    body: &[u8],
+    address: SocketAddr,
+    token: &str,
+    answers: &dyn Answers,
+) -> (u16, &'static str, &'static str, String) {
+    if let Err(reason) = admitted(head, address, token) {
         // The refusal says which check failed and nothing about the token, so
         // the message is useful to the person who started this and useless to
         // anyone guessing.
-        let refusal = format!("refused: {reason}\n");
-        return http::respond(
-            &mut client,
+        return (
             403,
             "Forbidden",
             "text/plain; charset=utf-8",
-            refusal.as_bytes(),
+            format!("refused: {reason}\n"),
         );
     }
 
     if head.path == "/" {
-        return http::respond(
-            &mut client,
-            200,
-            "OK",
-            "text/html; charset=utf-8",
-            PAGE.as_bytes(),
-        );
+        return (200, "OK", "text/html; charset=utf-8", PAGE.to_string());
     }
 
-    let Some(route) = head.path.strip_prefix("/api/") else {
-        return not_found(&mut client);
-    };
+    let route = head.path.strip_prefix("/api/").unwrap_or_default();
     if route.is_empty() {
-        return not_found(&mut client);
+        return not_found();
     }
 
-    match answers.answer(&head, &body) {
-        Reply::Json(document) => http::respond(
-            &mut client,
-            200,
-            "OK",
-            "application/json; charset=utf-8",
-            document.as_bytes(),
-        ),
-        Reply::Refused(reason) => problem(&mut client, 400, "Bad Request", &reason),
-        Reply::Unknown => not_found(&mut client),
-        Reply::Failed(reason) => problem(&mut client, 500, "Internal Server Error", &reason),
+    match answers.answer(head, body) {
+        Reply::Json(document) => (200, "OK", "application/json; charset=utf-8", document),
+        Reply::Refused(reason) => problem(400, "Bad Request", &reason),
+        Reply::Unknown => not_found(),
+        Reply::Failed(reason) => problem(500, "Internal Server Error", &reason),
     }
 }
 
@@ -300,18 +317,20 @@ fn is_own_authority(authority: &str, address: SocketAddr) -> bool {
     matches!(name, "127.0.0.1" | "localhost" | "[::1]")
 }
 
-fn not_found(client: &mut TcpStream) -> io::Result<()> {
-    problem(client, 404, "Not Found", "no such route")
+fn not_found() -> (u16, &'static str, &'static str, String) {
+    problem(404, "Not Found", "no such route")
 }
 
-fn problem(client: &mut TcpStream, status: u16, reason: &str, detail: &str) -> io::Result<()> {
-    let body = format!("{{\"error\":{}}}", json_string(detail));
-    http::respond(
-        client,
+fn problem(
+    status: u16,
+    reason: &'static str,
+    detail: &str,
+) -> (u16, &'static str, &'static str, String) {
+    (
         status,
         reason,
         "application/json; charset=utf-8",
-        body.as_bytes(),
+        format!("{{\"error\":{}}}", json_string(detail)),
     )
 }
 
@@ -385,5 +404,49 @@ mod tests {
     #[test]
     fn a_control_character_cannot_break_out_of_an_error_message() {
         assert_eq!(json_string("a\"b\nc"), "\"a\\\"b\\nc\"");
+    }
+
+    #[test]
+    fn the_page_never_turns_a_report_into_markup() {
+        // Everything the page shows is somebody's path, diagnostic or model
+        // output. It builds nodes and sets `textContent`; the moment one of
+        // these appears, a report can carry markup into the document.
+        //
+        // Matched on the form that *does* something — `.innerHTML`, not
+        // `innerHTML` — because a comment explaining the rule is not a breach
+        // of it, and a test that cannot tell the difference gets deleted.
+        for hazard in [
+            ".innerHTML",
+            ".outerHTML",
+            ".insertAdjacentHTML(",
+            "document.write(",
+            "eval(",
+            "new Function(",
+        ] {
+            assert!(!PAGE.contains(hazard), "the page uses `{hazard}`");
+        }
+    }
+
+    #[test]
+    fn the_page_asks_for_nothing_from_outside_this_machine() {
+        // The response header forbids it, but a page written to need a font or
+        // a script from elsewhere would simply be broken rather than refused —
+        // and broken only for the person whose network blocks it.
+        //
+        // Again the fetching form, not the substring: the connections panel
+        // shows a `base-url = "https://…"` line as an example of what to write
+        // in a manifest, and displayed text reaches nowhere.
+        for outside in [
+            "src=\"http",
+            "src=\"//",
+            "href=\"http",
+            "href=\"//",
+            "url(http",
+            "url(//",
+            "@import",
+            "fetch(\"http",
+        ] {
+            assert!(!PAGE.contains(outside), "the page reaches for `{outside}`");
+        }
     }
 }

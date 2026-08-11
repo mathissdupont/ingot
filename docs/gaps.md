@@ -522,9 +522,17 @@ process id and the outcome. Wall clock lives there and not in an event, because
 [Runtime 0.1 §9](../specs/runtime/v0.1.md) requires a replay to reproduce the
 event sequence byte for byte. `--no-history` writes nothing.
 
-*What it deliberately does not do.* Edit a program, edit a manifest, or start a
-run. Connecting a model service still means writing `[[model.provider]]` by hand
-and naming the variable it reads; the page shows the block and where it goes.
+*Starting a run.* The page offers the agents the artifact declares with a field
+per input it takes, and spawns the same command a person would type. A *launch*
+is tracked apart from a record because a record only exists once the interpreter
+reaches `runStarted`: a child that fails while compiling writes none, and a
+button that appears to have done nothing is worse than an error. `--yes` and
+`--no-history` are not fields the page has, and an unknown one is refused rather
+than ignored.
+
+*What it deliberately does not do.* Edit a program or edit a manifest.
+Connecting a model service still means writing `[[model.provider]]` by hand and
+naming the variable it reads; the page shows the block and where it goes.
 Writing it would mean re-serializing a hand-written manifest and losing its
 comments, which is the same mistake as regenerating source from a diagram — and
 solving it properly is the canvas's problem, not this one's.

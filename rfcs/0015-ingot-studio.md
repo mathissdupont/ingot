@@ -44,7 +44,8 @@ expired for writing, which is what shapes this RFC.
 - Editing a program. The canvas is separate work with a harder constraint, and
   nothing here prejudges it.
 - Editing a manifest. See *Connections are read-only*, below.
-- Starting a run. The studio shows runs; `ingot run` performs them.
+- Performing a run. The studio *starts* one by spawning the same command a
+  person would type; it does not interpret an artifact itself.
 - Remote access, accounts, or multi-user anything.
 
 ## Why this is not the surface RFC-0007 refused
@@ -158,6 +159,49 @@ rather than about a project.
 `ingot dev --run` keeps no record. A watch loop runs on every save, and burying
 the runs somebody meant to keep under the ones they did not is not a history.
 
+## Starting a run, and the gap before the record exists
+
+The Runs panel offers the agents the artifact declares and a field per input it
+takes — the artifact's own signature, not a guess at one — and spawns the same
+command a person would type. The studio does not interpret anything: the child
+compiles, resolves tools, builds a provider and runs, exactly as it does from a
+terminal.
+
+**A launch is not a run.** The record is written by the child, and only once the
+interpreter reaches `runStarted`. Between the button and that moment the child
+may fail — a source that does not compile, a provider that is not configured —
+and in that case **no record is ever written**. A surface that only read records
+would show nothing at all for a run that failed to compile, and a button that
+appears to do nothing is worse than an error. So a *launch* is what this studio
+started: a process id, a start time, and eventually an exit status with what the
+child printed. It lives in memory for as long as the studio does; the record is
+the durable half and outlives it.
+
+The two are joined by process id — a record's identifier ends in the pid of the
+process that wrote it — so nothing new has to cross between them.
+
+**Two things the page cannot ask for.** `--yes` is not in the argv the launcher
+builds and there is no field that would put it there; the child is spawned with
+no terminal on its standard input, so `ingot run` selects `ApprovalMode::Deny`
+and an artifact that asks for a human does not get a silent yes.
+`--no-history` is likewise absent: a studio-started run that wrote nothing down
+would be a run the studio could never show again. The request struct is
+`deny_unknown_fields`, so inventing either is a refusal rather than a field that
+is quietly ignored — the same rule the manifest keeps about a literal secret.
+
+Everything else the page supplies is checked rather than trusted: the provider
+must be one of a named few, an input name may not contain the `=` that would
+move the split or the `-` that would make it a flag, and a cassette path is
+resolved and then required to be inside the project.
+
+**A response has to end cleanly even when a route started a process.** On some
+platforms a child inherits a duplicate of the connection's socket, so dropping
+the server's handle does not end the connection: a reader waiting for the end of
+the body gets a reset instead of an end, and a correct reply looks like a broken
+one. Every response is therefore followed by an explicit `shutdown`, which acts
+on the connection rather than on one handle to it. There is a test that reaches
+a route which spawns a process and reads the reply to its end.
+
 ## Who can reach the studio
 
 A loopback port is reachable by every process on the machine and, through a page
@@ -207,9 +251,12 @@ A webview wrapper can come later without changing any of this.
 | POST | `/api/projects?path=` | adds a bookmark; refuses a directory with no `ingot.toml` |
 | DELETE | `/api/projects?path=` | removes a bookmark |
 | GET | `/api/project?path=` | diagnostics, readiness, agents, boundary |
-| GET | `/api/runs?path=` | run summaries, newest first |
+| GET | `/api/runs?path=` | run records, newest first, and this studio's launches |
 | GET | `/api/run?path=&id=` | one run and its events |
 | DELETE | `/api/run?path=&id=` | removes one record |
+| POST | `/api/run?path=` | starts a run; the JSON body names the agent, provider and inputs |
+| DELETE | `/api/launch?path=&pid=` | stops a child this studio started |
+| POST | `/api/launches?path=` | forgets the launches that have finished |
 | GET | `/api/machine` | providers, credentials by name, runtime, images |
 
 A run identifier from a URL is checked against the shape an identifier has —
@@ -237,6 +284,15 @@ Calling the same functions in-process gets the same guarantee.
 started from the studio would have history, and the terminal — where people
 actually work — would produce none. The record belongs to `ingot run`.
 
+**Run in-process instead of spawning.** The studio would then have to build a
+provider, a tool host and an approval mode, which is most of what `ingot run`
+is — and the moment it does, "the studio computes nothing" stops being true.
+Spawning keeps the two identical by construction, and costs one process.
+
+**Have the child report its record identifier back.** A pipe, a protocol and a
+handshake, to learn something the process id already determines. The record's
+identifier ends in the pid, so the join needs nothing new.
+
 **Keep run history in the studio's configuration directory.** It would survive
 `rm -rf target/`, and it would also make a project's history a fact about one
 machine's UI configuration. A record is output; output goes with output.
@@ -251,14 +307,21 @@ so a poll is a `read_to_string`.
 - `crates/ingot-studio/tests/server.rs` — the guard from the other end of a
   socket: a missing token, a guessed token, a rebinding `Host`, a cross-site
   `Origin`, and in each case that **no route was reached at all**. Plus the
-  refusal to bind anywhere but loopback, and that two studios do not share a
-  token.
+  refusal to bind anywhere but loopback, that two studios do not share a token,
+  and that a route which starts a process still ends its reply cleanly.
+- `crates/ingot-cli/src/launch.rs` — a provider the studio does not offer, an
+  input name carrying its own separator, a cassette outside the project, and
+  that a request cannot carry `yes` or `noHistory`.
 - `crates/ingot-cli/tests/studio.rs` — the equalities. The readiness on the page
   against `ingot doctor --json`; the diagnostics against `ingot check`; the
   recorded event stream against what `--events json` printed; that no event in a
   record carries a clock; that `--no-history` writes nothing; that a hostile run
   identifier is refused; and that the machine page names `ANTHROPIC_API_KEY`
-  while never reproducing its value.
+  while never reproducing its value. For launching: that a run started from the
+  page produces a record whose identifier ends in the child's pid, that a run
+  which fails before recording anything is still reported with what it said,
+  that a request carrying `yes` or `noHistory` starts nothing, and that stopping
+  a process this studio did not start is refused.
 - `crates/ingot-cli/src/runs.rs` — the record is verbatim at the byte level, an
   unfinished run reads as unfinished, a half-written last line does not hide the
   run, and an identifier cannot name a file outside the directory.

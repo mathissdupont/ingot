@@ -41,6 +41,20 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
   bind is **refused**, not warned about. Every reply carries
   `default-src 'none'; connect-src 'self'`, so nothing the page renders can
   reach off the machine.
+- **A run can be started from the page**, and the start panel offers the agents
+  the artifact declares with a field per input it takes — the artifact's own
+  signature rather than a guess at one. The studio spawns the same command a
+  person would type; it interprets nothing itself.
+- A *launch* is not a run. A record only exists once the interpreter reaches
+  `runStarted`, so a child that fails while compiling writes none — and a button
+  that appears to have done nothing is worse than an error. The launch carries
+  the process id, the exit status and what the child printed, and is joined to
+  its record by the pid the record's identifier ends in.
+- Two things the page cannot ask for: `--yes`, which would turn an effect that
+  needs a person into one that does not, and `--no-history`, which would produce
+  a run the studio could never show again. Neither is a field, and an unknown
+  field is refused rather than ignored. The child gets no terminal on its
+  standard input, so an effect needing approval is denied, not assumed.
 - No Node, no npm, no bundler. It ships in the binary that already ships.
 
 **A run writes itself down** (new; `ingot run` behaviour change)
