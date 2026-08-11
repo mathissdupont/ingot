@@ -512,7 +512,7 @@ struct TestArgs {
     target: PathArgs,
 
     /// Directory of cassettes to replay.
-    #[arg(long, value_name = "DIR", default_value = "tests/cassettes")]
+    #[arg(long, value_name = "DIR", default_value = run::CASSETTE_DIR)]
     cassettes: PathBuf,
 
     /// Only run cassettes whose name contains this substring.
@@ -660,13 +660,21 @@ fn run_init(args: &InitArgs) -> Result<u8> {
         dir.display()
     );
     println!();
-    println!("Next steps:");
+    // Ordered so the first thing somebody does produces a result rather than a
+    // green tick, and so nothing here asks for an API key. The recorded fixture
+    // ships with the project, which is what makes that possible.
+    println!("Next steps — none of these need an API key:");
     if dir != Path::new(".") {
         println!("  cd {}", dir.display());
     }
-    println!("  ingot check");
-    println!("  ingot build");
-    println!("  ingot test");
+    println!("  ingot check     # types, effects, policy, budgets");
+    println!("  ingot test      # replay the recorded fixture");
+    println!("  ingot studio    # the whole project, in one page");
+    println!();
+    // On its own line and without a comment: it is the longest of them, and
+    // it is the one that produces something to look at.
+    println!("Then run it, and read what it made:");
+    println!("  {}", args.template.replay_command());
     Ok(EXIT_OK)
 }
 
@@ -1171,6 +1179,21 @@ impl StarterTemplate {
         }
     }
 
+    /// The offline run, as `ingot init` prints it.
+    ///
+    /// The same command the generated README carries, and a test asserts both
+    /// forms run: printed instructions that do not work are worse than none.
+    fn replay_command(self) -> &'static str {
+        match self {
+            StarterTemplate::Brief => {
+                "ingot run --provider replay --input topic=\"compiler design\""
+            }
+            StarterTemplate::DocumentWorkflow => {
+                "ingot run --provider replay --input document=@examples/document.txt --input audience=\"project leads\""
+            }
+        }
+    }
+
     fn description(self) -> &'static str {
         match self {
             StarterTemplate::Brief => "A small typed agent that turns a topic into a brief.",
@@ -1340,14 +1363,10 @@ agent DocumentWorkflow(document: text, audience: string) -> summary<markdown> {{
 }
 
 fn starter_readme(name: &str, template: StarterTemplate) -> String {
-    let replay = match template {
-        StarterTemplate::Brief => {
-            "ingot run --provider replay --cassette tests/cassettes/example.json --input topic=\"compiler design\""
-        }
-        StarterTemplate::DocumentWorkflow => {
-            "ingot run --provider replay --cassette tests/cassettes/example.json --input document=@examples/document.txt --input audience=\"project leads\""
-        }
-    };
+    // No `--cassette`: a project with one recording replays it by being the
+    // only one. The long form still works, and `ingot run` asks the moment
+    // there are two. The same string `ingot init` prints, from one place.
+    let replay = template.replay_command();
     let dev_replay = replay.replacen("ingot run", "ingot dev --run", 1);
     format!(
         r#"# {name}
@@ -1872,12 +1891,19 @@ fn run_run(args: &RunArgs, color: RenderColor) -> Result<u8> {
     }
     warn_unchargeable_cost(&compilation, &target);
 
+    // Replaying a project's own fixture should not require typing its path.
+    // Only when there is one to be sure about — see `run::project_cassette`.
+    let cassette = match (&args.cassette, args.provider) {
+        (None, ProviderChoice::Replay) => Some(run::project_cassette(&target.root)?),
+        (chosen, _) => chosen.clone(),
+    };
+
     run::execute(
         &compilation,
         &RunConfig {
             inputs: args.inputs.clone(),
             provider: args.provider,
-            cassette: args.cassette.clone(),
+            cassette,
             record: args.record.clone(),
             model: args.model.clone(),
             effort: args.effort.clone(),
@@ -1983,6 +2009,13 @@ fn run_doctor(args: &DoctorArgs, color: RenderColor) -> Result<u8> {
 
 fn run_dev(args: &DevArgs, color: RenderColor) -> Result<u8> {
     let initial = resolve_target(args.target.path.as_deref())?;
+    // Resolved once, here, rather than on every revision: a watch loop that
+    // re-answered "which cassette?" after each save could change its mind
+    // halfway through a session because a file appeared beside the first one.
+    let cassette = match (&args.cassette, args.provider, args.run) {
+        (None, ProviderChoice::Replay, true) => Some(run::project_cassette(&initial.root)?),
+        (chosen, _, _) => chosen.clone(),
+    };
     dev::watch(
         args.target.path.as_deref(),
         initial,
@@ -1990,7 +2023,7 @@ fn run_dev(args: &DevArgs, color: RenderColor) -> Result<u8> {
             run: args.run,
             inputs: args.inputs.clone(),
             provider: args.provider,
-            cassette: args.cassette.clone(),
+            cassette,
             agent: args.agent.clone(),
             events: args.events,
             yes: args.yes,

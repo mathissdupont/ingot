@@ -350,14 +350,14 @@ fn a_template_project_checks_builds_and_replays_without_a_key() {
             "brief",
             "Brief",
             None,
-            "ingot run --provider replay --cassette tests/cassettes/example.json --input topic=\"compiler design\"",
+            "ingot run --provider replay --input topic=\"compiler design\"",
             &["--input", "topic=compiler design"][..],
         ),
         (
             "document-workflow",
             "DocumentWorkflow",
             Some("examples/document.txt"),
-            "ingot run --provider replay --cassette tests/cassettes/example.json --input document=@examples/document.txt --input audience=\"project leads\"",
+            "ingot run --provider replay --input document=@examples/document.txt --input audience=\"project leads\"",
             &[
                 "--input",
                 "document=@examples/document.txt",
@@ -413,13 +413,9 @@ fn a_template_project_checks_builds_and_replays_without_a_key() {
                 .is_file(),
             "template `{template}` did not build its declared agent"
         );
-        let mut direct = vec![
-            "run",
-            "--provider",
-            "replay",
-            "--cassette",
-            "tests/cassettes/example.json",
-        ];
+        // The short form the README and `ingot init` both print: one cassette,
+        // so no path.
+        let mut direct = vec!["run", "--provider", "replay"];
         direct.extend_from_slice(replay_args);
         let replay = run_in(&project, &direct);
         assert_eq!(
@@ -432,7 +428,153 @@ fn a_template_project_checks_builds_and_replays_without_a_key() {
             !stdout(&replay).trim().is_empty(),
             "{template}: no artifact"
         );
+
+        // And the long form keeps working, because a project with two
+        // recordings has to be able to say which.
+        let mut explicit = vec![
+            "run",
+            "--provider",
+            "replay",
+            "--cassette",
+            "tests/cassettes/example.json",
+        ];
+        explicit.extend_from_slice(replay_args);
+        let named = run_in(&project, &explicit);
+        assert_eq!(
+            code(&named),
+            EXIT_OK,
+            "naming the cassette must still work:\n{}",
+            stderr(&named)
+        );
+        assert_eq!(stdout(&named), stdout(&replay));
     }
+}
+
+#[test]
+fn two_cassettes_make_the_choice_a_question_rather_than_a_guess() {
+    // One recording is obvious. Two is a real question — which run did you mean
+    // to replay? — and answering it by picking the alphabetically first would
+    // replay the wrong thing quietly, which is the only outcome worse than an
+    // error.
+    let dir = TempDir::new("two-cassettes");
+    let project = dir.path().join("agent");
+    assert_eq!(
+        code(&run(&["init", &project.display().to_string()])),
+        EXIT_OK
+    );
+    std::fs::copy(
+        project.join("tests/cassettes/example.json"),
+        project.join("tests/cassettes/another.json"),
+    )
+    .expect("a second cassette");
+
+    let output = run_in(
+        &project,
+        &[
+            "run",
+            "--provider",
+            "replay",
+            "--input",
+            "topic=compiler design",
+        ],
+    );
+    assert_ne!(code(&output), EXIT_OK);
+    let message = stderr(&output);
+    assert!(message.contains("--cassette"), "{message}");
+    // Both are named, so the answer is a copy rather than a search.
+    assert!(message.contains("example.json"), "{message}");
+    assert!(message.contains("another.json"), "{message}");
+}
+
+#[test]
+fn a_project_with_no_recording_is_told_how_to_make_one() {
+    let dir = TempDir::new("no-cassette");
+    std::fs::write(
+        dir.path().join("main.ing"),
+        "language 0.1\n\
+         agent A(x: string) -> y<markdown> {\n\
+         \x20 model requires { structured_output }\n\
+         \x20 budget { steps <= 2 }\n\
+         \x20 policy { network deny }\n\
+         \x20 flow { emit y = ask<markdown>(\"${x}\") }\n\
+         }\n",
+    )
+    .expect("a source");
+    std::fs::write(
+        dir.path().join("ingot.toml"),
+        "[project]\nname = \"bare\"\n\n[build]\nentry = \"main.ing\"\nout-dir = \"target/ingot\"\n",
+    )
+    .expect("a manifest");
+
+    let output = run_in(
+        dir.path(),
+        &["run", "--provider", "replay", "--input", "x=hello"],
+    );
+    assert_ne!(code(&output), EXIT_OK);
+    let message = stderr(&output);
+    assert!(message.contains("--record"), "{message}");
+    assert!(message.contains("tests/cassettes"), "{message}");
+}
+
+#[test]
+fn init_prints_commands_that_work_and_none_that_need_a_key() {
+    // The first thing anybody sees. Printed instructions that do not run are
+    // worse than none, so every command in this list is executed here.
+    let dir = TempDir::new("init-next-steps");
+    let project = dir.path().join("agent");
+    let created = run(&["init", &project.display().to_string()]);
+    assert_eq!(code(&created), EXIT_OK, "{}", stderr(&created));
+
+    let printed = stdout(&created);
+    assert!(
+        printed.contains("none of these need an API key"),
+        "{printed}"
+    );
+    assert!(printed.contains("ingot studio"), "{printed}");
+
+    for line in printed.lines() {
+        let command = line.trim();
+        let Some(rest) = command.strip_prefix("ingot ") else {
+            continue;
+        };
+        // `ingot studio` serves until interrupted, so it is named rather than
+        // run; everything else has to finish.
+        let rest = rest.split('#').next().unwrap_or(rest).trim();
+        if rest == "studio" {
+            continue;
+        }
+        let args = shell_words(rest);
+        let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();
+        let output = run_in(&project, &borrowed);
+        assert_eq!(
+            code(&output),
+            EXIT_OK,
+            "`ingot {rest}` is printed by init and does not work:\n{}",
+            stderr(&output)
+        );
+    }
+}
+
+/// Split a printed command line, honouring the double quotes `init` prints.
+fn shell_words(line: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut current = String::new();
+    let mut quoted = false;
+    for character in line.chars() {
+        match character {
+            '"' => quoted = !quoted,
+            ' ' if !quoted => {
+                if !current.is_empty() {
+                    words.push(std::mem::take(&mut current));
+                }
+            }
+            other => current.push(other),
+        }
+    }
+    if !current.is_empty() {
+        words.push(current);
+    }
+    words
 }
 
 #[test]

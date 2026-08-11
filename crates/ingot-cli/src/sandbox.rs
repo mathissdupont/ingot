@@ -88,7 +88,8 @@ pub type Plans = BTreeMap<(String, String), SandboxPlan>;
 
 /// Plan a boundary for each (server, agent) pair.
 ///
-/// `filter_egress` says whether the caller will start an [`EgressBoundary`] and
+/// `filter_egress` says whether the caller will start an
+/// [`ingot_sandbox::EgressBoundary`] and
 /// route these servers through it. It decides only whether a host allowlist is
 /// reported as unenforceable, so passing `true` without starting the proxy
 /// would replace a true statement with a false one.

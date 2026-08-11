@@ -159,6 +159,55 @@ pub struct ProviderSelection {
     pub strict_replay: bool,
 }
 
+/// Where a project keeps the recordings `ingot test` replays.
+///
+/// The same directory `ingot test` defaults to, so a cassette written for one
+/// is found by the other. A convention rather than a setting: two names for the
+/// same directory would only mean one of them is the wrong one.
+pub const CASSETTE_DIR: &str = "tests/cassettes";
+
+/// The cassette `--provider replay` should use when nobody named one.
+///
+/// A project usually has exactly one, and making somebody type its path to
+/// replay their own fixture is friction with nothing behind it. Two or more is
+/// a real question — which recording did you mean? — so it is asked rather than
+/// guessed, and the answer names them.
+pub fn project_cassette(root: &Path) -> Result<PathBuf> {
+    let directory = root.join(CASSETTE_DIR);
+    let mut found: Vec<PathBuf> = std::fs::read_dir(&directory)
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "`--provider replay` needs a cassette, and {} does not exist\n  \
+                 record one with: ingot run --record {CASSETTE_DIR}/<name>.json --input ...",
+                directory.display()
+            )
+        })?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().map(|ext| ext == "json").unwrap_or(false))
+        .collect();
+    found.sort();
+
+    match found.len() {
+        0 => bail!(
+            "`--provider replay` needs a cassette, and {} holds none\n  \
+             record one with: ingot run --record {CASSETTE_DIR}/<name>.json --input ...",
+            directory.display()
+        ),
+        1 => Ok(found.remove(0)),
+        _ => bail!(
+            "{} holds {} cassettes, so `--cassette <FILE>` has to say which:\n{}",
+            directory.display(),
+            found.len(),
+            found
+                .iter()
+                .map(|path| format!("  {}", path.display()))
+                .collect::<Vec<_>>()
+                .join("\n")
+        ),
+    }
+}
+
 /// Build the provider a command asked for.
 pub fn build_model_provider(selection: &ProviderSelection) -> Result<Box<dyn ModelProvider>> {
     match selection.choice {
@@ -751,7 +800,13 @@ fn boundary_name(compilation: &Compilation) -> String {
 /// `network allow ["arxiv.org"]` is in force is worse off than one who knows it
 /// is not.
 fn contained_host(compilation: &Compilation, config: &RunConfig) -> Result<McpToolHost> {
-    let runtime = ingot_sandbox::detect().map_err(|error| anyhow::anyhow!("{error}"))?;
+    // Looked for, not required — yet. The boundary is settled from the artifact
+    // before the environment gets a say, so a policy this program states and no
+    // boundary can keep is reported as that, on a machine with a container
+    // runtime and on a machine without one. Demanding the runtime here would
+    // replace "your policy cannot be enforced" with "install Docker", which
+    // answers a question nobody asked and hides the one they did.
+    let detected = ingot_sandbox::detect();
 
     // Whether the allowlist will be kept has to be settled before the plans are
     // made, because it decides what they report. Settled from what is actually
@@ -759,7 +814,11 @@ fn contained_host(compilation: &Compilation, config: &RunConfig) -> Result<McpTo
     // that assumed it would be would be the lie this whole path avoids.
     let egress_image = std::env::var("INGOT_EGRESS_IMAGE")
         .unwrap_or_else(|_| ingot_sandbox::DEFAULT_EGRESS_IMAGE.to_string());
-    let can_filter = ingot_sandbox::image_exists(&runtime, &egress_image).unwrap_or(false);
+    let can_filter = detected
+        .as_ref()
+        .ok()
+        .and_then(|runtime| ingot_sandbox::image_exists(runtime, &egress_image).ok())
+        .unwrap_or(false);
 
     let plans =
         crate::sandbox::plan_all_with(compilation, &config.mcp, &config.workspace, can_filter)
@@ -795,6 +854,9 @@ fn contained_host(compilation: &Compilation, config: &RunConfig) -> Result<McpTo
         eprintln!("warning: proceeding with an unenforced rule\n{note}");
     }
 
+    // Now the machine matters: everything above was about the program, and this
+    // is the first line that needs something to actually put a server inside.
+    let runtime = detected.map_err(|error| anyhow::anyhow!("{error}"))?;
     let mut launcher =
         crate::sandbox::ContainerLauncher::new(runtime.clone(), config.workspace.clone(), plans);
 

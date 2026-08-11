@@ -77,6 +77,30 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
 - `--no-history` writes nothing. `ingot dev --run` keeps no record — a watch
   loop would bury the runs you meant to keep.
 
+**Less to type for the thing you do first**
+
+- `--provider replay` finds the project's cassette when there is exactly one, so
+  replaying your own fixture no longer means typing its path. Two is a real
+  question — which recording did you mean? — and it is asked rather than
+  guessed, with both named so the answer is a copy. None says how to record one.
+- `ingot init` prints the commands that follow, says plainly that **none of them
+  need an API key**, and ends with the run that produces something to read. A
+  test executes every command it prints: printed instructions that do not work
+  are worse than none.
+
+**Fixed**
+
+- `ingot run --sandbox` reported "no container runtime found" on a machine
+  without one, hiding the refusal it should have led with. The boundary is
+  settled from the artifact before the environment gets a say, so a policy no
+  boundary can keep is now reported as that on any machine, and the runtime is
+  required at the point a server actually has to go inside one. This is also
+  what made two tests fail on the macOS and Windows CI runners.
+- `cargo doc -D warnings` failed on four links from public module documentation
+  to private items in the `openai` and `google` providers, and on an unresolved
+  `EgressBoundary` link in the CLI. The documentation job has been red since the
+  streaming release.
+
 **Internal** (no behaviour change)
 
 - `doctor::inspect` split into `report`, which returns the value, and `inspect`,

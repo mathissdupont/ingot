@@ -23,7 +23,9 @@
 //!
 //! Streaming adds a transport, not a second understanding of the response: the
 //! chunks are reassembled into the shape a non-streamed call returns and handed
-//! to the same [`parse_response`]. See [`StreamAccumulator`].
+//! to the same `parse_response`. Both are private: the reassembly is an
+//! implementation detail of this module, and nothing outside it may depend on
+//! a streamed response being built differently from a whole-body one.
 
 use std::time::Duration;
 

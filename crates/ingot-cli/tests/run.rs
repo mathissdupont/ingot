@@ -575,7 +575,13 @@ fn a_tool_using_agent_stops_because_no_host_provides_the_tool() {
 }
 
 #[test]
-fn replay_without_a_cassette_explains_how_to_make_one() {
+fn replaying_with_inputs_the_recording_never_saw_fails_loudly() {
+    // The example holds one cassette, so `--provider replay` finds it without
+    // being told where it is. It was recorded against other inputs, and a
+    // replay that answered anyway would hand back a stale answer as if it were
+    // this run's — the failure mode the digest exists to make impossible.
+    //
+    // `--cassette` is deliberately absent: this also covers the resolution.
     let output = run(
         &[
             "run",
@@ -590,7 +596,12 @@ fn replay_without_a_cassette_explains_how_to_make_one() {
         None,
     );
     assert_ne!(code(&output), EXIT_OK);
-    assert!(stderr(&output).contains("--record"), "{}", stderr(&output));
+    let message = stderr(&output);
+    assert!(
+        message.contains("recorded for a different request"),
+        "{message}"
+    );
+    assert!(message.contains("re-record"), "{message}");
 }
 
 #[test]
