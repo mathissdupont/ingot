@@ -1,6 +1,6 @@
 # RFC-0017: A verifier that runs
 
-- Status: Draft
+- Status: **Accepted**
 - Author(s): Heptapus Group
 - Created: 2026-08-12
 - Affects: language, IR, runtime, CLI
@@ -344,11 +344,11 @@ without modification, since `condition` is already a declared node property.
 
 ## Failure semantics
 
-This is the decision this RFC most needs settled, and it is the one place where
-two defensible answers lead to materially different implementations. Both are
-stated here in full; the recommendation follows.
+**Decided, 2026-08-12: A, with the lint.** Two answers were defensible and led
+to different implementations. Both are kept below, because a reader a year from
+now is owed the case against the one that won.
 
-### A. A failed check ends the run
+### A. A failed check ends the run *(chosen)*
 
 `RunError::VerificationFailed { node, verifier }`, reported like an approval
 denial: an outcome, not a crash. Everything already emitted stays in the record,
@@ -383,27 +383,37 @@ that the answer is now real.
 *Against:* an agent can complete having failed its own declared property, and
 the distinction lives in a field a careless consumer will not read.
 
-### Recommendation: A, plus a lint that makes it mean something
+### The decision, and the lint that makes it mean something
 
-Take A, and add `ING6007`: **a `verify` whose argument has already been emitted,
-in whole or in part, cannot prevent its publication.** Warning, not error, with
-the fix in the message — move the `verify` above the `emit`, as in this RFC's
-example, where `found` is bound, checked, and only then does `found.body` leave.
+A is taken, together with `ING6007`: **a `verify` whose argument has already
+been emitted, in whole or in part, cannot prevent its publication.** Warning,
+not error, with the fix in the message — move the `verify` above the `emit`, as
+in this RFC's example, where `found` is bound, checked, and only then does
+`found.body` leave.
 
-"In part" is what makes the lint work rather than being trivially satisfied: a
-record cannot be emitted, so the emitted value is always a field of the verified
-one, and a lint that compared whole bindings would never fire.
+"In part" is what makes the lint fire rather than being trivially satisfied: a
+record cannot be emitted, so the emitted value is normally a *field* of the
+verified one, and a lint comparing whole bindings would never match.
 
-The lint is what makes A worth having. Without it, A is a fatal error that fires
-after the damage; with it, the language teaches the ordering in which a check is
-a gate rather than a postmortem, and the fatal outcome is the thing that makes
-the ordering worth learning. B has no equivalent — under B the ordering never
+The lint is what makes A worth having. Without it, A is a fatal outcome that
+arrives after the damage; with it, the language teaches the ordering in which a
+check is a gate rather than a postmortem, and the fatal outcome is what makes
+that ordering worth learning. B has no equivalent — under B the ordering never
 matters, so nothing ever teaches it.
 
-The Runtime 0.2 sentence is a real cost and it should be paid explicitly in
-Runtime 0.4 rather than quietly: nothing that runs today can reach `failed`, so
-no existing run's behaviour changes, and this is the last moment when the
-semantics of a reachable `failed` are free to choose.
+**Two costs are accepted knowingly.**
+
+The Runtime 0.2 sentence is a documented-behaviour change and is paid explicitly
+in Runtime 0.4 rather than quietly. It is nearly free today: nothing that runs
+can reach `failed`, so no existing run's behaviour changes, and this is the last
+moment at which the semantics of a reachable `failed` are free to choose.
+
+A consumer loses the case B served — the artifact *plus* a verdict against it,
+to judge for itself. Under A a failed check yields a run that ended, with
+whatever was emitted before it. The judgement is not lost, only relocated: the
+`verified: failed` event is in the record and the run's outcome names the
+verifier. What is lost is the ability to *finish* while failing, and that is the
+thing being removed on purpose.
 
 ## Alternatives
 
