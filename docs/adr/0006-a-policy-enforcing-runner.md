@@ -19,7 +19,7 @@ with evidence rather than enthusiasm. Taking it condition by condition, as of
 | # | Condition | State |
 |---|-----------|-------|
 | 1 | At least two independent backends work end to end | **No.** One: our own interpreter ([GAP-018](../gaps.md#gap-018)). |
-| 2 | Agent IR 0.1 is stable and has conformance fixtures | **Partly.** Stable and golden-tested; no fixture package for other implementers ([GAP-017](../gaps.md#gap-017)). |
+| 2 | Agent IR 0.1 is stable and has conformance fixtures | **Yes.** Stable, golden-tested, and `ingot conform` runs a published suite against any backend ([GAP-017](../gaps.md#gap-017) closed). |
 | 3 | A user-validated need exists that no target runtime can express | **Yes.** No agent runtime derives its sandbox from a declared capability set. Every one of them takes the sandbox as separate configuration, which is exactly how a policy and a boundary drift apart. |
 | 4 | The scope is genuinely narrow — a policy-enforcing runner, not a general execution engine | **Yes, if held to it.** ADR-0002 names this shape itself. |
 | 5 | A team exists that can carry provider adapters and MCP lifecycle maintenance indefinitely | **No.** |

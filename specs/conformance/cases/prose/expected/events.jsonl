@@ -1,0 +1,6 @@
+{"event":"runStarted","agent":"conformance.prose.Prose","provider":"replay"}
+{"event":"nodeStarted","node":"n0","kind":"llm.call"}
+{"event":"modelCall","node":"n0","model":"stub-1","responseType":"markdown","usage":{"inputTokens":100,"outputTokens":50}}
+{"event":"nodeStarted","node":"n1","kind":"artifact.emit"}
+{"event":"emitted","node":"n1","output":"note"}
+{"event":"runFinished","steps":1,"usage":{"inputTokens":100,"outputTokens":50}}

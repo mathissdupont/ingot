@@ -1,0 +1,21 @@
+{
+  "cassetteVersion": "0.2",
+  "agent": "conformance.unchecked.Unchecked",
+  "inputs": {
+    "topic": "unchecked properties"
+  },
+  "interactions": [
+    {
+      "index": 0,
+      "node": "n0",
+      "requestDigest": "f1c712d6e11ef2f3f1ea7149d2430e6bc1a771801cd874692c4faa1156a6c288",
+      "responseType": "markdown",
+      "value": "A draft with no sources at all.\n",
+      "usage": {
+        "inputTokens": 100,
+        "outputTokens": 50
+      },
+      "model": "stub-1"
+    }
+  ]
+}

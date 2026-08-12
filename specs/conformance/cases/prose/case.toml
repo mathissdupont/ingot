@@ -1,0 +1,7 @@
+what = "One model call replayed from a cassette, and the artifact it emits."
+outcome = "finished"
+pins = [
+  "Runtime 0.1 §9 — the event stream carries no clock and reproduces byte for byte",
+  "Runtime 0.1 §10 — a cassette interaction is matched by position and by request digest",
+  "Agent IR 0.1 §6 — `llm.call` and `artifact.emit`",
+]

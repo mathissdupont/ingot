@@ -1,0 +1,3 @@
+{"event":"runStarted","agent":"conformance.prose.Prose","provider":"replay"}
+{"event":"nodeStarted","node":"n0","kind":"llm.call"}
+{"event":"runFailed","reason":"at node `n0`: cassette replay failed: interaction 0 was recorded for a different request at node `n0`. The prompt or its context changed since recording — re-record the cassette and review the diff."}

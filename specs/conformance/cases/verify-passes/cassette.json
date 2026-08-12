@@ -1,0 +1,33 @@
+{
+  "cassetteVersion": "0.2",
+  "agent": "conformance.checked.Verify",
+  "inputs": {
+    "topic": "verification"
+  },
+  "interactions": [
+    {
+      "index": 0,
+      "node": "n0",
+      "requestDigest": "340a3d118b566d42665d174cc439ec6084f5aeead0a430a274eff0f10e47e4ea",
+      "responseType": "draft",
+      "value": {
+        "body": "Two sources is enough.\n",
+        "sources": [
+          {
+            "title": "One",
+            "url": "https://example.invalid/one"
+          },
+          {
+            "title": "Two",
+            "url": "https://example.invalid/two"
+          }
+        ]
+      },
+      "usage": {
+        "inputTokens": 100,
+        "outputTokens": 50
+      },
+      "model": "stub-1"
+    }
+  ]
+}

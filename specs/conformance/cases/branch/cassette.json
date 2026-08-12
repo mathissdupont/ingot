@@ -1,0 +1,24 @@
+{
+  "cassetteVersion": "0.2",
+  "agent": "conformance.branch.Branch",
+  "inputs": {
+    "subject": "the parser"
+  },
+  "interactions": [
+    {
+      "index": 0,
+      "node": "n0",
+      "requestDigest": "21c6f271b796e421f4fc76dbde945dbb53375b19cd1041c4298016dd19bbfe67",
+      "responseType": "verdict",
+      "value": {
+        "detail": "It passed.\n",
+        "ok": true
+      },
+      "usage": {
+        "inputTokens": 100,
+        "outputTokens": 50
+      },
+      "model": "stub-1"
+    }
+  ]
+}

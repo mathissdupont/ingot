@@ -1,0 +1,17 @@
+language 0.1
+package conformance.unchecked
+
+/// A name and a signature, which is all Language 0.1 could express.
+verifier CitationCheck(draft: markdown, min_sources: int)
+
+/// The artifact names a property and carries nothing that tests it.
+agent Unchecked(topic: string) -> report<markdown> {
+  model requires { structured_output }
+  budget { steps <= 2 }
+  policy { network deny }
+  flow {
+    draft = ask<markdown>("Write about ${topic}.")
+    verify CitationCheck(draft, min_sources: 8)
+    emit report = draft
+  }
+}

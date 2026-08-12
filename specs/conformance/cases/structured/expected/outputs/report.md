@@ -1,0 +1,1 @@
+Ingot compiles agents.

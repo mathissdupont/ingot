@@ -1,0 +1,4 @@
+answers = ['''{"body":"One source is not enough.\n","sources":[{"url":"https://example.invalid/one","title":"One"}]}''']
+
+[inputs]
+topic = "verification"

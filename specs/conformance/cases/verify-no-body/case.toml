@@ -1,0 +1,7 @@
+what = "A verifier with no body: reported as `notPerformed`, never as a pass, and the run continues."
+outcome = "finished"
+pins = [
+  "Runtime 0.4 §1 — `notPerformed` is reserved for a `verify` with no `condition`",
+  "Runtime 0.2 §1 — a backend must not report `passed` for a check it did not perform",
+  "Runtime 0.2 §1 — `notPerformed` is unknown, folded into neither `passed` nor `failed`",
+]

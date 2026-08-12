@@ -1,0 +1,122 @@
+{
+  "irVersion": "0.2",
+  "language": "0.1",
+  "agent": "conformance.unchecked.Unchecked",
+  "doc": "The artifact names a property and carries nothing that tests it.",
+  "inputs": {
+    "topic": "string"
+  },
+  "outputs": {
+    "report": "artifact<markdown>"
+  },
+  "requirements": {
+    "model": {
+      "mode": "capabilities",
+      "capabilities": [
+        "structured_output"
+      ]
+    }
+  },
+  "budget": {
+    "steps": 2
+  },
+  "policy": {
+    "network": {
+      "decision": "deny"
+    }
+  },
+  "effects": [
+    "model_access"
+  ],
+  "entry": "n0",
+  "nodes": [
+    {
+      "id": "n0",
+      "kind": "llm.call",
+      "sourceSpan": {
+        "source": "main.ing",
+        "start": 404,
+        "end": 442
+      },
+      "binding": "draft",
+      "prompt": {
+        "kind": "template",
+        "parts": [
+          {
+            "kind": "text",
+            "value": "Write about "
+          },
+          {
+            "kind": "value",
+            "value": {
+              "kind": "ref",
+              "scope": "input",
+              "path": [
+                "topic"
+              ]
+            },
+            "type": "string"
+          },
+          {
+            "kind": "text",
+            "value": "."
+          }
+        ]
+      },
+      "responseType": "markdown",
+      "effects": [
+        "model_access"
+      ],
+      "next": "n1"
+    },
+    {
+      "id": "n1",
+      "kind": "verify",
+      "sourceSpan": {
+        "source": "main.ing",
+        "start": 447,
+        "end": 490
+      },
+      "verifier": "CitationCheck",
+      "args": [
+        {
+          "name": "draft",
+          "value": {
+            "kind": "ref",
+            "scope": "binding",
+            "path": [
+              "draft"
+            ]
+          }
+        },
+        {
+          "name": "min_sources",
+          "value": {
+            "kind": "literal",
+            "type": "int",
+            "value": 8
+          }
+        }
+      ],
+      "next": "n2"
+    },
+    {
+      "id": "n2",
+      "kind": "artifact.emit",
+      "sourceSpan": {
+        "source": "main.ing",
+        "start": 495,
+        "end": 514
+      },
+      "value": {
+        "kind": "ref",
+        "scope": "binding",
+        "path": [
+          "draft"
+        ]
+      },
+      "output": "report",
+      "next": null
+    }
+  ]
+}

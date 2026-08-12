@@ -1,0 +1,183 @@
+{
+  "irVersion": "0.2",
+  "language": "0.1",
+  "agent": "conformance.branch.Branch",
+  "doc": "One arm runs and the other does not.",
+  "inputs": {
+    "subject": "string"
+  },
+  "outputs": {
+    "outcome": "artifact<markdown>"
+  },
+  "types": {
+    "verdict": {
+      "fields": [
+        {
+          "name": "ok",
+          "type": "bool"
+        },
+        {
+          "name": "detail",
+          "type": "markdown"
+        }
+      ]
+    }
+  },
+  "requirements": {
+    "model": {
+      "mode": "capabilities",
+      "capabilities": [
+        "structured_output"
+      ]
+    }
+  },
+  "budget": {
+    "steps": 4
+  },
+  "policy": {
+    "network": {
+      "decision": "deny"
+    }
+  },
+  "effects": [
+    "model_access"
+  ],
+  "entry": "n0",
+  "nodes": [
+    {
+      "id": "n0",
+      "kind": "llm.call",
+      "sourceSpan": {
+        "source": "main.ing",
+        "start": 348,
+        "end": 381
+      },
+      "binding": "checked",
+      "prompt": {
+        "kind": "template",
+        "parts": [
+          {
+            "kind": "text",
+            "value": "Judge "
+          },
+          {
+            "kind": "value",
+            "value": {
+              "kind": "ref",
+              "scope": "input",
+              "path": [
+                "subject"
+              ]
+            },
+            "type": "string"
+          },
+          {
+            "kind": "text",
+            "value": "."
+          }
+        ]
+      },
+      "responseType": "verdict",
+      "effects": [
+        "model_access"
+      ],
+      "next": "n1"
+    },
+    {
+      "id": "n1",
+      "kind": "branch",
+      "sourceSpan": {
+        "source": "main.ing",
+        "start": 386,
+        "end": 527
+      },
+      "condition": {
+        "kind": "ref",
+        "scope": "binding",
+        "path": [
+          "checked",
+          "ok"
+        ]
+      },
+      "then": "n2",
+      "else": "n3",
+      "next": null
+    },
+    {
+      "id": "n2",
+      "kind": "artifact.emit",
+      "sourceSpan": {
+        "source": "main.ing",
+        "start": 408,
+        "end": 437
+      },
+      "value": {
+        "kind": "ref",
+        "scope": "binding",
+        "path": [
+          "checked",
+          "detail"
+        ]
+      },
+      "output": "outcome",
+      "next": null
+    },
+    {
+      "id": "n3",
+      "kind": "llm.call",
+      "sourceSpan": {
+        "source": "main.ing",
+        "start": 472,
+        "end": 521
+      },
+      "binding": "$tmp0",
+      "prompt": {
+        "kind": "template",
+        "parts": [
+          {
+            "kind": "text",
+            "value": "Say why "
+          },
+          {
+            "kind": "value",
+            "value": {
+              "kind": "ref",
+              "scope": "input",
+              "path": [
+                "subject"
+              ]
+            },
+            "type": "string"
+          },
+          {
+            "kind": "text",
+            "value": " did not pass."
+          }
+        ]
+      },
+      "responseType": "markdown",
+      "effects": [
+        "model_access"
+      ],
+      "next": "n4"
+    },
+    {
+      "id": "n4",
+      "kind": "artifact.emit",
+      "sourceSpan": {
+        "source": "main.ing",
+        "start": 457,
+        "end": 521
+      },
+      "value": {
+        "kind": "ref",
+        "scope": "binding",
+        "path": [
+          "$tmp0"
+        ]
+      },
+      "output": "outcome",
+      "next": null
+    }
+  ]
+}

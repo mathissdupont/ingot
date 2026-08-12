@@ -1,0 +1,6 @@
+what = "A check that holds: the run reports `passed` and carries on to the emit."
+outcome = "finished"
+pins = [
+  "Runtime 0.4 §1 — a `verify` carrying a `condition` must be performed",
+  "Runtime 0.2 §1 — `outcome` is `passed`, `failed` or `notPerformed`, never a boolean",
+]

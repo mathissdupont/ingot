@@ -1,0 +1,4 @@
+answers = ["A draft with no sources at all.\n"]
+
+[inputs]
+topic = "unchecked properties"

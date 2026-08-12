@@ -48,8 +48,20 @@ impl VerifyOutcome {
     }
 }
 
+/// One line of the run record.
+///
+/// `rename_all_fields` is load-bearing and easy to lose: on an enum,
+/// `rename_all` renames the *variants*, not their fields. Without the second
+/// attribute `response_type` serialised as `response_type` while every
+/// specification example and the second backend said `responseType` — a
+/// divergence no single-implementation test could see, and the first thing the
+/// conformance suite found.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "event", rename_all = "camelCase")]
+#[serde(
+    tag = "event",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum RunEvent {
     RunStarted {
         agent: String,

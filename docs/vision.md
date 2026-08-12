@@ -202,7 +202,8 @@ works when it is gone.
 Portability is the central claim. It is now observed by running the same artifact
 and cassette through the reference interpreter and an independent generated
 Python program. [GAP-018](gaps.md#gap-018) records what that falsification test
-closed; the next step is packaging it as the conformance suite in GAP-017.
+closed, and the suite that packages it for anybody else's backend is
+`ingot conform` (GAP-017, closed).
 
 ## How to tell whether it worked
 
