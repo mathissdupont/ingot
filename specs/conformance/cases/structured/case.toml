@@ -1,0 +1,7 @@
+what = "A record-typed answer, validated whole, with an artifact taken from one of its fields."
+outcome = "finished"
+pins = [
+  "Runtime 0.1 §6 — a response is validated against its declared type before it is bound",
+  "Agent IR 0.1 §5 — a `ref` reads a field by extending its path",
+  "Language 0.1 §5.3 — an artifact's content type is `text`, `markdown`, `json` or `file`",
+]

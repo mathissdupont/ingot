@@ -1,0 +1,12 @@
+language 0.1
+package conformance.prose
+
+/// One model call and one artifact: the smallest thing a backend must do.
+agent Prose(topic: string) -> note<markdown> {
+  model requires { structured_output }
+  budget { steps <= 2 }
+  policy { network deny }
+  flow {
+    emit note = ask<markdown>("Write one line about ${topic}.")
+  }
+}

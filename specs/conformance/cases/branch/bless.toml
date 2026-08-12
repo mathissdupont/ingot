@@ -1,0 +1,4 @@
+answers = ['''{"ok":true,"detail":"It passed.\n"}''']
+
+[inputs]
+subject = "the parser"

@@ -43,7 +43,6 @@ to you*.
 | [GAP-011](#gap-011) | No package semantics beyond project-local imports | Absent | a package model (RFC) |
 | [GAP-012](#gap-012) | No generics | Absent | evidence, then an RFC |
 | [GAP-014](#gap-014) | No persistent memory or state migration | Absent | a memory model (RFC) |
-| [GAP-017](#gap-017) | No conformance suite or backend author guide | Absent | M8 |
 | [GAP-020](#gap-020) | The boundary needs Linux containers | Refused | a second expression of the boundary |
 | [GAP-023](#gap-023) | A contained run cannot cross a boundary to a sub-agent | Refused | a box per agent, over the supervisor |
 | [GAP-028](#gap-028) | A model-authored project has no offline test until one run is recorded | Degraded | cassette synthesis, or nothing |
@@ -446,19 +445,6 @@ There is no `persistent`, and therefore no question yet of migrating it.
 
 *Recorded in.* [Language 0.1 §9](../specs/language/v0.1.md).
 
-### GAP-017
-
-**No conformance suite or backend author guide.**
-
-[Runtime 0.1 §13](../specs/runtime/v0.1.md) states what a conforming backend
-must do. There is no suite to run against it and no guide for writing one. The
-interpreter's own tests are the closest thing, and they are not packaged for
-anyone else.
-
-*Closes with.* M8. M5 closed [GAP-018] and supplied the first independent
-differential tests; packaging them for third-party backends and writing the guide
-remain.
-
 ---
 
 ## Closed
@@ -466,6 +452,43 @@ remain.
 When a gap closes it moves here with the release that closed it, and its section
 stays where a link can find it. Identifiers are never reused: a link to GAP-007
 must keep meaning what it meant.
+
+### GAP-017
+
+**There was no conformance suite and no backend author guide.**
+*Closed 2026-08-12.*
+
+[Runtime 0.1 §13](../specs/runtime/v0.1.md) said what a conforming backend must
+do, and there was no way to find out whether yours did. The interpreter's own
+tests were the closest thing, and they were not packaged for anybody else.
+
+*What closed it.* `ingot conform`, a suite of seven cases in
+[`specs/conformance/`](../specs/conformance/README.md), and
+[a guide](guide/writing-a-backend.md).
+
+A backend under test is a **command**: the suite writes a request file, runs the
+command with it, and compares the event stream, the artifacts and the outcome
+against what the case requires. Each case names the clause it enforces, so a
+failure says what to read rather than only that something differs.
+
+*The part that makes it real.* The reference interpreter is not privileged — it
+reaches the suite through the same adapter a third party writes. Both shipped
+backends are held to the same seven cases by the same code, and `conformance.rs`
+keeps it that way. The first run across both **found a real divergence**: the
+reference was writing `response_type` where the specification and the second
+backend both said `responseType`. On an enum, serde's `rename_all` renames the
+variants and not their fields, and no single-implementation test could have seen
+it.
+
+*What is still missing, and known to be.* No case covers a tool call, a
+sub-agent, a policy denial at run time, a budget being exhausted, or a
+`checkpoint`. The suite's own README says so: a suite that implied coverage it
+does not have would be worse than a small one.
+
+*Recorded in.* [`specs/conformance/README.md`](../specs/conformance/README.md),
+[the backend author's guide](guide/writing-a-backend.md),
+`crates/ingot-cli/src/conform.rs`,
+`crates/ingot-cli/tests/conformance.rs`.
 
 ### GAP-032
 

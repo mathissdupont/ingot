@@ -1,0 +1,25 @@
+language 0.1
+package conformance.structured
+
+/// A source the model is asked to name.
+type source {
+  url: string
+  title: string
+}
+
+/// The shape the answer has to arrive in.
+type draft {
+  body: markdown
+  sources: source[]
+}
+
+/// A schema-constrained answer, read back through a field.
+agent Structured(topic: string) -> report<markdown> {
+  model requires { structured_output }
+  budget { steps <= 2 }
+  policy { network deny }
+  flow {
+    found = ask<draft>("Write about ${topic} and cite your sources.")
+    emit report = found.body
+  }
+}

@@ -18,6 +18,7 @@ use ingot_compiler::{compile_path, compile_source, format_source, Compilation};
 use ingot_diagnostics::{codes, ColorChoice as RenderColor};
 
 mod authoring;
+mod conform;
 mod contained;
 mod dev;
 mod diff;
@@ -116,6 +117,8 @@ enum Command {
     /// Open the local surface: projects, run history and what this machine can
     /// reach, over the reports the other commands print.
     Studio(StudioArgs),
+    /// Run the conformance suite against a backend — including this one.
+    Conform(ConformArgs),
     /// Discover MCP schemas and preflight each tool the program declares.
     Tools(ToolsArgs),
     /// Show the boundary each tool server would run inside, derived from the
@@ -321,6 +324,16 @@ struct BuildArgs {
     /// deployment gate.
     #[arg(long)]
     json: bool,
+
+    /// Build from an Agent IR document instead of from source.
+    ///
+    /// A backend consumes Agent IR, so it must be possible to hand one an IR
+    /// document that no local source produced — an artifact somebody else
+    /// built, pulled from a registry, or written by another compiler. Only
+    /// meaningful with `--target python`: the `ir` target's input and output
+    /// would be the same document.
+    #[arg(long, value_name = "FILE")]
+    from_ir: Option<PathBuf>,
 }
 
 #[derive(Args, Debug)]
@@ -611,6 +624,40 @@ struct StudioArgs {
     bind: Option<String>,
 }
 
+#[derive(Args, Debug)]
+struct ConformArgs {
+    /// The command that runs one case. The request file is appended to it, so
+    /// `--backend "python adapter.py"` runs `python adapter.py <request>`.
+    ///
+    /// Defaults to this binary's own adapter, which is how the reference
+    /// interpreter reaches the suite — through the same door a third party
+    /// uses, so nothing about it is privileged.
+    #[arg(long, value_name = "COMMAND")]
+    backend: Option<String>,
+
+    /// Run only the case with this name.
+    #[arg(long, value_name = "NAME")]
+    case: Option<String>,
+
+    /// Where the suite lives. Defaults to `specs/conformance`, searched for
+    /// upward from the working directory.
+    #[arg(long, value_name = "DIR")]
+    suite: Option<PathBuf>,
+
+    /// Print what the suite requires, and run nothing.
+    #[arg(long)]
+    list: bool,
+
+    /// Run one request file as the reference backend. This *is* the adapter,
+    /// and it is what `--backend` defaults to invoking.
+    #[arg(long, value_name = "FILE")]
+    adapter: Option<PathBuf>,
+
+    /// Report as JSON.
+    #[arg(long)]
+    json: bool,
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let color = cli.color.resolve();
@@ -631,6 +678,7 @@ fn main() -> ExitCode {
         Command::Studio(args) => studio::serve(&studio::StudioConfig {
             bind: args.bind.clone(),
         }),
+        Command::Conform(args) => run_conform(args),
         Command::Tools(args) => run_tools(args, color),
         Command::Sandbox(args) => run_sandbox(args, color),
         Command::Explain(args) => run_explain(args),
@@ -1672,6 +1720,10 @@ fn run_build(args: &BuildArgs, color: RenderColor) -> Result<u8> {
         );
     }
 
+    if let Some(document) = &args.from_ir {
+        return build_from_ir(document, args);
+    }
+
     let mut target = resolve_target(args.target.path.as_deref())?;
     if let Some(out_dir) = &args.out_dir {
         target.out_dir = out_dir.clone();
@@ -1711,8 +1763,45 @@ fn run_build(args: &BuildArgs, color: RenderColor) -> Result<u8> {
 
     match args.backend {
         BuildTarget::Ir => build_ir(&compilation, &target),
-        BuildTarget::Python => build_python(&compilation, &target, args),
+        BuildTarget::Python => build_python(&compilation.agents, &target.out_dir, args),
     }
+}
+
+/// Build a target from an Agent IR document nothing local compiled.
+///
+/// No source, no manifest, no credential scan: there is nothing to scan, and
+/// the document has already been through whatever compiler produced it. What
+/// this does check is the IR major version, because a target that quietly
+/// ignored the parts of a newer document it did not understand would produce a
+/// program that does less than the artifact says.
+fn build_from_ir(document: &Path, args: &BuildArgs) -> Result<u8> {
+    if args.backend != BuildTarget::Python {
+        bail!(
+            "--from-ir needs a target to build *to*, and the `ir` target's input and output \
+             would be the same document\n  \
+             pass --target python"
+        );
+    }
+    if args.target.path.is_some() {
+        bail!(
+            "--from-ir names the document to build, so there is no source path to give as \
+             well\n  \
+             drop one of them: the two would have to agree and nothing checks that they do"
+        );
+    }
+
+    let text = std::fs::read_to_string(document)
+        .with_context(|| format!("reading {}", document.display()))?;
+    let ir = ingot_ir::AgentIr::from_json(&text)
+        .map_err(|error| anyhow::anyhow!("{}: {error}", document.display()))?;
+
+    let out_dir = args
+        .out_dir
+        .clone()
+        .unwrap_or_else(|| PathBuf::from("target").join("ingot"));
+    std::fs::create_dir_all(&out_dir).with_context(|| format!("creating {}", out_dir.display()))?;
+
+    build_python(&[ir], &out_dir, args)
 }
 
 pub(crate) fn build_ir(compilation: &Compilation, target: &Target) -> Result<u8> {
@@ -1732,10 +1821,10 @@ pub(crate) fn build_ir(compilation: &Compilation, target: &Target) -> Result<u8>
 /// The report comes first and always, because the useful moment to learn that a
 /// target cannot express something is before the artifact is deployed rather
 /// than when the agent reaches the node.
-fn build_python(compilation: &Compilation, target: &Target, args: &BuildArgs) -> Result<u8> {
+fn build_python(agents: &[ingot_ir::AgentIr], out_dir: &Path, args: &BuildArgs) -> Result<u8> {
     use ingot_backend_python as python;
 
-    let report = python::analyse(python::TARGET, &compilation.agents);
+    let report = python::analyse(python::TARGET, agents);
 
     if args.json {
         // A deployment gate reads `.unimplemented`; the per-agent detail is
@@ -1766,7 +1855,7 @@ fn build_python(compilation: &Compilation, target: &Target, args: &BuildArgs) ->
         );
     }
 
-    for agent in &compilation.agents {
+    for agent in agents {
         let source = match python::emit(agent) {
             Ok(source) => source,
             // Reaching here with --allow-unimplemented is the operator getting
@@ -1778,9 +1867,7 @@ fn build_python(compilation: &Compilation, target: &Target, args: &BuildArgs) ->
                 python::TARGET
             ),
         };
-        let path = target
-            .out_dir
-            .join(format!("{}.{}", short_name(agent), python::EXTENSION));
+        let path = out_dir.join(format!("{}.{}", short_name(agent), python::EXTENSION));
         std::fs::write(&path, &source).with_context(|| format!("writing {}", path.display()))?;
         if !args.json {
             println!("{} -> {}", agent.agent, path.display());
@@ -2003,6 +2090,86 @@ fn run_doctor(args: &DoctorArgs, color: RenderColor) -> Result<u8> {
         report(&compilation, color);
     }
     doctor::inspect(&target, &compilation, args.json)
+}
+
+// --- conform ---------------------------------------------------------------
+
+fn run_conform(args: &ConformArgs) -> Result<u8> {
+    if let Some(request) = &args.adapter {
+        return conform::adapt(request);
+    }
+
+    let suite = match &args.suite {
+        Some(path) => path.clone(),
+        None => find_suite()?,
+    };
+
+    if args.list {
+        let described = conform::describe(&suite)?;
+        if args.json {
+            println!("{}", serde_json::to_string_pretty(&described)?);
+        } else {
+            for case in described["cases"].as_array().into_iter().flatten() {
+                println!(
+                    "{}\n     {}",
+                    case["case"].as_str().unwrap_or_default(),
+                    case["what"].as_str().unwrap_or_default()
+                );
+                for pin in case["pins"].as_array().into_iter().flatten() {
+                    println!("     pins {}", pin.as_str().unwrap_or_default());
+                }
+            }
+        }
+        return Ok(EXIT_OK);
+    }
+
+    let backend = match &args.backend {
+        Some(command) => command.clone(),
+        None => {
+            let exe = std::env::current_exe().context("locating this executable")?;
+            format!("{} conform --adapter", exe.display())
+        }
+    };
+
+    let work = std::env::temp_dir().join(format!("ingot-conform-{}", std::process::id()));
+    let report = conform::run(&suite, &backend, args.case.as_deref(), &work)?;
+    let _ = std::fs::remove_dir_all(&work);
+
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        println!("{}", report.render());
+    }
+    Ok(if report.conformant() {
+        EXIT_OK
+    } else {
+        EXIT_DIAGNOSTICS
+    })
+}
+
+/// `specs/conformance`, searched for upward from the working directory.
+///
+/// A released binary is usually not standing in the repository, so the failure
+/// says what to pass rather than only that nothing was found.
+fn find_suite() -> Result<PathBuf> {
+    let start = std::env::current_dir().context("reading the working directory")?;
+    let mut here = start.as_path();
+    loop {
+        let candidate = here.join("specs").join("conformance");
+        if candidate.join("cases").is_dir() {
+            return Ok(candidate);
+        }
+        match here.parent() {
+            Some(parent) => here = parent,
+            None => break,
+        }
+    }
+    bail!(
+        "no conformance suite found in {} or any parent directory\n  \
+         the suite ships in the Ingot repository at `specs/conformance`; \
+         point at a copy with `--suite <dir>`",
+        start.display()
+    )
 }
 
 // --- dev ------------------------------------------------------------------

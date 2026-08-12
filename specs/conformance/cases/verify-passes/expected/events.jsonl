@@ -1,0 +1,8 @@
+{"event":"runStarted","agent":"conformance.checked.Verify","provider":"replay"}
+{"event":"nodeStarted","node":"n0","kind":"llm.call"}
+{"event":"modelCall","node":"n0","model":"stub-1","responseType":"draft","usage":{"inputTokens":100,"outputTokens":50}}
+{"event":"nodeStarted","node":"n1","kind":"verify"}
+{"event":"verified","node":"n1","verifier":"MinSources","outcome":"passed"}
+{"event":"nodeStarted","node":"n2","kind":"artifact.emit"}
+{"event":"emitted","node":"n2","output":"report"}
+{"event":"runFinished","steps":1,"usage":{"inputTokens":100,"outputTokens":50}}

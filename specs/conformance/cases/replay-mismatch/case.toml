@@ -1,0 +1,7 @@
+what = "A replay whose inputs the recording never saw: refused loudly rather than answered from the wrong interaction."
+outcome = "failed"
+failure-names = "recorded for a different request"
+pins = [
+  "Runtime 0.1 §10 — an interaction is matched by position *and* by request digest",
+  "Runtime 0.1 §10 — a digest mismatch fails the run; it must not fall through to the recorded answer",
+]

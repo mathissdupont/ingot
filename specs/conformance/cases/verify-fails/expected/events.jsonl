@@ -1,0 +1,6 @@
+{"event":"runStarted","agent":"conformance.checked.Verify","provider":"replay"}
+{"event":"nodeStarted","node":"n0","kind":"llm.call"}
+{"event":"modelCall","node":"n0","model":"stub-1","responseType":"draft","usage":{"inputTokens":100,"outputTokens":50}}
+{"event":"nodeStarted","node":"n1","kind":"verify"}
+{"event":"verified","node":"n1","verifier":"MinSources","outcome":"failed"}
+{"event":"runFailed","reason":"the check `MinSources` did not hold at node `n1`, so the run stopped there"}

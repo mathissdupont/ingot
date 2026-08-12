@@ -1,0 +1,23 @@
+language 0.1
+package conformance.branch
+
+/// A verdict with something the flow can decide on.
+type verdict {
+  ok: bool
+  detail: markdown
+}
+
+/// One arm runs and the other does not.
+agent Branch(subject: string) -> outcome<markdown> {
+  model requires { structured_output }
+  budget { steps <= 4 }
+  policy { network deny }
+  flow {
+    checked = ask<verdict>("Judge ${subject}.")
+    if checked.ok {
+      emit outcome = checked.detail
+    } else {
+      emit outcome = ask<markdown>("Say why ${subject} did not pass.")
+    }
+  }
+}

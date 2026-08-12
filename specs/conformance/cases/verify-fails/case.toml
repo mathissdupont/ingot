@@ -1,0 +1,7 @@
+what = "A check that does not hold: the run says so, then ends, and the emit after it never happens."
+outcome = "failed"
+failure-names = "the check `MinSources` did not hold"
+pins = [
+  "Runtime 0.4 §2 — the `verified` event is emitted before the run ends",
+  "Runtime 0.4 §2 — no statement after a failing check executes",
+]

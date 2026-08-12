@@ -1,0 +1,6 @@
+# A schema-constrained answer arrives as JSON text, so the stub serves it
+# verbatim rather than re-encoding a TOML table into a different shape.
+answers = ['''{"body":"Ingot compiles agents.\n","sources":[{"url":"https://example.invalid/one","title":"One"},{"url":"https://example.invalid/two","title":"Two"}]}''']
+
+[inputs]
+topic = "Ingot"

@@ -1,0 +1,9 @@
+answers = ["Compilers turn a program you can read into one a machine can run.\n"]
+
+# Recorded against one topic and replayed against another. The prompt
+# interpolates the input, so the digest cannot match — which is the whole case.
+[inputs]
+topic = "compilers"
+
+[replay-inputs]
+topic = "something else entirely"

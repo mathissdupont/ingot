@@ -1,0 +1,6 @@
+what = "A branch on a field of a model's answer: one arm runs, the other leaves no trace."
+outcome = "finished"
+pins = [
+  "Agent IR 0.1 §4 — `branch` takes `then` or `else` and the untaken arm produces no events",
+  "Runtime 0.1 §9 — `branchTaken` names the arm, so a replay is comparable",
+]

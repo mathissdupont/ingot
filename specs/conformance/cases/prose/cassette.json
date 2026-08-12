@@ -1,0 +1,21 @@
+{
+  "cassetteVersion": "0.2",
+  "agent": "conformance.prose.Prose",
+  "inputs": {
+    "topic": "compilers"
+  },
+  "interactions": [
+    {
+      "index": 0,
+      "node": "n0",
+      "requestDigest": "b9b2341caa1ba04205ffce457e7bfcec736b346a8b82d230710307e825b62d51",
+      "responseType": "markdown",
+      "value": "Compilers turn a program you can read into one a machine can run.\n",
+      "usage": {
+        "inputTokens": 100,
+        "outputTokens": 50
+      },
+      "model": "stub-1"
+    }
+  ]
+}

@@ -1,0 +1,27 @@
+language 0.2
+package conformance.checked
+
+type source {
+  url: string
+  title: string
+}
+
+type draft {
+  body: markdown
+  sources: source[]
+}
+
+/// The check travels inside the artifact, as a pure boolean expression.
+verifier MinSources(d: draft, min: int) = len(d.sources) >= min
+
+/// Bound, checked, and only then emitted.
+agent Verify(topic: string) -> report<markdown> {
+  model requires { structured_output }
+  budget { steps <= 2 }
+  policy { network deny }
+  flow {
+    found = ask<draft>("Write about ${topic} and cite your sources.")
+    verify MinSources(found, min: 2)
+    emit report = found.body
+  }
+}

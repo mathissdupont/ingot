@@ -29,6 +29,32 @@ specified in [RFC-0017](rfcs/0017-a-verifier-that-runs.md))
 - The rule a later verifier-with-reach has to satisfy is now written down: a
   `verified` outcome must be derivable from the run record alone.
 
+**A conformance suite somebody else can run** (new command `ingot conform`;
+closes [GAP-017](docs/gaps.md#gap-017))
+
+- `ingot conform --backend "<your command>"` runs seven cases against any
+  backend. A backend under test is a command: the suite writes a request file,
+  runs the command with it, and compares the event stream, the artifacts and
+  the outcome against what the case requires.
+- Each case names the specification clause it enforces, so a failure says what
+  to read rather than only that something differs. `--list` prints them.
+- The reference interpreter is **not privileged**: it reaches the suite through
+  the same adapter a third party writes. Both shipped backends are held to the
+  same cases by the same code.
+- [A backend author's guide](docs/guide/writing-a-backend.md), and a worked
+  adapter in forty lines.
+- `ingot build --target python --from-ir <document>` builds from an Agent IR
+  document nothing local compiled. A backend consumes Agent IR, so it had to be
+  possible to hand one an artifact somebody else built.
+- Fixed, and found by the suite on its first run across both backends: the
+  reference interpreter wrote `response_type` where the specification and the
+  Python backend both said `responseType`. On an enum, serde's `rename_all`
+  renames the variants and not their fields.
+- Fixed: `TempDir` in the test support derived its name from the clock alone.
+  `as_nanos` reports whatever resolution the platform has, and on macOS that is
+  microseconds — so two tests starting in the same microsecond shared a
+  directory and overwrote each other's fixtures.
+
 **The Python backend streams** (closes [GAP-032](docs/gaps.md#gap-032))
 
 - Both providers in the generated program read a `text/event-stream`, so an

@@ -1,0 +1,33 @@
+{
+  "cassetteVersion": "0.2",
+  "agent": "conformance.structured.Structured",
+  "inputs": {
+    "topic": "Ingot"
+  },
+  "interactions": [
+    {
+      "index": 0,
+      "node": "n0",
+      "requestDigest": "a356ec3d668915d93f0e6317778e6fc042eb57654f8f22128c9e40706fb8cb62",
+      "responseType": "draft",
+      "value": {
+        "body": "Ingot compiles agents.\n",
+        "sources": [
+          {
+            "title": "One",
+            "url": "https://example.invalid/one"
+          },
+          {
+            "title": "Two",
+            "url": "https://example.invalid/two"
+          }
+        ]
+      },
+      "usage": {
+        "inputTokens": 100,
+        "outputTokens": 50
+      },
+      "model": "stub-1"
+    }
+  ]
+}
