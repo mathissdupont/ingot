@@ -43,6 +43,8 @@ fn config(root: &Path, allow_write: bool, tools: &[(&str, &str)]) -> McpConfig {
         servers: vec![ServerConfig {
             name: "files".to_string(),
             command: server(),
+            url: None,
+            auth_env: None,
             args,
             image: None,
             cwd: None,

@@ -36,7 +36,6 @@ to you*.
 
 | ID | Gap | Class | Closes with |
 |----|-----|-------|-------------|
-| [GAP-007](#gap-007) | MCP over stdio only | Refused | a transport, now that GAP-013 is closed |
 | [GAP-009](#gap-009) | MCP prompts, resources and sampling unsupported | Refused | language support for each |
 | [GAP-010](#gap-010) | `parallel` executes sequentially | Degraded | a scheduler in the interpreter |
 | [GAP-011](#gap-011) | No package semantics beyond project-local imports | Absent | a package model (RFC) |
@@ -50,6 +49,7 @@ to you*.
 | [GAP-034](#gap-034) | A verifier can only inspect the shape of a value | Absent | a verifier kind with effects |
 | [GAP-035](#gap-035) | Two runs sharing one memory store are not made safe | Refused | a lock, or a per-field merge with a conflict model |
 | [GAP-036](#gap-036) | A generated Python program cannot be resumed | Refused | a node walker in the generated code, at the cost of its readability |
+| [GAP-037](#gap-037) | A remote tool server cannot be used under a boundary | Refused | a channel for a tool call out of a contained run |
 
 ---
 
@@ -69,28 +69,6 @@ next week.
 
 These stop the run and say what they could not do. They limit what you can
 build; they do not mislead you about what you built.
-
-### GAP-007
-
-**MCP over stdio only.**
-
-A tool server is a local child process. Remote servers — including hosted ones
-an organisation may already run — cannot be used. The workaround is a local
-proxy process, which is a real cost.
-
-*Why not yet.* Reaching a server over a network is itself a `network` effect,
-and until [GAP-013] the language could not scope that to an endpoint. The honest
-alternatives were to make every HTTP tool call require blanket `network allow`,
-which makes the effect useless, or to design the scoping properly first.
-
-*Unblocked 2026-08-10.* GAP-013 is closed: a tool can now declare the host it
-reaches and the compiler checks it against the grant. What remains here is the
-transport itself, and one decision it forces — whether the endpoint a remote
-server lives at is part of the `[[mcp.server]]` declaration, the tool's reach,
-or both.
-
-*Recorded in.* [ADR-0005](adr/0005-mcp-over-stdio-only.md),
-[MCP binding 0.1 §1](../specs/tools/mcp-v0.1.md).
 
 ### GAP-009
 
@@ -445,6 +423,31 @@ silently ignored.
 *Recorded in.* [RFC-0018](../rfcs/0018-state-that-outlives-a-run.md),
 `crates/ingot-backend-python/src/report.rs`.
 
+### GAP-037
+
+**A remote tool server cannot be used under a boundary.**
+
+`--sandbox` and `--contained` both refuse a `[[mcp.server]]` that carries a
+`url`, naming the server.
+
+*Why.* `--sandbox` bounds a process this machine starts, and a remote server is
+not one — there is nothing to put inside a boundary. `--contained` puts the
+interpreter in a box whose network is denied, and the supervisor channel carries
+a model call and an approval gate; there is no channel for a tool call to cross.
+
+*Why refused rather than degraded.* Connecting anyway would report a boundary
+that covers nothing, which is the one outcome worse than not offering the flag.
+
+*What closing it needs.* For `--contained`, a tool call on the supervisor
+channel — which is the same shape as [GAP-023](#gap-023) but not the same
+problem: that one is about a boundary that could exist and does not, this one is
+about a hop with no channel. For `--sandbox` there may be nothing to close: the
+server is somebody else's machine, and bounding it is not this toolchain's to
+do.
+
+*Recorded in.* [MCP binding 0.2 §5](../specs/tools/mcp-v0.2.md),
+[RFC-0019](../rfcs/0019-a-tool-server-that-is-not-a-child-process.md).
+
 ### GAP-035
 
 **Two runs sharing one memory store are not made safe.**
@@ -474,6 +477,58 @@ deliberately, which is the case this entry exists to warn.
 When a gap closes it moves here with the release that closed it, and its section
 stays where a link can find it. Identifiers are never reused: a link to GAP-007
 must keep meaning what it meant.
+
+### GAP-007
+
+**MCP over stdio only.**
+*Closed 2026-08-12.*
+
+Every tool server had to be a program on the same machine. An organisation
+running a hosted MCP server could not point Ingot at it, and the workaround was
+a local proxy process somebody had to write, deploy and keep alive beside every
+runner.
+
+*What closed it.* A `[[mcp.server]]` may carry a `url` instead of a `command`,
+spoken to over Streamable HTTP.
+
+*The question that had to be answered first.* This gap was a decision, not an
+omission. [ADR-0005](adr/0005-mcp-over-stdio-only.md) refused the transport
+because reaching a remote server is network access the language could not
+express, and ruled out the easy fix in advance: an artifact carrying
+`network deny` that nonetheless ships every tool argument to a vendor over TLS
+is an artifact whose policy is a lie, and the operator having chosen the vendor
+does not make the agent's declaration true.
+
+So the endpoint stays in the manifest — the artifact must keep naming no
+server — and the server's **host** is checked against the calling agent's own
+`network` grant before anything connects. `network deny` means no remote server
+at all. No new effect, no new policy subject: `PolicySubject` maps one-to-one
+onto `Effect`, and a `tool_endpoint` subject would have had no effect to pair
+with, because no tool would ever declare one.
+
+*The cost, which is real and is the design telling the truth.* The same artifact
+needs a wider policy to be served remotely than locally. An agent whose only
+tool reads files needs `network allow ["mcp.example.com"]` in its source to use
+a hosted server — because serving that tool remotely does put its arguments on
+the network.
+
+*What did not change.* Nothing above the transport. `McpClient` still writes a
+line and reads a line; the handshake, the routing and the result conversion are
+the code that already existed. That is why `Transport` was a trait from the
+first commit, and it is the same discipline the streaming work settled on: one
+parser, two transports.
+
+*What it deliberately does not do.* No retry on `tools/call` — it is not
+idempotent, so a server that sent mail and failed to answer must not be asked
+twice. No deprecated HTTP+SSE transport. No use under `--sandbox` or
+`--contained`, which is [GAP-037](#gap-037). The `http` support is behind the
+CLI's `remote-tools` feature, so a build that hosts only local servers carries
+no TLS stack for it.
+
+*Recorded in.* [RFC-0019](../rfcs/0019-a-tool-server-that-is-not-a-child-process.md),
+[MCP binding 0.2](../specs/tools/mcp-v0.2.md),
+[ADR-0005's amendment](adr/0005-mcp-over-stdio-only.md),
+`crates/ingot-mcp/src/http.rs`.
 
 ### GAP-008
 

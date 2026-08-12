@@ -859,6 +859,46 @@ impl ApprovalHandler for TerminalApprovals {
     }
 }
 
+/// Refuse a remote server under a boundary that cannot cover it.
+///
+/// `--sandbox` starts a server inside a boundary derived from the agent's
+/// policy, and there is no process to put in one. `--contained` puts the
+/// interpreter inside a box whose network is denied, and the supervisor channel
+/// carries a model call and an approval gate -- not a tool call.
+///
+/// Connecting anyway and reporting a boundary that covers nothing would be
+/// worse than not offering the flag. See
+/// [RFC-0019](../../../rfcs/0019-a-tool-server-that-is-not-a-child-process.md).
+fn refuse_remote_under_a_boundary(config: &RunConfig) -> Result<()> {
+    let named = |flag: &str| -> Result<()> {
+        let server = config
+            .mcp
+            .servers
+            .iter()
+            .find(|server| server.is_remote())
+            .map(|server| server.name.clone())
+            .unwrap_or_default();
+        bail!(
+            "MCP server `{server}` is reached over a network, which `{flag}` cannot cover\n  \
+             {}\n  \
+             help: run it locally with a `command`, or drop `{flag}`",
+            if flag == "--sandbox" {
+                "a boundary bounds a process this machine starts, and there is none here"
+            } else {
+                "the supervisor channel carries a model call and an approval gate; \
+                 there is no channel for a tool call out of the box"
+            }
+        )
+    };
+    if config.sandbox {
+        return named("--sandbox");
+    }
+    if config.contained {
+        return named("--contained");
+    }
+    Ok(())
+}
+
 /// Every MCP tool the program declares, across all its agents.
 ///
 /// A superset of what one run needs: which sub-agents a flow reaches is decided
@@ -874,7 +914,10 @@ pub(crate) fn required_tools(compilation: &Compilation) -> BTreeSet<String> {
         .collect()
 }
 
-/// The same, split by agent, for a host that gives each its own boundary.
+/// The same, split by agent, with each agent's `network` grant attached.
+///
+/// Needed by two callers for two reasons: a boundary is derived per agent, and
+/// a remote server is authorised per agent. Both want the same list.
 fn tools_per_agent(compilation: &Compilation) -> Vec<AgentTools> {
     compilation
         .agents
@@ -889,8 +932,27 @@ fn tools_per_agent(compilation: &Compilation) -> Vec<AgentTools> {
                     .map(|tool| tool.name.clone())
                     .collect(),
             )
+            .with_network(network_grant(agent))
         })
         .collect()
+}
+
+/// What an agent's policy says under `network`, in the form the tool host needs.
+///
+/// Default-deny, like every other subject: a policy with no `network` rule
+/// grants nothing, which is why an absent entry becomes a denial rather than an
+/// unscoped allow.
+fn network_grant(agent: &ingot_ir::AgentIr) -> ingot_mcp::NetworkGrant {
+    match agent.policy.get("network") {
+        Some(rule) => ingot_mcp::NetworkGrant {
+            allowed: matches!(
+                rule.decision,
+                ingot_ir::Decision::Allow | ingot_ir::Decision::RequireApproval
+            ),
+            hosts: rule.values.iter().cloned().collect(),
+        },
+        None => ingot_mcp::NetworkGrant::default(),
+    }
 }
 
 /// A name for this run's network and proxy.
@@ -1016,12 +1078,46 @@ fn tool_host(compilation: &Compilation, config: &RunConfig) -> Result<Box<dyn To
         return Ok(Box::new(DenyAllTools));
     }
 
+    // A remote server is authorised against the calling agent's own `network`
+    // grant, which means the host has to know which agent it is starting for.
+    // The one-unnamed-agent shortcut has no agent and so cannot check, so a
+    // manifest with any remote server takes the per-agent path -- at the cost
+    // of one session per agent, which is the correct cost: two agents in a
+    // program legitimately differ, and one being allowed to reach a hosted
+    // server does not admit the other.
+    let remote = config.mcp.servers.iter().any(|server| server.is_remote());
+    if remote {
+        refuse_remote_under_a_boundary(config)?;
+    }
+
     let host = if config.sandbox {
         contained_host(compilation, config)?
+    } else if remote {
+        McpToolHost::connect_agents(
+            &config.mcp,
+            &config.root,
+            &tools_per_agent(compilation),
+            &ingot_mcp::DirectLauncher,
+        )
+        .map_err(|error| anyhow::anyhow!("{error}"))?
     } else {
         McpToolHost::connect(&config.mcp, &config.root, &required)
             .map_err(|error| anyhow::anyhow!("{error}"))?
     };
+
+    for server in &config.mcp.servers {
+        if server.is_remote()
+            && !server.url.as_deref().unwrap_or("").starts_with("https://")
+            && !server.is_loopback()
+        {
+            eprintln!(
+                "warning: MCP server `{}` is reached over plain HTTP at {}\n         \
+                 tool arguments and results cross the network unencrypted",
+                server.name,
+                server.url.as_deref().unwrap_or("")
+            );
+        }
+    }
 
     // Say what got wired to what, and whether a boundary is in force. Whether
     // the policy is enforced or merely checked must never be something an

@@ -8,6 +8,37 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
 
 ## [Unreleased]
 
+**A tool server that is not a child process** (MCP binding 0.2; closes
+[GAP-007](docs/gaps.md#gap-007), opens [GAP-037](docs/gaps.md#gap-037),
+specified in
+[RFC-0019](rfcs/0019-a-tool-server-that-is-not-a-child-process.md))
+
+- A `[[mcp.server]]` may carry a `url` instead of a `command`, spoken to over
+  Streamable HTTP. `auth-env` names the environment variable holding a bearer
+  token — a name, never a value.
+- **The server's host is checked against the calling agent's own `network`
+  grant, before anything connects.** `network deny` permits no remote server at
+  all; there is no "except through tools". This is the check
+  [ADR-0005](docs/adr/0005-mcp-over-stdio-only.md) said had to exist before the
+  transport could, and the ADR now carries an amendment saying what changed and
+  what did not.
+- No new effect and no new policy subject. The endpoint stays in the manifest,
+  so the same artifact still runs against a different deployment without a
+  recompile.
+- The cost, stated rather than hidden: an artifact needs a wider policy to be
+  served remotely than locally, because serving a tool remotely does put its
+  arguments on the network.
+- `args`, `cwd`, `pass-env` and `image` are **refused** beside a `url` rather
+  than ignored, so nobody can believe a credential reached a server that never
+  saw it.
+- `tools/call` is not retried. It is not idempotent, and a server that sent mail
+  and then failed to answer must not be asked twice.
+- `--sandbox` and `--contained` refuse a remote server, naming it. See
+  [GAP-037](docs/gaps.md#gap-037).
+- Plain `http` to anything but a loopback address warns on every run.
+- Behind the CLI's `remote-tools` feature (on by default) and `ingot-mcp`'s
+  `http`, so a build that hosts only local servers carries no TLS stack for it.
+
 **A checkpoint you can stop at** (Agent IR 0.2, Runtime 0.5; closes
 [GAP-008](docs/gaps.md#gap-008), opens [GAP-036](docs/gaps.md#gap-036),
 specified in [RFC-0018](rfcs/0018-state-that-outlives-a-run.md))

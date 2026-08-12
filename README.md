@@ -347,7 +347,7 @@ Start here:
 * [Agent IR 0.2](specs/ir/v0.2.md) — the backend contract with portable node source spans
 * [Agent IR 0.1](specs/ir/v0.1.md) — the original backend contract
 * [Runtime 0.1](specs/runtime/v0.1.md) — what executing an artifact means
-* [MCP binding 0.1](specs/tools/mcp-v0.1.md) — how a declared tool is served
+* [MCP binding 0.2](specs/tools/mcp-v0.2.md) — how a declared tool is served
 * [`agent-ir.schema.json`](specs/ir/agent-ir.schema.json) — machine-readable schema
 * [Vision](docs/vision.md) — what the project is for, and where it is going
 * [Architecture](docs/architecture/overview.md) — how the phases fit together

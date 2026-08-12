@@ -1,6 +1,8 @@
 # MCP Binding, version 0.1
 
-Status: **Stable for 0.2**. Normative for `ingot-mcp`; optional for a backend.
+Status: **Superseded in part by [0.2](mcp-v0.2.md)**, which adds the Streamable
+HTTP transport and the policy check that governs it. Everything here that 0.2
+does not replace is still normative for `ingot-mcp`; optional for a backend.
 
 How an Ingot `tool` declaration is served by a [Model Context Protocol] server.
 This is one implementation of the tool host described in
@@ -20,6 +22,8 @@ Implemented: the **tools** half of MCP — `initialize`, `tools/list`,
 Not implemented: prompts, sampling, resources, completions, logging
 subscriptions, and every non-stdio transport. A server that requires one of
 these is refused explicitly; nothing is silently ignored.
+
+[0.2 §1](mcp-v0.2.md) adds one transport to that list and leaves the rest.
 
 ## 2. Transport
 

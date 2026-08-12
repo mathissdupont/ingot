@@ -13,7 +13,7 @@ name = "ingot"
 path = "src/main.rs"
 
 [features]
-default = ["anthropic", "openai", "google"]
+default = ["anthropic", "openai", "google", "remote-tools"]
 # Enabled by any network provider and never on its own, so one gate covers
 # "this build can reach a model service" however many protocols sit above it.
 providers = []
@@ -21,6 +21,11 @@ providers = []
 anthropic = ["ingot-runtime/anthropic", "providers"]
 openai = ["ingot-runtime/openai", "providers"]
 google = ["ingot-runtime/google", "providers"]
+# MCP servers reached over a network. Separate from `providers`: reaching a
+# model service and reaching a tool server are different permissions to grant a
+# build, and an operator who wants only one should get only one. Without it a
+# `[[mcp.server]]` with a `url` is refused, naming the feature.
+remote-tools = ["ingot-mcp/http"]
 
 [dependencies]
 ingot-compiler.workspace = true

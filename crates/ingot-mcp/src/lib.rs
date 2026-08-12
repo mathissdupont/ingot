@@ -35,12 +35,22 @@
 //!   artifact, and a tool server asking the agent's model to complete something
 //!   would be an effect nothing declared.
 //! * **Resources.** The language has no type for a subscribed resource yet.
-//! * **HTTP transport.** Only stdio, because a local subprocess is the case
-//!   where the security model is clear. Reaching a remote server is a `network`
-//!   effect the artifact would have to grant, and that needs a design first.
+//! * **The deprecated HTTP+SSE transport.** Two endpoints and a long-lived
+//!   `GET`, for servers the protocol itself is moving off. Streamable HTTP is
+//!   implemented; a server offering only the older shape is refused naming what
+//!   it offered.
 //!
 //! None of these are silently ignored: a server that expects them gets an
 //! explicit refusal.
+//!
+//! # Reaching a server over a network
+//!
+//! A `[[mcp.server]]` may carry a `url` instead of a `command`. Bytes then leave
+//! the machine on the agent's behalf, so the server's host is checked against
+//! that agent's own `network` policy grant **before anything connects**:
+//! `network deny` means no remote server at all, and there is no "except through
+//! tools". See
+//! [RFC-0019](../../../rfcs/0019-a-tool-server-that-is-not-a-child-process.md).
 //!
 //! [MCP]: https://modelcontextprotocol.io
 
@@ -48,6 +58,8 @@ pub mod client;
 pub mod config;
 pub mod convert;
 pub mod host;
+#[cfg(feature = "http")]
+pub mod http;
 pub mod jsonrpc;
 pub mod transport;
 
@@ -56,5 +68,8 @@ pub use client::{
     PREFERRED_PROTOCOL_VERSION, SUPPORTED_PROTOCOL_VERSIONS,
 };
 pub use config::{McpConfig, ServerConfig, DEFAULT_TIMEOUT_SECONDS};
-pub use host::{AgentTools, DirectLauncher, Launcher, McpToolHost, ResolvedTool};
+pub use host::{AgentTools, DirectLauncher, Launcher, McpToolHost, NetworkGrant, ResolvedTool};
 pub use transport::{ChildTransport, LoopbackTransport, Transport, TransportError};
+
+#[cfg(feature = "http")]
+pub use http::HttpTransport;

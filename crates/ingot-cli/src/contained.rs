@@ -631,6 +631,8 @@ mod tests {
             mcp.servers.push(ingot_mcp::ServerConfig {
                 name: name.to_string(),
                 command: "x".to_string(),
+                url: None,
+                auth_env: None,
                 args: Vec::new(),
                 image: None,
                 cwd: None,

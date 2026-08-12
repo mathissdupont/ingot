@@ -27,19 +27,78 @@ use crate::transport::{ChildTransport, Transport};
 /// The only transport an artifact may declare in language 0.1.
 const TRANSPORT: &str = "mcp";
 
-/// One agent and the MCP tools it holds.
+/// One agent, the MCP tools it holds, and where it may reach.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentTools {
     pub agent: String,
     pub tools: BTreeSet<String>,
+    /// What this agent's policy grants under `network`.
+    ///
+    /// Checked against a remote server's host before connecting: bytes leaving
+    /// the machine on the agent's behalf are network access whoever chose the
+    /// destination. `None` means "no artifact in hand" -- which is what
+    /// `ingot tools` has, and it says so rather than pretending to have checked.
+    ///
+    /// See [RFC-0019](../../../rfcs/0019-a-tool-server-that-is-not-a-child-process.md).
+    pub network: Option<NetworkGrant>,
+}
+
+/// An agent's `network` policy rule, as far as this crate needs it.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct NetworkGrant {
+    /// Whether the policy permits network access at all.
+    pub allowed: bool,
+    /// The hosts it names. Empty with `allowed` means an unscoped grant.
+    pub hosts: BTreeSet<String>,
+}
+
+impl NetworkGrant {
+    /// Whether this grant reaches `host`.
+    ///
+    /// An unscoped `network allow` reaches anything; a scoped one reaches the
+    /// hosts it lists and their subdomains, which is the same rule the compiler
+    /// applies to a tool's declared reach.
+    pub fn reaches(&self, host: &str) -> bool {
+        if !self.allowed {
+            return false;
+        }
+        if self.hosts.is_empty() {
+            return true;
+        }
+        self.hosts.iter().any(|allowed| {
+            let allowed = allowed.to_ascii_lowercase();
+            host == allowed || host.ends_with(&format!(".{allowed}"))
+        })
+    }
+
+    fn describe(&self) -> String {
+        if !self.allowed {
+            return "network is denied".to_string();
+        }
+        if self.hosts.is_empty() {
+            return "network is allowed, unscoped".to_string();
+        }
+        format!(
+            "network is allowed to: {}",
+            self.hosts.iter().cloned().collect::<Vec<_>>().join(", ")
+        )
+    }
 }
 
 impl AgentTools {
+    /// An agent with no artifact behind it, for callers that only enumerate.
     pub fn new(agent: impl Into<String>, tools: BTreeSet<String>) -> AgentTools {
         AgentTools {
             agent: agent.into(),
             tools,
+            network: None,
         }
+    }
+
+    /// The same, with the agent's `network` grant attached.
+    pub fn with_network(mut self, network: NetworkGrant) -> AgentTools {
+        self.network = Some(network);
+        self
     }
 }
 
@@ -72,6 +131,9 @@ impl Launcher for DirectLauncher {
         _agent: &str,
         cwd: &Path,
     ) -> Result<Box<dyn Transport>, String> {
+        if server.is_remote() {
+            return connect_remote(server, DEFAULT_TIMEOUT);
+        }
         ChildTransport::spawn(&server.command, &server.args, Some(cwd), &server.pass_env)
             .map(|transport| Box::new(transport) as Box<dyn Transport>)
             .map_err(|error| error.to_string())
@@ -80,6 +142,60 @@ impl Launcher for DirectLauncher {
     fn describe(&self) -> String {
         "tool servers run as child processes; the policy is checked, not enforced".to_string()
     }
+}
+
+/// The per-request deadline a launcher uses when it is not told one.
+///
+/// The launcher trait predates the HTTP transport and takes no timeout, and
+/// widening it for one caller would touch every implementation. The manifest's
+/// `timeout-seconds` still bounds the client's wait for an answer; this bounds
+/// the socket underneath it.
+const DEFAULT_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(crate::config::DEFAULT_TIMEOUT_SECONDS);
+
+/// Open a transport to a remote server, reading its token from the environment.
+///
+/// The value is read here and handed straight to the transport. Nothing between
+/// the two writes it down.
+#[cfg(feature = "http")]
+fn connect_remote(
+    server: &ServerConfig,
+    timeout: std::time::Duration,
+) -> Result<Box<dyn Transport>, String> {
+    let url = server.url.as_deref().unwrap_or_default();
+    let authorization = match &server.auth_env {
+        Some(variable) => {
+            let value = std::env::var(variable).map_err(|_| {
+                format!(
+                    "{variable} is not set, and MCP server `{}` needs it for its bearer token",
+                    server.name
+                )
+            })?;
+            if value.trim().is_empty() {
+                return Err(format!("{variable} is set but empty"));
+            }
+            Some(format!("Bearer {value}"))
+        }
+        None => None,
+    };
+    Ok(Box::new(crate::http::HttpTransport::new(
+        url,
+        authorization,
+        timeout,
+    )))
+}
+
+/// Refuse a remote server in a build that carries no HTTP stack.
+#[cfg(not(feature = "http"))]
+fn connect_remote(
+    server: &ServerConfig,
+    _timeout: std::time::Duration,
+) -> Result<Box<dyn Transport>, String> {
+    Err(format!(
+        "MCP server `{}` has a `url`, and this build of ingot-mcp was compiled \
+         without the `http` feature",
+        server.name
+    ))
 }
 
 /// Where one Ingot tool name is served from.
@@ -189,6 +305,7 @@ impl McpToolHost {
             let cwd = working_directory(root, server);
             let mut instances = Vec::new();
             for agent in needed {
+                permitted(server, agent)?;
                 let transport = launcher
                     .launch(server, &agent.agent, &cwd)
                     .map_err(|reason| McpError::Transport {
@@ -423,6 +540,51 @@ fn instance_for<'a>(slot: &'a mut Slot, agent: &str) -> Option<&'a mut Instance>
         .find(|instance| instance.agent == agent)
 }
 
+/// Whether this agent may be served by this server.
+///
+/// The whole of the remote-server security story, and it is one lookup. A local
+/// server is always permitted -- there is no hop to authorise, and its reach is
+/// bounded by how the operator started it. A remote one puts the agent's tool
+/// arguments on the network, so the agent has to have said it may reach that
+/// host.
+///
+/// `network deny` therefore means **no remote server at all**, which is the
+/// guarantee [ADR-0005](../../../docs/adr/0005-mcp-over-stdio-only.md) said must
+/// not be weakened.
+fn permitted(server: &ServerConfig, agent: &AgentTools) -> Result<(), McpError> {
+    if !server.is_remote() {
+        return Ok(());
+    }
+    let Some(host) = server.host() else {
+        return Err(McpError::Configuration(format!(
+            "MCP server `{}` has a `url` with no host",
+            server.name
+        )));
+    };
+
+    // No artifact in hand. `ingot tools` enumerates what is out there and has
+    // no agent to check against; it labels the server unchecked instead.
+    let Some(grant) = &agent.network else {
+        return Ok(());
+    };
+
+    if grant.reaches(&host) {
+        return Ok(());
+    }
+    Err(McpError::Configuration(format!(
+        "agent `{}` may not reach the server that serves its tools\n  \
+         the server `{}` is at {}\n  \
+         this agent's policy: {}\n  \
+         help: add \"{host}\" to `network allow`, or configure `{}` with a `command` \
+         so it runs locally",
+        agent.agent,
+        server.name,
+        server.url.as_deref().unwrap_or(""),
+        grant.describe(),
+        server.name,
+    )))
+}
+
 /// Whether a server can be left unstarted for this agent.
 ///
 /// Only decidable when the operator mapped names explicitly. With no map, the
@@ -454,6 +616,8 @@ mod tests {
     fn config(name: &str, tools: &[(&str, &str)]) -> ServerConfig {
         ServerConfig {
             name: name.to_string(),
+            url: None,
+            auth_env: None,
             command: "unused".to_string(),
             args: Vec::new(),
             image: None,
