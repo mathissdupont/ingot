@@ -47,6 +47,7 @@ class Events:
     def __init__(self, form):
         self.form = form
         self.collected = []
+        self.streaming = False
 
     def emit(self, **event):
         self.collected.append(event)
@@ -56,6 +57,47 @@ class Events:
             line = self.line(event)
             if line is not None:
                 sys.stderr.write(line + "\n")
+
+    # --- the live channel ----------------------------------------------------
+    #
+    # Runtime 0.3 section 2. A delta is *not* an event: it is never collected,
+    # never recorded, and in JSON form carries no `event` key — the event stream
+    # is exactly the set of lines that have one. A consumer selecting on `event`
+    # therefore sees exactly what a replay would reproduce.
+
+    def delta(self, node, text):
+        if self.form == "json":
+            sys.stderr.write(
+                json.dumps({"delta": {"node": node, "text": text}}, separators=(",", ":"))
+                + "\n"
+            )
+        elif self.form == "text":
+            if not self.streaming:
+                sys.stderr.write("        ")
+            # Indent continuation lines to the same column, so a multi-line
+            # answer stays inside the trace rather than breaking out of it.
+            sys.stderr.write(text.replace("\n", "\n        "))
+        else:
+            return
+        self.streaming = True
+        sys.stderr.flush()
+
+    def settled(self, node, kept):
+        """The text is finished, and whether it became the answer."""
+        if self.form == "json":
+            sys.stderr.write(
+                json.dumps({"settled": {"node": node, "kept": kept}}, separators=(",", ":"))
+                + "\n"
+            )
+        elif self.form == "text":
+            if self.streaming:
+                sys.stderr.write("\n")
+            if not kept:
+                # Said plainly, because the text above is the beginning of a
+                # real answer and looks like a result.
+                sys.stderr.write("        (discarded: that text is not the answer)\n")
+        self.streaming = False
+        sys.stderr.flush()
 
     @staticmethod
     def line(event):
@@ -319,6 +361,17 @@ class Replay:
         self.cassette = cassette
         self.position = 0
 
+    def streams(self):
+        """No. A recording produces its answer at once.
+
+        Runtime 0.3 section 1 forbids inventing fragments for an answer that
+        did not arrive in pieces: a replay that emitted plausible deltas would
+        make a replayed run indistinguishable from a call that never happened.
+        Saying `False` here also keeps a replay on the whole-body ceiling, so
+        it cannot accept an answer the recording could not have produced.
+        """
+        return False
+
     def complete(self, request):
         interactions = self.cassette.get("interactions", [])
         if self.position >= len(interactions):
@@ -387,6 +440,13 @@ def canonical(value):
 _DEFAULT_TIMEOUT = 180
 _MAX_RETRIES = 3
 
+# Runtime 0.3 section 4. The ceiling belongs to the transport, never to the
+# artifact: a service that composes a whole response before sending it holds
+# the connection open for as long as the answer takes, and several refuse a
+# larger `max_tokens` outright unless the request streams.
+_WHOLE_BODY_CEILING = 16000
+_STREAMED_CEILING = 64000
+
 
 def _post(url, headers, body, timeout=_DEFAULT_TIMEOUT):
     payload = json.dumps(body).encode("utf-8")
@@ -418,6 +478,224 @@ def _post(url, headers, body, timeout=_DEFAULT_TIMEOUT):
     _fail(last or "provider transport failed")
 
 
+def _post_sse(url, headers, body, on_event, timeout=_DEFAULT_TIMEOUT):
+    """POST and read a `text/event-stream`, one decoded event at a time.
+
+    Retries only while nothing has been delivered. Once a watcher has seen
+    text, repeating the call would show the answer twice and charge for it
+    twice, so a mid-stream failure is final.
+    """
+    payload = json.dumps(body).encode("utf-8")
+    last = None
+    for attempt in range(_MAX_RETRIES):
+        request = urllib.request.Request(url, data=payload, method="POST")
+        request.add_header("content-type", "application/json")
+        request.add_header("accept", "text/event-stream")
+        for name, value in headers.items():
+            request.add_header(name, value)
+
+        # A list rather than a flag, so it survives the exception handler.
+        delivered = []
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                read_events(response, on_event, delivered)
+            return
+        except urllib.error.HTTPError as error:
+            text = error.read().decode("utf-8", "replace")
+            last = "provider rejected the request (%d): %s" % (error.code, text[:400])
+            retryable = error.code in (408, 429) or error.code >= 500
+            if retryable and attempt + 1 < _MAX_RETRIES:
+                continue
+            _fail(last)
+        except (urllib.error.URLError, OSError) as error:
+            reason = getattr(error, "reason", error)
+            last = "provider transport failed: %s" % reason
+            if delivered or attempt + 1 >= _MAX_RETRIES:
+                _fail(last)
+            continue
+    _fail(last or "provider transport failed")
+
+
+def read_events(stream, on_event, delivered):
+    """Decode `text/event-stream` framing off a byte stream.
+
+    Split out from the request so the framing can be tested without a socket.
+    A blank line ends an event; a line starting with `:` is a keep-alive.
+    """
+    name = ""
+    data = []
+    for raw in stream:
+        line = raw.decode("utf-8", "replace").rstrip("\n").rstrip("\r")
+
+        if not line:
+            if data:
+                joined = "\n".join(data)
+                # `[DONE]` is not JSON. It is how an OpenAI-compatible stream
+                # says it is over, and parsing it would fail the whole call at
+                # the last possible moment.
+                if joined.strip() != "[DONE]":
+                    try:
+                        payload = json.loads(joined)
+                    except ValueError as error:
+                        _fail("malformed event data: %s" % error)
+                    delivered.append(True)
+                    on_event(name, payload)
+            name = ""
+            data = []
+            continue
+        if line.startswith(":"):
+            continue
+
+        field, _, value = line.partition(":")
+        if value.startswith(" "):
+            value = value[1:]
+        if field == "event":
+            name = value
+        elif field == "data":
+            # Multiple `data:` lines in one event concatenate with newlines,
+            # per the event-stream format.
+            data.append(value)
+
+
+class _AnthropicStream:
+    """The pieces of a streamed Messages reply, assembled back into the reply.
+
+    **One parser, two transports** (Runtime 0.3 section 3.1). This has one job:
+    rebuild the payload a whole-body call would have returned, and hand it to
+    the same reader. There is deliberately no second parser, and that absence
+    is the guarantee — a streamed call and a whole-body call produce identical
+    values *and* identical errors for the same content. Two parsers would
+    drift, and the drift would show up as an artifact behaving differently
+    depending on how it was run.
+    """
+
+    def __init__(self):
+        self.model = None
+        self.stop_reason = None
+        self.text = ""
+        self.tool_json = ""
+        self.usage = {"input_tokens": 0, "output_tokens": 0, "cache_read_input_tokens": 0}
+
+    def event(self, name, data, on_delta):
+        if name == "message_start":
+            message = data.get("message") or {}
+            self.model = message.get("model") or self.model
+            usage = message.get("usage") or {}
+            self.usage["input_tokens"] = usage.get("input_tokens", 0)
+            self.usage["cache_read_input_tokens"] = usage.get("cache_read_input_tokens", 0)
+        elif name == "content_block_delta":
+            delta = data.get("delta") or {}
+            kind = delta.get("type")
+            # Only the pieces that become the answer are shown. A thinking
+            # delta belongs to a block the reader drops, and showing it would
+            # put a sentence on screen that the run then throws away.
+            if kind == "text_delta":
+                piece = delta.get("text") or ""
+                self.text += piece
+                on_delta(piece)
+            elif kind == "input_json_delta":
+                # This provider asks for a structured answer through a forced
+                # tool call, so these fragments *are* the answer.
+                piece = delta.get("partial_json") or ""
+                self.tool_json += piece
+                on_delta(piece)
+        elif name == "message_delta":
+            delta = data.get("delta") or {}
+            if delta.get("stop_reason"):
+                self.stop_reason = delta["stop_reason"]
+            usage = data.get("usage") or {}
+            if "output_tokens" in usage:
+                self.usage["output_tokens"] = usage["output_tokens"]
+        elif name == "error":
+            # The connection did exactly what it was asked and delivered this
+            # event intact, so calling it a transport failure would send an
+            # operator looking at the wrong thing.
+            error = data.get("error") or {}
+            _fail(
+                "provider rejected the request: %s"
+                % (error.get("message") or "the provider reported an error mid-stream")
+            )
+        # `content_block_start`, `content_block_stop`, `message_stop`, `ping`
+        # and any event type that did not exist when this was written carry
+        # nothing the answer depends on.
+
+    def payload(self):
+        """The finished reply, in the shape a whole-body call returns.
+
+        A stream that stops without ever reporting a stop reason is a
+        connection cut mid-answer, not a successful empty one. The text
+        collected so far may be a fragment, and a fragment that parses is worse
+        than no answer: it passes silently.
+        """
+        if self.stop_reason is None:
+            _fail(
+                "the stream ended before the message did: no stop reason arrived, "
+                "so the answer is incomplete"
+            )
+        content = []
+        if self.text:
+            content.append({"type": "text", "text": self.text})
+        if self.tool_json:
+            try:
+                content.append({"type": "tool_use", "input": json.loads(self.tool_json)})
+            except ValueError as error:
+                _fail("the streamed structured response was not valid JSON: %s" % error)
+        return {
+            "model": self.model,
+            "stop_reason": self.stop_reason,
+            "content": content,
+            "usage": dict(self.usage),
+        }
+
+
+class _OpenAiStream:
+    """Chunks reassembled into the shape a whole-body reply arrives in.
+
+    The same rule as `_AnthropicStream`: collect the pieces, rebuild the
+    ordinary Chat Completions payload, and let the same reader read it.
+    """
+
+    def __init__(self):
+        self.model = None
+        self.text = ""
+        self.refusal = ""
+        self.finish = None
+        self.usage = {}
+
+    def chunk(self, data, on_delta):
+        if data.get("model"):
+            self.model = data["model"]
+        # Arrives on a final chunk of its own when `include_usage` was asked
+        # for, and a chunk carrying usage carries no choices.
+        if data.get("usage"):
+            self.usage = data["usage"]
+        for choice in data.get("choices") or []:
+            delta = choice.get("delta") or {}
+            piece = delta.get("content")
+            if piece:
+                self.text += piece
+                on_delta(piece)
+            if delta.get("refusal"):
+                self.refusal += delta["refusal"]
+            if choice.get("finish_reason"):
+                self.finish = choice["finish_reason"]
+
+    def payload(self):
+        if self.finish is None:
+            _fail(
+                "the stream ended before the message did: no finish reason arrived, "
+                "so the answer is incomplete"
+            )
+        message = {"content": self.text}
+        if self.refusal:
+            message["refusal"] = self.refusal
+        return {
+            "model": self.model,
+            "choices": [{"message": message, "finish_reason": self.finish}],
+            "usage": dict(self.usage),
+        }
+
+
 class Anthropic:
     """The Messages API."""
 
@@ -428,8 +706,16 @@ class Anthropic:
         self.base_url = base_url or "https://api.anthropic.com/v1/messages"
         self.model = model
 
-    def complete(self, request):
-        model = self.model or _pinned_model(request) or "claude-opus-4-5"
+    def streams(self):
+        return True
+
+    def _model(self, request):
+        return self.model or _pinned_model(request) or "claude-opus-4-5"
+
+    def _headers(self):
+        return {"x-api-key": self.key, "anthropic-version": "2023-06-01"}
+
+    def _body(self, request, model):
         body = {
             "model": model,
             "max_tokens": request["maxTokens"],
@@ -448,12 +734,10 @@ class Anthropic:
                 }
             ]
             body["tool_choice"] = {"type": "tool", "name": "respond"}
+        return body
 
-        reply = _post(
-            self.base_url,
-            {"x-api-key": self.key, "anthropic-version": "2023-06-01"},
-            body,
-        )
+    def _read(self, request, reply, model):
+        """The one reader. Both transports hand their payload to this."""
         if isinstance(reply, dict) and reply.get("type") == "error":
             _fail("provider rejected the request: %s" % canonical(reply.get("error")))
 
@@ -480,6 +764,27 @@ class Anthropic:
             "model": reply.get("model") or model,
         }
 
+    def complete(self, request):
+        model = self._model(request)
+        reply = _post(self.base_url, self._headers(), self._body(request, model))
+        return self._read(request, reply, model)
+
+    def complete_streaming(self, request, on_delta):
+        model = self._model(request)
+        body = self._body(request, model)
+        # Set here rather than in `_body`, so the two transports differ by this
+        # one field and nothing else.
+        body["stream"] = True
+
+        stream = _AnthropicStream()
+        _post_sse(
+            self.base_url,
+            self._headers(),
+            body,
+            lambda name, data: stream.event(name, data, on_delta),
+        )
+        return self._read(request, stream.payload(), model)
+
 
 class OpenAiCompatible:
     """Chat Completions, spoken by more services than OpenAI's own."""
@@ -491,7 +796,10 @@ class OpenAiCompatible:
         self.base_url = base_url or "https://api.openai.com/v1/chat/completions"
         self.model = model
 
-    def complete(self, request):
+    def streams(self):
+        return True
+
+    def _model(self, request):
         model = self.model or _pinned_model(request)
         if not model:
             _fail(
@@ -499,6 +807,12 @@ class OpenAiCompatible:
                 "with `model exact \"<vendor>/<model>\"` or pass --model",
                 operator=True,
             )
+        return model
+
+    def _headers(self):
+        return {"authorization": "Bearer " + self.key} if self.key else {}
+
+    def _body(self, request, model):
         messages = []
         if request.get("system"):
             messages.append({"role": "system", "content": request["system"]})
@@ -518,12 +832,33 @@ class OpenAiCompatible:
                     "schema": request["shape"][1],
                 },
             }
+        return body
 
-        headers = {}
-        if self.key:
-            headers["authorization"] = "Bearer " + self.key
-        reply = _post(self.base_url, headers, body)
+    def complete(self, request):
+        model = self._model(request)
+        reply = _post(self.base_url, self._headers(), self._body(request, model))
+        return self._read(request, reply, model)
 
+    def complete_streaming(self, request, on_delta):
+        model = self._model(request)
+        body = self._body(request, model)
+        body["stream"] = True
+        # Without `include_usage` most servers report no usage at all on a
+        # streamed call, and a run that cannot see its token usage cannot
+        # enforce its budget — the budget would silently stop being a bound.
+        body["stream_options"] = {"include_usage": True}
+
+        stream = _OpenAiStream()
+        _post_sse(
+            self.base_url,
+            self._headers(),
+            body,
+            lambda _name, data: stream.chunk(data, on_delta),
+        )
+        return self._read(request, stream.payload(), model)
+
+    def _read(self, request, reply, model):
+        """The one reader. Both transports hand their payload to this."""
         if isinstance(reply, dict) and reply.get("error"):
             _fail("provider rejected the request: %s" % canonical(reply["error"]))
 
@@ -643,14 +978,26 @@ class Runtime:
                 % (self.max_steps, node_id)
             )
 
-    def max_output_tokens(self, ceiling):
+    def streams(self):
+        """Whether this run's provider delivers an answer incrementally.
+
+        Asked of the provider rather than taken from the artifact: the same
+        artifact against a streaming provider and a whole-body one is the same
+        program, and only the second has to keep the smaller ceiling.
+        """
+        answer = getattr(self.provider, "streams", None)
+        return bool(answer and answer())
+
+    def max_output_tokens(self):
         """The cap on one call: what is left of the token budget, or the ceiling.
 
         Bounded from below by 1, because asking a provider for zero tokens is a
-        request that cannot succeed, and from above by the ceiling this
-        backend's transport earns: it asks once and reads one whole answer, so
-        it keeps the whole-body ceiling of Runtime 0.3 section 4 (GAP-032).
+        request that cannot succeed, and from above by the ceiling the
+        transport earns (Runtime 0.3 section 4). A backend may impose a
+        stricter limit than the table states and never a looser one, so the
+        remaining budget always wins where it is smaller.
         """
+        ceiling = _STREAMED_CEILING if self.streams() else _WHOLE_BODY_CEILING
         if self.token_limit is None:
             remaining = ceiling
         else:
@@ -671,7 +1018,7 @@ class Runtime:
 
     # --- nodes ---------------------------------------------------------------
 
-    def ask(self, node, effects, prompt, response_type, max_tokens, context=None, system=None):
+    def ask(self, node, effects, prompt, response_type, context=None, system=None):
         self.policy.check(node, effects)
         self._charge_step(node)
 
@@ -683,13 +1030,36 @@ class Runtime:
             "context": context or [],
             "responseType": response_type,
             "shape": shape,
-            "maxTokens": max_tokens,
+            "maxTokens": self.max_output_tokens(),
             "modelReference": self.model_reference,
         }
-        reply = self.provider.complete(request)
-        value = reply["value"]
-        if shape[0] != "freeJson":
-            validate(value, response_type, self.types, "node `%s`" % node)
+
+        # `shown` is what decides whether anything needs settling: Runtime 0.3
+        # section 2 requires `settled` exactly once for a node that received at
+        # least one delta, and never for a node that received none — with
+        # nothing on screen there is nothing to strike.
+        shown = []
+
+        def on_delta(text):
+            shown.append(True)
+            self.events.delta(node, text)
+
+        try:
+            if self.streams():
+                reply = self.provider.complete_streaming(request, on_delta)
+            else:
+                reply = self.provider.complete(request)
+            value = reply["value"]
+            if shape[0] != "freeJson":
+                validate(value, response_type, self.types, "node `%s`" % node)
+        except BaseException:
+            # `kept` is false whenever the accumulated text was discarded, and
+            # a response that failed to validate was discarded.
+            if shown:
+                self.events.settled(node, False)
+            raise
+        if shown:
+            self.events.settled(node, True)
 
         self.events.emit(
             event="modelCall",

@@ -49,7 +49,6 @@ to you*.
 | [GAP-028](#gap-028) | A model-authored project has no offline test until one run is recorded | Degraded | cassette synthesis, or nothing |
 | [GAP-029](#gap-029) | An image cannot be verified by signature, so acquisition stays manual | Refused | a signature scheme and a trust root |
 | [GAP-031](#gap-031) | A contained run does not stream, and keeps the 16k ceiling | Refused | a delta notification on the supervisor channel |
-| [GAP-032](#gap-032) | The Python backend does not stream, so the two backends accept different answer lengths | Degraded | streaming in the Python prelude |
 | [GAP-033](#gap-033) | `--effort` cannot be honoured by the Gemini protocol | Refused | one thinking control that holds across model generations |
 | [GAP-034](#gap-034) | A verifier can only inspect the shape of a value | Absent | a verifier kind with effects |
 
@@ -345,46 +344,6 @@ a test and another in production — the divergence this project exists to refus
 *Recorded in.* [Runtime 0.1 §5.1](../specs/runtime/v0.1.md),
 `crates/ingot-cli/tests/differential.rs`.
 
-### GAP-032
-
-**The Python backend does not stream, so the two backends accept different
-answer lengths.**
-
-`crates/ingot-backend-python/src/prelude.py` makes one whole-body request per
-`ask` and keeps the 16,000-token ceiling that
-[Runtime 0.3 §4](../specs/runtime/v0.3.md) reserves for that transport. The
-reference interpreter asks for up to 64,000 against a provider that streams.
-
-*How it shows up.* An answer between 16,000 and 64,000 output tokens completes
-on the reference interpreter and ends the run with a truncation error on the
-Python backend. Below 16,000 the two agree, which covers every reference example
-and every differential fixture.
-
-*Nothing here misleads about the event stream.*
-`the_event_streams_agree_on_kind_and_order` still holds, and it holds for a
-reason rather than by luck: a delta is not an event
-([Runtime 0.3 §2](../specs/runtime/v0.3.md)), so the two backends emit the same
-events in the same order whether or not one of them streamed. What differs is
-the length of answer each accepts, which is a portability difference rather than
-a divergence in what a run means — and it is why this is Degraded rather than
-Unenforced.
-
-*Why not yet.* The Python backend exists to demonstrate that Agent IR has more
-than one consumer ([RFC-0006](../rfcs/0006-a-second-backend.md)), and it
-implements the common subset deliberately. Streaming there is an event-stream
-reader per vendor shape plus a second implementation of the rule that a partial
-answer is never used ([Runtime 0.3 §3](../specs/runtime/v0.3.md)). The failure
-mode of getting that second implementation subtly wrong is a value derived from
-a fragment, which is precisely what the rule exists to prevent.
-
-*What closing it needs.* Streaming in the Python prelude: an event-stream reader
-per vendor shape, the same accumulate-then-parse path the whole-body case
-already uses, and the raised ceiling only where the transport earns it.
-
-*Recorded in.* [Runtime 0.3 §6](../specs/runtime/v0.3.md),
-[RFC-0013](../rfcs/0013-streaming.md),
-`crates/ingot-backend-python/src/prelude.py`.
-
 ## Absent
 
 ### GAP-011
@@ -507,6 +466,44 @@ remain.
 When a gap closes it moves here with the release that closed it, and its section
 stays where a link can find it. Identifiers are never reused: a link to GAP-007
 must keep meaning what it meant.
+
+### GAP-032
+
+**The Python backend did not stream, so the two backends accepted different
+answer lengths.**
+*Closed 2026-08-12.*
+
+The Python prelude made one whole-body request per `ask` and kept the
+16,000-token ceiling [Runtime 0.3 §4](../specs/runtime/v0.3.md) reserves for
+that transport, while the reference interpreter asked for up to 64,000 against a
+provider that streams. An answer between the two completed on one backend and
+ended the run with a truncation error on the other — a portability difference in
+the one place the project's central claim lives.
+
+*What closed it.* An event-stream reader in the prelude, and both providers
+given `streams()` and `complete_streaming()`. The ceiling now comes from asking
+the provider, so the generated program no longer names a number at all: Runtime
+0.3 §4 forbids an artifact selecting its own ceiling, and the emitter used to
+write one into every `ask`.
+
+*The part worth keeping.* **One parser, two transports.** Each accumulator's
+only job is to rebuild the payload a whole-body call would have returned —
+`stop_reason`, `content`, `usage`, down to the field names — and hand it to the
+same reader. There is deliberately no second parser, which is what makes
+"a streamed call and a whole-body call produce identical values *and* identical
+errors" structural rather than tested-in. `prelude_streaming.rs` drives the
+accumulators without a socket and asserts exactly that.
+
+*What this did not change.* A delta is still not an event
+([Runtime 0.3 §2](../specs/runtime/v0.3.md)), so the event streams agreed before
+and agree now for the same reason. Cassette replay reports `streams() == False`:
+a recording produces its answer at once, and a replay that invented plausible
+fragments would be indistinguishable from a call that never happened.
+
+*Recorded in.* [Runtime 0.3 §4](../specs/runtime/v0.3.md),
+[RFC-0013](../rfcs/0013-streaming.md),
+`crates/ingot-backend-python/src/prelude.py`,
+`crates/ingot-cli/tests/prelude_streaming.rs`.
 
 ### GAP-025
 
@@ -697,10 +694,11 @@ defaulted, so a backend written against Runtime 0.2 satisfies 0.3 with no edit �
 it reports that it does not stream, keeps the smaller ceiling, and emits the
 event stream it emitted before.
 
-*What is deliberately not done.* A contained run does not stream and keeps the
-16k ceiling ([GAP-031](#gap-031)); the Python backend does not stream, so the
-two backends accept different answer lengths ([GAP-032](#gap-032)); and deltas
-carry no determinism guarantee, which is what "not an event" means.
+*What was deliberately not done at the time.* A contained run does not stream
+and keeps the 16k ceiling ([GAP-031](#gap-031)); the Python backend did not
+stream either, so the two backends accepted different answer lengths — that was
+[GAP-032](#gap-032), and it has since closed. Deltas carry no determinism
+guarantee, which is what "not an event" means.
 
 *Recorded in.* [Runtime 0.3](../specs/runtime/v0.3.md),
 [RFC-0013](../rfcs/0013-streaming.md),

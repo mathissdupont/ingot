@@ -35,11 +35,22 @@ pub struct TempDir(PathBuf);
 
 impl TempDir {
     pub fn new(tag: &str) -> TempDir {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
         let unique = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("system clock is before the epoch")
             .as_nanos();
-        let path = std::env::temp_dir().join(format!("ingot-run-{tag}-{unique}"));
+        // The clock alone is not enough. `as_nanos` reports whatever resolution
+        // the platform has, and on macOS that is microseconds — so two tests
+        // starting in the same microsecond got the same directory and quietly
+        // overwrote each other's fixtures. Diagnosing that from the failure is
+        // very hard: the symptom is one test reading another test's file.
+        let counter = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "ingot-run-{tag}-{unique}-{}-{counter}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(&path).expect("creating the scratch directory");
         TempDir(path)
     }
