@@ -80,6 +80,11 @@ pub struct VerifierInfo {
     pub params: Vec<Param>,
     pub doc: Option<String>,
     pub span: Span,
+    /// Index into `Program::verifiers`, so lowering can reach the body.
+    pub decl_index: usize,
+    /// Whether the declaration carried a body. A verifier without one is a
+    /// name and a signature: the run reports it as `notPerformed`.
+    pub performable: bool,
 }
 
 #[derive(Debug, Clone)]

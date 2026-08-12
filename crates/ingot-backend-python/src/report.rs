@@ -191,12 +191,13 @@ fn wrap(text: &str, width: usize) -> Vec<String> {
     lines
 }
 
-/// The Python backend's verdict on each node kind.
+/// The Python backend's verdict on one node, and the construct it counts as.
 ///
 /// A table rather than a `match` scattered through the emitter, so that what this
 /// target supports is one readable list — and so that adding a node kind to the
 /// IR makes this fail to compile rather than silently reporting the new kind as
 /// supported.
+///
 fn verdict(kind: NodeKind) -> (Support, &'static str) {
     match kind {
         NodeKind::LlmCall => (Support::Supported, ""),
@@ -224,13 +225,12 @@ fn verdict(kind: NodeKind) -> (Support, &'static str) {
              and no checkpoint (ING6005), so iterations cannot observe one \
              another and only the wall clock differs (GAP-010)",
         ),
-        NodeKind::Verify => (
-            Support::Unimplemented,
-            "this target has no verifier execution model. The reference \
-             interpreter reports `passed: true` without running one (GAP-002), \
-             and copying that would mean two backends agreeing on a claim \
-             neither can support",
-        ),
+        // Both cases match the reference interpreter exactly: a `verify`
+        // carrying a `condition` is evaluated and reports `passed` or `failed`,
+        // and one without a body reports `notPerformed`. Neither is a
+        // limitation of this target, so neither is a finding — the compiler's
+        // ING6006 is where a bodyless verifier gets said.
+        NodeKind::Verify => (Support::Supported, ""),
         NodeKind::ToolCall => (
             Support::Unimplemented,
             "an MCP client over stdio is not written for this target yet; an \
@@ -323,14 +323,24 @@ mod tests {
     fn an_unimplemented_construct_blocks_the_build_and_says_which_and_how_many() {
         let report = analyse_agent(&agent(&[
             NodeKind::LlmCall,
-            NodeKind::Verify,
-            NodeKind::Verify,
+            NodeKind::ToolCall,
+            NodeKind::ToolCall,
         ]));
         assert!(!report.buildable());
         let finding = &report.findings[0];
-        assert_eq!(finding.construct, "verify");
+        assert_eq!(finding.construct, "tool.call");
         assert_eq!(finding.nodes, 2, "a count, not a flag");
-        assert!(finding.reason.contains("GAP-002"), "{}", finding.reason);
+        assert!(finding.reason.contains("MCP"), "{}", finding.reason);
+    }
+
+    #[test]
+    fn verify_is_not_a_finding_because_this_target_matches_the_reference() {
+        // Both a check with a body and one without behave exactly as the
+        // reference interpreter behaves. A finding here would be noise, and
+        // noise is what buries the line that matters.
+        let report = analyse_agent(&agent(&[NodeKind::LlmCall, NodeKind::Verify]));
+        assert!(report.findings.is_empty(), "{:?}", report.findings);
+        assert!(report.buildable());
     }
 
     #[test]
@@ -347,7 +357,7 @@ mod tests {
     fn the_worst_finding_is_first() {
         let report = analyse_agent(&agent(&[
             NodeKind::Parallel,
-            NodeKind::Verify,
+            NodeKind::ToolCall,
             NodeKind::Checkpoint,
         ]));
         assert_eq!(report.findings[0].support, Support::Unimplemented);
@@ -364,7 +374,7 @@ mod tests {
             NodeKind::Checkpoint,
             NodeKind::Parallel,
             NodeKind::ToolCall,
-            NodeKind::Verify,
+            NodeKind::AgentCall,
         ]);
         let once = analyse("python", std::slice::from_ref(&ir));
         let again = analyse("python", std::slice::from_ref(&ir));
@@ -374,18 +384,21 @@ mod tests {
             .iter()
             .map(|finding| finding.construct.as_str())
             .collect();
-        assert_eq!(names, vec!["tool.call", "verify", "checkpoint", "parallel"]);
+        assert_eq!(
+            names,
+            vec!["agent.call", "tool.call", "checkpoint", "parallel"]
+        );
     }
 
     #[test]
     fn a_program_is_blocked_by_any_one_agent() {
         let report = analyse(
             "python",
-            &[agent(&[NodeKind::LlmCall]), agent(&[NodeKind::Verify])],
+            &[agent(&[NodeKind::LlmCall]), agent(&[NodeKind::ToolCall])],
         );
         assert!(!report.buildable());
         assert_eq!(report.blocked().len(), 1);
-        assert_eq!(report.unimplemented(), vec!["verify".to_string()]);
+        assert_eq!(report.unimplemented(), vec!["tool.call".to_string()]);
     }
 
     #[test]
@@ -399,7 +412,7 @@ mod tests {
 
     #[test]
     fn the_prose_names_the_target_and_the_verdict() {
-        let text = analyse("python", &[agent(&[NodeKind::Verify])]).render();
+        let text = analyse("python", &[agent(&[NodeKind::ToolCall])]).render();
         assert!(text.contains("report for target `python`"), "{text}");
         assert!(text.contains("not implemented"), "{text}");
         assert!(text.contains("--allow-unimplemented"), "{text}");

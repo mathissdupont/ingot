@@ -222,6 +222,54 @@ fn id(value: string) -> string = value
 }
 
 #[test]
+fn verifier_bodies_require_language_0_2() {
+    let result = parse_text(
+        r#"
+language 0.1
+verifier Enough(n: int) = n >= 3
+"#,
+    );
+    assert!(result
+        .diagnostics
+        .iter()
+        .any(|d| d.code == codes::UNSUPPORTED_LANGUAGE_VERSION));
+}
+
+#[test]
+fn a_verifier_without_a_body_is_still_language_0_1() {
+    let result = parse_text(
+        r#"
+language 0.1
+verifier Enough(n: int)
+"#,
+    );
+    assert!(
+        !result
+            .diagnostics
+            .iter()
+            .any(|d| d.code == codes::UNSUPPORTED_LANGUAGE_VERSION),
+        "a name and a signature is what 0.1 always had"
+    );
+    assert!(result.program.verifiers[0].body.is_none());
+}
+
+#[test]
+fn a_verifier_body_parses_as_an_expression() {
+    let result = parse_text(
+        r#"
+language 0.2
+verifier Enough(items: string[], min: int) = len(items) >= min
+"#,
+    );
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    let body = result.program.verifiers[0]
+        .body
+        .as_ref()
+        .expect("the declaration carried a body");
+    assert!(matches!(body, ingot_syntax::Expr::Binary { .. }));
+}
+
+#[test]
 fn optional_and_union_types_require_language_0_2() {
     let result = parse_text(
         r#"

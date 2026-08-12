@@ -46,6 +46,7 @@ pub const UNSUPPORTED_TRANSPORT: &str = "ING2016";
 pub const UNSUPPORTED_MEMORY_LIFETIME: &str = "ING2017";
 pub const IMPORT_RESOLUTION_ERROR: &str = "ING2018";
 pub const FUNCTION_NOT_PURE: &str = "ING2019";
+pub const VERIFIER_BODY_NOT_BOOL: &str = "ING2020";
 
 // --- ING3xxx: types -------------------------------------------------------
 
@@ -93,6 +94,7 @@ pub const UNREACHABLE_STATEMENT: &str = "ING6003";
 pub const OUTPUT_NOT_ON_ALL_PATHS: &str = "ING6004";
 pub const INVALID_IN_PARALLEL: &str = "ING6005";
 pub const VERIFIER_NOT_PERFORMED: &str = "ING6006";
+pub const VERIFY_AFTER_EMIT: &str = "ING6007";
 
 /// Long-form explanation shown by `ingot explain <CODE>`.
 ///
@@ -234,15 +236,32 @@ pub fn explain(code: &str) -> Option<&'static str> {
              prints."
         }
         VERIFIER_NOT_PERFORMED => {
-            "The flow names a verifier, and nothing can carry one out.\n\n\
-             Agent IR records a verifier's name and signature. It has no \
-             representation for the check itself, so a backend has nothing to \
-             run: the reference interpreter reports the node as `notPerformed` \
-             rather than claiming it passed.\n\n\
-             This is a warning rather than an error because the declaration is \
-             correct and keeps its meaning when verifiers gain an execution \
-             model. Until then, treat the property as unchecked — or check it \
-             with a tool call, which does execute."
+            "The flow names a verifier that was declared without a body, so \
+             there is nothing to carry out.\n\n\
+             `verifier CitationCheck(draft: markdown, min_sources: int)` \
+             declares a name and a signature. That is enough to type-check the \
+             `verify`, and it is all Language 0.1 could express — but the \
+             artifact carries no check, so a run reports the node as \
+             `notPerformed` rather than claiming it passed.\n\n\
+             Give it one: `verifier MinSources(d: draft, min: int) = \
+             len(d.sources) >= min`. The body is a `bool` expression over the \
+             parameters, it needs `language 0.2`, and a run then reports \
+             `passed` or `failed` for real.\n\n\
+             This stays a warning because the bodyless declaration is still \
+             correct and still says something true. A property a pure \
+             expression cannot express — anything that must read prose or \
+             reach the network — belongs in a `tool` call instead."
+        }
+        VERIFY_AFTER_EMIT => {
+            "A `verify` runs after its argument was already emitted, so the \
+             check cannot prevent the thing it is checking from being \
+             published.\n\n\
+             A failing check ends the run, but an artifact emitted earlier has \
+             already been written to the record. Move the `verify` above the \
+             `emit`: bind the value, check it, and emit it only then.\n\n\
+             This fires when the emitted value is the verified one or a field \
+             of it — which is the usual case, since a record cannot be an \
+             artifact and the `emit` normally takes a field out of it."
         }
         INVALID_IN_PARALLEL => {
             "`emit`, `checkpoint` and writes to `state` are not allowed inside a \
@@ -256,11 +275,22 @@ pub fn explain(code: &str) -> Option<&'static str> {
              checked. Model repetition with `loop max N` instead."
         }
         FUNCTION_NOT_PURE => {
-            "A `fn` helper body contains agent work or another construct that \
-             cannot be erased into a pure value.\n\nHelpers are source-level \
-             conveniences: they inline into Agent IR instead of adding runtime \
-             function calls. Keep the body to parameters, literals, lists, \
-             field reads, pure builtins and operators."
+            "A `fn` helper body or a verifier body contains agent work, or \
+             another construct that cannot be erased into a pure value.\n\n\
+             Both are source-level conveniences: they inline into Agent IR \
+             instead of adding runtime function calls. Keep the body to \
+             parameters, literals, lists, field reads, pure builtins and \
+             operators.\n\nFor a verifier this is also what makes the check \
+             worth trusting. A verifier's outcome has to be reproducible from \
+             the run record alone, which a body that can `ask` or `call` would \
+             not be. A property that genuinely needs to reach outside the run \
+             belongs in a `tool`, whose result is a value you can then check."
+        }
+        VERIFIER_BODY_NOT_BOOL => {
+            "A verifier body produces a value instead of deciding \
+             something.\n\nA verifier answers one question: does the property \
+             hold? Its body must be a `bool` expression, so `len(d.sources)` \
+             is a value and `len(d.sources) >= min` is a check."
         }
         UNSUPPORTED_TRANSPORT => {
             "The `tools` block names a transport this language version does not \
@@ -302,9 +332,11 @@ pub const EXPLAINED_CODES: &[&str] = &[
     OUTPUT_NOT_ON_ALL_PATHS,
     COST_BUDGET_NOT_CHARGED,
     VERIFIER_NOT_PERFORMED,
+    VERIFY_AFTER_EMIT,
     INVALID_IN_PARALLEL,
     RECURSIVE_AGENT,
     FUNCTION_NOT_PURE,
+    VERIFIER_BODY_NOT_BOOL,
     UNSUPPORTED_TRANSPORT,
     STATIC_STEPS_EXCEED_BUDGET,
 ];

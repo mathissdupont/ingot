@@ -358,6 +358,27 @@ impl<'a> Parser<'a> {
                 .with_help("change the file header to `language 0.2`"),
             );
         }
+        if !language_supports_v0_2_types(program.language) {
+            if let Some(decl) = program
+                .verifiers
+                .iter()
+                .find(|decl| decl.body.is_some())
+                .cloned()
+            {
+                self.error(
+                    Diagnostic::error(
+                        codes::UNSUPPORTED_LANGUAGE_VERSION,
+                        "a verifier body requires language 0.2 or newer",
+                    )
+                    .with_primary(decl.span, "not available in this language version")
+                    .with_note(
+                        "without a body a verifier is only a name and a signature, and a run \
+                         reports it as `notPerformed`",
+                    )
+                    .with_help("change the file header to `language 0.2`"),
+                );
+            }
+        }
 
         program.span = program.span.merge(self.eof_span);
         program
@@ -784,10 +805,14 @@ impl<'a> Parser<'a> {
         self.bump(); // `verifier`
         let name = self.expect_ident("a verifier name")?;
         let params = self.parse_params();
+        // A body is optional: `verifier X(a: int)` is Language 0.1's whole
+        // verifier, and stays legal.
+        let body = self.eat(&TokenKind::Eq).then(|| self.parse_expr());
         let span = start.merge(self.previous_span());
         Some(VerifierDecl {
             name,
             params,
+            body,
             doc,
             span,
         })
@@ -1996,10 +2021,9 @@ fn first_v0_2_type_span(program: &Program) -> Option<Span> {
                 .find_map(|decl| from_fields(&decl.params).or_else(|| from_type(&decl.ret)))
         })
         .or_else(|| {
-            program
-                .verifiers
-                .iter()
-                .find_map(|decl| from_fields(&decl.params))
+            program.verifiers.iter().find_map(|decl| {
+                from_fields(&decl.params).or_else(|| decl.body.as_ref().and_then(from_expr))
+            })
         })
         .or_else(|| {
             program.functions.iter().find_map(|decl| {

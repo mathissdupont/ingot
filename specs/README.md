@@ -5,14 +5,15 @@ Normative behaviour lives here. Implementation detail does not.
 | Document | Status | Covers |
 |----------|--------|--------|
 | [`language/v0.1.md`](language/v0.1.md) | Draft, implemented | Syntax and static semantics |
-| [`language/v0.2.md`](language/v0.2.md) | Draft, partially implemented | Language 0.1 plus project-local imports |
+| [`language/v0.2.md`](language/v0.2.md) | Draft, partially implemented | Language 0.1 plus project-local imports and verifier bodies |
 | [`ir/v0.1.md`](ir/v0.1.md) | Draft, implemented | The original Agent IR backend contract |
-| [`ir/v0.2.md`](ir/v0.2.md) | Draft, implemented | Agent IR 0.1 plus portable node source spans |
+| [`ir/v0.2.md`](ir/v0.2.md) | Draft, implemented | Agent IR 0.1 plus portable node source spans and a `verify` condition |
 | [`ir/agent-ir.schema.json`](ir/agent-ir.schema.json) | Draft, implemented | Machine-readable IR schema |
 | [`image/v0.1.md`](image/v0.1.md) | Draft, implemented | OCI artifact profile, media types, lockfile, digest |
 | [`runtime/v0.1.md`](runtime/v0.1.md) | Draft, superseded in part | Execution model and the backend interface |
 | [`runtime/v0.2.md`](runtime/v0.2.md) | Draft, implemented | Runtime 0.1 plus a three-state `verify` outcome |
 | [`runtime/v0.3.md`](runtime/v0.3.md) | Draft, implemented | Runtime 0.2 plus streaming, a live channel and transport-decided ceilings |
+| [`runtime/v0.4.md`](runtime/v0.4.md) | Draft, implemented | Runtime 0.3 plus a `verify` that runs, and a failed check that stops the run |
 | [`conformance/`](conformance/) | Started (M5); packaging planned for M8 | Normative tests a backend must pass |
 
 Where a specification and the implementation disagree, the specification is

@@ -329,10 +329,12 @@ impl<'a> Lowerer<'a> {
                 };
                 let arguments =
                     self.lower_arguments(level, args, &info.arg_order, &verifier.params);
+                let condition = self.lower_verifier_body(level, &verifier, &arguments);
                 let mut node = Node::new(String::new(), NodeKind::Verify);
                 node.source_span = Some(self.source_span(*span));
                 node.verifier = Some(validator.text.clone());
                 node.args = arguments;
+                node.condition = condition;
                 self.push(level, node);
             }
             Stmt::Emit {
@@ -639,6 +641,52 @@ impl<'a> Lowerer<'a> {
         }
 
         lowered
+    }
+
+    /// Inline a verifier's body at a `verify` site, as the node's `condition`.
+    ///
+    /// The arguments are already lowered, and each carries the name of the
+    /// parameter it fills, so they are exactly the substitution map the body
+    /// needs. This is `lower_function_call`'s substitution with the lowering
+    /// of the arguments already done.
+    ///
+    /// A verifier with no body yields `None`, which is what a backend reads as
+    /// `notPerformed`.
+    fn lower_verifier_body(
+        &mut self,
+        level: &mut Vec<usize>,
+        verifier: &ingot_semantic::VerifierInfo,
+        arguments: &[Argument],
+    ) -> Option<Value> {
+        let body = self
+            .program
+            .verifiers
+            .get(verifier.decl_index)?
+            .body
+            .clone()?;
+
+        let mut saved = Vec::new();
+        for argument in arguments {
+            let previous = self
+                .aliases
+                .insert(argument.name.clone(), argument.value.clone());
+            saved.push((argument.name.clone(), previous));
+        }
+
+        let lowered = self.lower_value(level, &body);
+
+        for (name, previous) in saved.into_iter().rev() {
+            match previous {
+                Some(value) => {
+                    self.aliases.insert(name, value);
+                }
+                None => {
+                    self.aliases.remove(&name);
+                }
+            }
+        }
+
+        Some(lowered)
     }
 
     fn lower_path(&mut self, level: &mut Vec<usize>, path: &PathExpr) -> Value {

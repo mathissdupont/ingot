@@ -137,12 +137,17 @@ fn print_tool_decl(out: &mut String, decl: &ToolDecl) {
 
 fn print_verifier_decl(out: &mut String, decl: &VerifierDecl) {
     print_doc(out, decl.doc.as_ref(), 0);
-    let _ = writeln!(
+    let _ = write!(
         out,
         "verifier {}({})",
         decl.name.text,
         print_params(&decl.params)
     );
+    if let Some(body) = &decl.body {
+        out.push_str(" = ");
+        print_expr(out, body, 0);
+    }
+    out.push('\n');
 }
 
 fn print_function_decl(out: &mut String, decl: &FunctionDecl) {
