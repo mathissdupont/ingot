@@ -46,6 +46,7 @@ pub fn lower_agent(
         counter: 0,
         temp_counter: 0,
         aliases: HashMap::new(),
+        region_depth: 0,
         state_reads: HashMap::new(),
     };
 
@@ -264,6 +265,10 @@ struct Lowerer<'a> {
     temp_counter: usize,
     /// Pure bindings, inlined at their use sites instead of becoming nodes.
     aliases: HashMap<String, Value>,
+    /// How many nested regions -- branch arms, loop and map bodies -- enclose
+    /// the statement being lowered. Zero is the top level of the flow, which is
+    /// the only place a `checkpoint` is resumable.
+    region_depth: usize,
     /// Store fields already read in the statement being lowered, keyed by the
     /// qualified name (`state.notes`, `memory.seen`) so the two stores cannot
     /// share a read.
@@ -337,6 +342,14 @@ impl<'a> Lowerer<'a> {
         if let Some(last) = level.last() {
             self.nodes[*last].next = None;
         }
+    }
+
+    /// Lower a nested region, so a `checkpoint` inside it is not resumable.
+    fn lower_region(&mut self, statements: &[Stmt]) -> Vec<usize> {
+        self.region_depth += 1;
+        let level = self.lower_statements(statements);
+        self.region_depth -= 1;
+        level
     }
 
     fn lower_statements(&mut self, statements: &[Stmt]) -> Vec<usize> {
@@ -426,13 +439,13 @@ impl<'a> Lowerer<'a> {
                 node.condition = Some(lowered);
                 let index = self.push(level, node);
 
-                let then_level = self.lower_statements(then_branch);
+                let then_level = self.lower_region(then_branch);
                 self.link(&then_level);
                 let then_entry = then_level.first().map(|i| self.nodes[*i].id.clone());
 
                 let else_entry = match else_branch {
                     Some(else_branch) => {
-                        let else_level = self.lower_statements(else_branch);
+                        let else_level = self.lower_region(else_branch);
                         self.link(&else_level);
                         else_level.first().map(|i| self.nodes[*i].id.clone())
                     }
@@ -455,7 +468,7 @@ impl<'a> Lowerer<'a> {
                 node.guard = lowered_guard;
                 let index = self.push(level, node);
 
-                let body_level = self.lower_statements(body);
+                let body_level = self.lower_region(body);
                 self.link(&body_level);
                 self.nodes[index].body = body_level.first().map(|i| self.nodes[*i].id.clone());
             }
@@ -463,6 +476,10 @@ impl<'a> Lowerer<'a> {
                 let mut node = Node::new(String::new(), NodeKind::Checkpoint);
                 node.source_span = Some(self.source_span(*span));
                 node.label = Some(label.plain_text());
+                // Only at the top level. A checkpoint inside a branch arm or a
+                // loop body is reached with a partially unwound interpreter,
+                // and resuming into one would mean serialising a continuation.
+                node.resumable = self.region_depth == 0;
                 self.push(level, node);
             }
             Stmt::Error { .. } => {}
@@ -545,7 +562,7 @@ impl<'a> Lowerer<'a> {
 
                 // The body is lowered into the shared node array; the container
                 // points at its first node and the region self-terminates.
-                let body_level = self.lower_statements(body);
+                let body_level = self.lower_region(body);
                 self.link(&body_level);
                 node.body = body_level.first().map(|i| self.nodes[*i].id.clone());
                 Some(node)

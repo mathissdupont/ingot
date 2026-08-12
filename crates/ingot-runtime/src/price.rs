@@ -189,7 +189,11 @@ pub fn render_micros(micros: Micros) -> String {
 }
 
 /// What a run spent, and what it could not price.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+///
+/// Serialisable so an interrupted run can carry its ledger across a stop: a
+/// budget bounds a run, and a run that stopped and continued is one run.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
 pub struct Spend {
     micros: Micros,
     currency: Option<String>,

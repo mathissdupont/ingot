@@ -474,8 +474,11 @@ pub fn adapt(path: &Path) -> Result<u8> {
         RunOptions {
             // The conformance contract passes an artifact, a cassette and
             // inputs. A store is not one of them, so a case runs from the
-            // declared values -- the same start every backend gets.
+            // declared values -- the same start every backend gets. Nor is a
+            // stop: a case is one run, start to finish.
             memory: std::collections::BTreeMap::new(),
+            stop_at: None,
+            resume: None,
             inputs: request.inputs.clone(),
             // A conformance run is unattended, and an approval nobody can grant
             // is a denial. Any case that needs one says so in its expectation.

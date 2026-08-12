@@ -1136,3 +1136,41 @@ agent Plain(note: text) -> log<text> {
     // of its own, so this checks the nodes rather than the text.
     assert!(ir.nodes.iter().all(|node| node.scope.is_none()), "{json}");
 }
+
+// --- resumable checkpoints --------------------------------------------------
+
+#[test]
+fn only_a_top_level_checkpoint_is_marked_resumable() {
+    // A checkpoint inside a branch arm or a loop body is reached with a
+    // partially unwound interpreter, so resuming into one would mean
+    // serialising a continuation. See RFC-0018 §4.1.
+    let compilation = compile(
+        r#"
+agent Phases(topic: text) -> report<text> {
+  memory { working ephemeral { seen: text } }
+  flow {
+    state.seen = topic
+    checkpoint "top"
+    if true {
+      checkpoint "in-a-branch"
+    }
+    loop max 2 {
+      checkpoint "in-a-loop"
+    }
+    emit report = state.seen
+  }
+}
+"#,
+    );
+    let ir = compilation.primary_agent().unwrap();
+    let marked: Vec<(&str, bool)> = ir
+        .nodes
+        .iter()
+        .filter(|node| node.kind == NodeKind::Checkpoint)
+        .map(|node| (node.label.as_deref().unwrap_or(""), node.resumable))
+        .collect();
+    assert_eq!(
+        marked,
+        vec![("top", true), ("in-a-branch", false), ("in-a-loop", false),]
+    );
+}

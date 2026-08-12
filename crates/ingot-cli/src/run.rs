@@ -55,6 +55,9 @@ pub enum EventFormat {
     Quiet,
 }
 
+/// Where snapshots live inside a project's build directory.
+pub const SNAPSHOTS_DIR: &str = "snapshots";
+
 pub struct RunConfig {
     pub inputs: Vec<String>,
     pub provider: ProviderChoice,
@@ -82,6 +85,12 @@ pub struct RunConfig {
     /// are different questions, and tying them together made `--no-history`
     /// silently mean `--no-memory` too.
     pub build_dir: Option<PathBuf>,
+    /// Stop at the checkpoint with this label and write a snapshot.
+    pub stop_at: Option<String>,
+    /// Continue the run this snapshot describes.
+    pub resume: Option<PathBuf>,
+    /// Where the snapshot goes, when the operator named a place.
+    pub snapshot: Option<PathBuf>,
     /// Where the agent's persistent memory store lives, when the operator named
     /// a place. Absent means the default under `build_dir`.
     pub memory: Option<PathBuf>,
@@ -140,6 +149,7 @@ impl RunConfig {
             model: self.model.clone(),
             effort: self.effort.clone(),
             models: self.models.clone(),
+            replay_from: 0,
             strict_replay: true,
         }
     }
@@ -158,6 +168,12 @@ pub struct ProviderSelection {
     #[cfg_attr(not(feature = "providers"), allow(dead_code))]
     pub effort: Option<String>,
     pub models: ModelConfig,
+    /// How many recorded interactions the run this continues already played.
+    ///
+    /// A cassette is matched by position, so the second half of an interrupted
+    /// run has to start where the first stopped. Zero for a run that is not a
+    /// resumption, and ignored by every provider that is not a replay.
+    pub replay_from: usize,
     /// Whether a replayed interaction must match the request that recorded it.
     ///
     /// A run replays strictly: an edited prompt must fail loudly rather than be
@@ -230,7 +246,7 @@ pub fn build_model_provider(selection: &ProviderSelection) -> Result<Box<dyn Mod
                 );
             };
             let cassette = Cassette::load(path).map_err(anyhow::Error::msg)?;
-            let provider = ReplayProvider::new(cassette);
+            let provider = ReplayProvider::new(cassette).skipping(selection.replay_from);
             Ok(Box::new(if selection.strict_replay {
                 provider
             } else {
@@ -354,7 +370,10 @@ pub fn execute(compilation: &Compilation, config: &RunConfig) -> Result<u8> {
         // a say: a program that cannot be contained must say so whether or not a
         // key happens to be exported.
         let command = crate::contained::prepare(compilation, config, mode, &ir)?;
-        let mut provider = build_provider(config, &ir.agent, &inputs)?;
+        // No resumption inside a box: the supervisor channel reports a finished
+        // run or a failed one, so a contained run never stops and never has a
+        // snapshot to continue from.
+        let mut provider = build_provider(config, &ir.agent, &inputs, 0)?;
         return crate::contained::execute(
             command,
             compilation,
@@ -370,7 +389,27 @@ pub fn execute(compilation: &Compilation, config: &RunConfig) -> Result<u8> {
     // exactly the tools an unrecorded one would.
     let mut tools = Tools::new(tool_host(compilation, config)?, config.record.is_some());
 
-    let mut provider = build_provider(config, &ir.agent, &inputs)?;
+    // Loaded before the provider, because a replay has to start where the first
+    // half stopped: a cassette is matched by position.
+    //
+    // Checked against the artifact here as well as in the interpreter, so every
+    // problem with a `--resume` file is reported the same way -- before the run,
+    // as an operational failure -- rather than one before and one during
+    // depending on which check happens to fire.
+    let resume = match &config.resume {
+        Some(path) => {
+            let snapshot = ingot_runtime::Resumption::load(path).map_err(anyhow::Error::msg)?;
+            snapshot.check(&ir).map_err(anyhow::Error::msg)?;
+            Some(snapshot)
+        }
+        None => None,
+    };
+    let replay_from = resume
+        .as_ref()
+        .map(|snapshot| snapshot.model_calls as usize)
+        .unwrap_or(0);
+
+    let mut provider = build_provider(config, &ir.agent, &inputs, replay_from)?;
     let mut sink = RunSink {
         printer: printer_for(config, compilation, false),
     };
@@ -399,6 +438,8 @@ pub fn execute(compilation: &Compilation, config: &RunConfig) -> Result<u8> {
             approval,
             max_steps: config.max_steps,
             memory: store.fields,
+            stop_at: config.stop_at.clone(),
+            resume,
             pricing: config.models.pricing(),
         },
     );
@@ -435,6 +476,24 @@ pub fn execute(compilation: &Compilation, config: &RunConfig) -> Result<u8> {
         crate::memory::save(path, &ir, &report.memory)?;
     }
 
+    if let Some(snapshot) = &report.stopped {
+        let path = snapshot_path(config, &ir.agent, &snapshot.label);
+        snapshot.save(&path).map_err(anyhow::Error::msg)?;
+        sink.printer.finish_record(crate::runs::Outcome::Finished {
+            steps: report.steps,
+            usage: report.usage,
+            cost: report.spend.rendered(),
+        });
+        // Not on stdout: a stopped run produced no artifact, and the path is
+        // the one thing the operator needs next.
+        eprintln!(
+            "stopped at \"{}\"\n  resume with: ingot run --resume {}",
+            snapshot.label,
+            path.display()
+        );
+        return Ok(super::EXIT_OK);
+    }
+
     sink.printer.finish_record(crate::runs::Outcome::Finished {
         steps: report.steps,
         usage: report.usage,
@@ -443,6 +502,34 @@ pub fn execute(compilation: &Compilation, config: &RunConfig) -> Result<u8> {
     report_cost(&report);
     write_outputs(&report, config)?;
     Ok(super::EXIT_OK)
+}
+
+/// Where a stopped run's snapshot goes.
+///
+/// Beside the run records and the memory stores, under the build directory,
+/// because it is output: disposable, already ignored by version control, and
+/// expected to be lost with the build directory.
+fn snapshot_path(config: &RunConfig, agent: &str, label: &str) -> PathBuf {
+    if let Some(path) = &config.snapshot {
+        return path.clone();
+    }
+    let safe = |text: &str| -> String {
+        text.chars()
+            .map(|ch| {
+                if ch.is_ascii_alphanumeric() || ch == '.' || ch == '-' || ch == '_' {
+                    ch
+                } else {
+                    '_'
+                }
+            })
+            .collect()
+    };
+    let base = config
+        .build_dir
+        .clone()
+        .unwrap_or_else(|| PathBuf::from("."));
+    base.join(SNAPSHOTS_DIR)
+        .join(format!("{}-{}.json", safe(agent), safe(label)))
 }
 
 /// A printer for this run, keeping a record when the command asked for one.
@@ -1025,8 +1112,12 @@ fn build_provider(
     config: &RunConfig,
     agent: &str,
     inputs: &BTreeMap<String, Value>,
+    replay_from: usize,
 ) -> Result<Provider> {
-    let inner = build_model_provider(&config.selection())?;
+    let inner = build_model_provider(&ProviderSelection {
+        replay_from,
+        ..config.selection()
+    })?;
 
     Ok(if config.record.is_some() {
         Provider::Recording(RecordingProvider::new(inner, agent).with_inputs(inputs.clone()))
@@ -1417,8 +1508,11 @@ pub fn test(compilation: &Compilation, config: &TestConfig) -> Result<u8> {
                 max_steps: 1_000,
                 // No store. A test is offline and repeatable, and a run that
                 // started from whatever a previous run happened to leave on
-                // disk would be neither.
+                // disk would be neither. A test runs to the end, so it never
+                // stops at a checkpoint either.
                 memory: std::collections::BTreeMap::new(),
+                stop_at: None,
+                resume: None,
                 // The same prices a live run uses, so `cost <= 5 usd` is a
                 // property `ingot test` can hold the agent to rather than a
                 // line nothing checks.

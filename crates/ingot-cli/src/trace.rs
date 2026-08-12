@@ -223,6 +223,12 @@ impl HumanTrace {
                 self.frames.pop();
                 headline
             }
+            RunEvent::RunStopped { node, label } => {
+                let agent = self.current_agent().to_string();
+                let headline = format!("run.stopped  {agent}:{node}  \"{label}\"");
+                self.frames.pop();
+                headline
+            }
         };
 
         let mut output = format!("trace[{:04}] {headline}", self.sequence);

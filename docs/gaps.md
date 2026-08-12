@@ -37,7 +37,6 @@ to you*.
 | ID | Gap | Class | Closes with |
 |----|-----|-------|-------------|
 | [GAP-007](#gap-007) | MCP over stdio only | Refused | a transport, now that GAP-013 is closed |
-| [GAP-008](#gap-008) | `checkpoint` cannot be resumed from | Refused | a resumption model (RFC) |
 | [GAP-009](#gap-009) | MCP prompts, resources and sampling unsupported | Refused | language support for each |
 | [GAP-010](#gap-010) | `parallel` executes sequentially | Degraded | a scheduler in the interpreter |
 | [GAP-011](#gap-011) | No package semantics beyond project-local imports | Absent | a package model (RFC) |
@@ -50,6 +49,7 @@ to you*.
 | [GAP-033](#gap-033) | `--effort` cannot be honoured by the Gemini protocol | Refused | one thinking control that holds across model generations |
 | [GAP-034](#gap-034) | A verifier can only inspect the shape of a value | Absent | a verifier kind with effects |
 | [GAP-035](#gap-035) | Two runs sharing one memory store are not made safe | Refused | a lock, or a per-field merge with a conflict model |
+| [GAP-036](#gap-036) | A generated Python program cannot be resumed | Refused | a node walker in the generated code, at the cost of its readability |
 
 ---
 
@@ -91,19 +91,6 @@ or both.
 
 *Recorded in.* [ADR-0005](adr/0005-mcp-over-stdio-only.md),
 [MCP binding 0.1 §1](../specs/tools/mcp-v0.1.md).
-
-### GAP-008
-
-**`checkpoint` cannot be resumed from.**
-
-`checkpoint "sources-collected"` lowers to a node that emits an event. There is
-no way to stop at one and continue later.
-
-*What closing it needs.* A serialised interpreter state, which means deciding
-what is in it — bindings, working memory, usage so far — and what happens when
-the artifact changes between the stop and the resume.
-
-*Recorded in.* [Runtime 0.1 §5](../specs/runtime/v0.1.md).
 
 ### GAP-009
 
@@ -436,6 +423,28 @@ the eventual design is likely to keep.
 *Recorded in.* [Runtime 0.4](../specs/runtime/v0.4.md),
 [Language 0.2 §10.1](../specs/language/v0.2.md).
 
+### GAP-036
+
+**A generated Python program cannot be resumed.**
+
+The reference interpreter stops at a resumable `checkpoint` and continues from a
+snapshot. `ingot build --target python` does not, and its portability report
+says so on every build that contains a checkpoint.
+
+*Why not.* The backend emits a **straight-line program**: an agent's flow becomes
+statements in a function, and a top-level node becomes a line. There is no node
+walker to hand a `resumeAt` to. Re-entering the middle would mean emitting a
+dispatch table over every top-level node — which is a node walker, written in
+Python — or generators, which cannot be serialised. The first gives up the
+readability that is the generated backend's entire reason to exist.
+
+*What you get instead.* The checkpoint's event, in the right place in the
+stream. `--stop-at` is not a flag a generated program has, so nothing is
+silently ignored.
+
+*Recorded in.* [RFC-0018](../rfcs/0018-state-that-outlives-a-run.md),
+`crates/ingot-backend-python/src/report.rs`.
+
 ### GAP-035
 
 **Two runs sharing one memory store are not made safe.**
@@ -465,6 +474,51 @@ deliberately, which is the case this entry exists to warn.
 When a gap closes it moves here with the release that closed it, and its section
 stays where a link can find it. Identifiers are never reused: a link to GAP-007
 must keep meaning what it meant.
+
+### GAP-008
+
+**`checkpoint` cannot be resumed from.**
+*Closed 2026-08-12.*
+
+`checkpoint "sources-collected"` lowered to a node that emitted an event and
+nothing else. [Runtime 0.1 §5](../specs/runtime/v0.1.md) said so outright —
+*"Emit an event. Resumption is not defined in 0.1"* — so the keyword was named
+for something it did not do.
+
+*What closed it.* `--stop-at <LABEL>` writes a snapshot and `--resume <FILE>`
+continues from it. The snapshot is a JSON document holding the inputs, the
+bindings, working memory, the outputs so far and the counters.
+
+*The decision that shaped it.* **Only a checkpoint at the top level of a flow is
+resumable.** One inside a branch arm or a loop body is reached with a partially
+unwound interpreter, and resuming into it would mean serialising a continuation
+— which is not a file a person can read, and readability is the property the
+rest of the design rests on. The compiler marks each checkpoint `resumable`, and
+`--stop-at` on a nested one is refused with the reason rather than running to
+completion and quietly never stopping.
+
+This is a restriction, not a staging post. Lifting it means choosing a
+continuation format, which is a different design that should argue for itself.
+
+*The test that makes it real.* The events of the two halves, with the framing
+events removed, concatenate to exactly the events of one uninterrupted run —
+byte for byte, since events carry no clock. It is
+[Runtime 0.5 §2.5](../specs/runtime/v0.5.md) and it is an executable assertion
+in `crates/ingot-cli/tests/resume.rs`.
+
+*Two refusals with no override.* An artifact that changed since the run stopped
+is refused: continuing against a modified program produces a result that is
+neither program's. Supplying different inputs alongside a resumption is refused
+for the same reason.
+
+*What it does not do.* The generated Python backend cannot resume — see
+[GAP-036](#gap-036). A contained run cannot stop, because the supervisor channel
+reports a finished run or a failed one and stopping is not one of its outcomes.
+
+*Recorded in.* [RFC-0018](../rfcs/0018-state-that-outlives-a-run.md),
+[Agent IR 0.2 §7.3](../specs/ir/v0.2.md),
+[Runtime 0.5 §2](../specs/runtime/v0.5.md),
+`crates/ingot-runtime/src/snapshot.rs`.
 
 ### GAP-014
 

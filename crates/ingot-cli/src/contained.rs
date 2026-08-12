@@ -138,6 +138,10 @@ pub fn execute(
                 // A contained run opens no store, so there is nothing to hand
                 // back. `prepare` refuses an artifact that declares one.
                 memory: Default::default(),
+                // The supervisor channel carries a finished run or a failed
+                // one. Stopping is not one of the outcomes it can report, so a
+                // contained run never stops.
+                stopped: None,
                 usage: finished.usage,
                 steps: finished.steps,
                 // The guest charged its own budget inside the box; what crossed
@@ -452,6 +456,8 @@ pub fn exec() -> Result<u8> {
             // boundary but the artifact, the inputs and the tool
             // configuration. `prepare` refuses before it gets here.
             memory: std::collections::BTreeMap::new(),
+            stop_at: None,
+            resume: None,
             // No prices inside. The manifest does not cross the boundary — only
             // the artifact, the inputs and the tool configuration do — so a
             // contained run reports its cost budget as uncharged rather than

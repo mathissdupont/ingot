@@ -135,6 +135,9 @@ fn cycle(target: Target, revision: u64, last_good: &mut Option<u64>, config: &De
             // A watch loop runs on every save. Persisting memory across those
             // runs would make each one start from the last accidental one.
             build_dir: None,
+            stop_at: None,
+            resume: None,
+            snapshot: None,
             memory: None,
             memory_mode: crate::memory::MemoryMode::Disabled,
             yes: config.yes,

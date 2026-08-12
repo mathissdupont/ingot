@@ -187,6 +187,17 @@ impl ReplayProvider {
         self
     }
 
+    /// Start at `played` rather than at the beginning.
+    ///
+    /// For continuing an interrupted run: interactions are matched by position,
+    /// so the second half has to pick up where the first stopped. Anything past
+    /// the end leaves the provider with nothing to answer, which is the same
+    /// failure a cassette that ran out already gives.
+    pub fn skipping(mut self, played: usize) -> ReplayProvider {
+        self.position = played.min(self.cassette.interactions.len());
+        self
+    }
+
     /// Interactions recorded but never played back.
     pub fn remaining(&self) -> usize {
         self.cassette
@@ -363,6 +374,13 @@ impl ReplayToolHost {
 
     pub fn lenient(mut self) -> ReplayToolHost {
         self.strict = false;
+        self
+    }
+
+    /// Start at `played`, for continuing an interrupted run. See
+    /// [`ReplayProvider::skipping`].
+    pub fn skipping(mut self, played: usize) -> ReplayToolHost {
+        self.position = played.min(self.calls.len());
         self
     }
 

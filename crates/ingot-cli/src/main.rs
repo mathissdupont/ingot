@@ -446,6 +446,27 @@ struct RunArgs {
     #[arg(long)]
     migrate_memory: bool,
 
+    /// Stop when the run reaches the checkpoint with this label.
+    ///
+    /// Only a checkpoint at the top level of a flow can be stopped at; one
+    /// inside a branch or a loop is refused, naming why. The run writes a
+    /// snapshot and reports where it went.
+    #[arg(long, value_name = "LABEL", conflicts_with = "resume")]
+    stop_at: Option<String>,
+
+    /// Where a stopped run's snapshot goes.
+    ///
+    /// Defaults to `<out-dir>/snapshots/<agent>-<label>.json`.
+    #[arg(long, value_name = "FILE", requires = "stop_at")]
+    snapshot: Option<PathBuf>,
+
+    /// Continue the run this snapshot describes.
+    ///
+    /// The inputs come from the snapshot, so `--input` is neither needed nor
+    /// accepted. An artifact that has changed since the run stopped is refused.
+    #[arg(long, value_name = "FILE")]
+    resume: Option<PathBuf>,
+
     /// Override the model the artifact asks for.
     #[arg(long, value_name = "MODEL")]
     model: Option<String>,
@@ -1059,6 +1080,8 @@ fn author_with_model(
     tools: &authoring::ToolContext,
 ) -> Result<AuthoringSession> {
     let selection = run::ProviderSelection {
+        // Authoring never resumes a run.
+        replay_from: 0,
         choice: args.provider.expect("checked by the caller"),
         cassette: args.cassette.clone(),
         model: args.model.clone(),
@@ -2018,6 +2041,9 @@ fn run_run(args: &RunArgs, color: RenderColor) -> Result<u8> {
             history: (!args.no_history).then(|| target.out_dir.clone()),
             events: args.events,
             build_dir: Some(target.out_dir.clone()),
+            stop_at: args.stop_at.clone(),
+            resume: args.resume.clone(),
+            snapshot: args.snapshot.clone(),
             memory: args.memory.clone(),
             memory_mode: match (args.no_memory, args.migrate_memory) {
                 (true, _) => memory::MemoryMode::Disabled,

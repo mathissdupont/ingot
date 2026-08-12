@@ -399,8 +399,14 @@ On a `checkpoint` node:
 {"id": "n7", "kind": "checkpoint", "label": "sources-collected", "resumable": true, "next": "n8"}
 ```
 
-`resumable` is omitted when false, which keeps every nested checkpoint —
-and every artifact compiled before this RFC — encoded exactly as it is now.
+`resumable` is omitted when false, so a nested checkpoint encodes exactly as it
+does now.
+
+A **top-level** checkpoint does not: it gains the line. That is the one place
+this RFC moves an existing artifact's bytes, and it is intended — the artifact
+now states a fact about itself that it could not state before. Only artifacts
+that contain a top-level `checkpoint` are affected, and the golden IR for the
+research example records the change.
 
 No new node kinds. A read of `memory.x` lowers to `state.read` with
 `scope: "memory"`, and a write to `state.write` with the same, reusing the two
@@ -472,9 +478,18 @@ Language moves to **0.2** for the `persistent` block and the `memory.` root.
 `language 0.1` sources are unaffected: `persistent` is gated exactly as verifier
 bodies are, with `ING1020` naming the feature and the version it needs.
 
-The IR stays at **0.2**. Both additions are optional and omitted when empty, so
-every artifact compiled before this RFC encodes byte-for-byte identically, and
-the golden IR tests are expected to pass unchanged.
+The IR stays at **0.2**. Both additions are optional and omitted when empty.
+
+`persistent` moves nothing: an agent that declares none has no such key, and no
+`scope` appears on a store node addressing working memory.
+
+`resumable` **does** move one thing, and it is worth being exact rather than
+claiming otherwise: an artifact with a checkpoint at the top level of its flow
+gains `"resumable": true` on that node. Its digest changes. Nothing reads the
+field except a backend that supports stopping, so no behaviour changes, but a
+published artifact re-compiled after this RFC is not the same bytes. The golden
+IR for the research example is updated in the same commit, which is how that
+was noticed.
 
 The runtime specification moves to **0.5** for §2 (the resumption property) and
 the `runStopped` event. A backend that does not emit `runStopped` is a backend

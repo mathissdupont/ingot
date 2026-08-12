@@ -1745,3 +1745,214 @@ fn an_artifact_with_no_persistent_block_reports_no_memory() {
     .expect("the summarizer runs");
     assert!(report.memory.is_empty());
 }
+
+// --- resumption -------------------------------------------------------------
+//
+// RFC-0018 §4. The end-to-end property -- that the two halves' events
+// concatenate to the uninterrupted run's -- needs three runs and lives in
+// `crates/ingot-cli/tests/resume.rs`. These pin the pieces it rests on.
+
+/// One model call, a resumable checkpoint, and an emission after it.
+fn paused() -> AgentIr {
+    let mut ir = base("test.Paused");
+    ir.outputs
+        .insert("report".to_string(), "artifact<markdown>".to_string());
+
+    let mut checkpoint = Node::new("n1", NodeKind::Checkpoint);
+    checkpoint.label = Some("half-way".to_string());
+    checkpoint.resumable = true;
+    checkpoint.next = Some("n2".to_string());
+
+    let mut nested = Node::new("n3", NodeKind::Checkpoint);
+    nested.label = Some("inside".to_string());
+
+    ir.nodes = vec![
+        llm("n0", Some("draft"), "Write.", "markdown", Some("n1")),
+        checkpoint,
+        emit("n2", "report", "draft", None),
+        nested,
+    ];
+    ir.entry = Some("n0".to_string());
+    ir
+}
+
+fn stop_at(ir: &AgentIr, label: &str) -> Result<crate::RunReport, RunError> {
+    run(
+        ir,
+        &BTreeMap::new(),
+        &mut ScriptedProvider::new(vec![json!("half a report")]),
+        &mut DenyAllTools,
+        &mut CollectingSink::default(),
+        RunOptions {
+            stop_at: Some(label.to_string()),
+            ..RunOptions::default()
+        },
+    )
+}
+
+#[test]
+fn a_run_that_stops_reports_a_snapshot_and_no_output() {
+    let ir = paused();
+    let report = stop_at(&ir, "half-way").expect("stopping is not a failure");
+    let snapshot = report.stopped.expect("a snapshot");
+
+    assert_eq!(snapshot.label, "half-way");
+    assert_eq!(snapshot.stopped_at, "n1");
+    // The node *after* the checkpoint, so a resumed run does not re-emit it.
+    assert_eq!(snapshot.resume_at, "n2");
+    assert_eq!(
+        snapshot.bindings.get("draft"),
+        Some(&json!("half a report"))
+    );
+    // The declared output was not produced, and that is not an error.
+    assert!(report.outputs.is_empty());
+    // The counters carry, so the second half cannot spend the budget twice.
+    assert_eq!(snapshot.steps, 1);
+    assert_eq!(snapshot.model_calls, 1);
+}
+
+#[test]
+fn a_stopped_run_ends_with_run_stopped_and_not_run_finished() {
+    let ir = paused();
+    let mut sink = CollectingSink::default();
+    run(
+        &ir,
+        &BTreeMap::new(),
+        &mut ScriptedProvider::new(vec![json!("half a report")]),
+        &mut DenyAllTools,
+        &mut sink,
+        RunOptions {
+            stop_at: Some("half-way".to_string()),
+            ..RunOptions::default()
+        },
+    )
+    .expect("stopping is not a failure");
+
+    let last = sink.events.last().expect("the run emitted something");
+    assert!(
+        matches!(last, RunEvent::RunStopped { label, .. } if label == "half-way"),
+        "{last:?}"
+    );
+    assert!(
+        !sink
+            .events
+            .iter()
+            .any(|event| matches!(event, RunEvent::RunFinished { .. })),
+        "a stopped run is not a finished one: {:?}",
+        sink.events
+    );
+    // The checkpoint's own event comes first, exactly where an uninterrupted
+    // run puts it. That is what makes the two halves concatenate.
+    let checkpoint = sink
+        .events
+        .iter()
+        .position(|event| matches!(event, RunEvent::Checkpoint { .. }))
+        .expect("the checkpoint was reached");
+    assert_eq!(checkpoint + 1, sink.events.len() - 1);
+}
+
+#[test]
+fn stopping_at_a_nested_checkpoint_is_refused_before_the_run_starts() {
+    let ir = paused();
+    let error = stop_at(&ir, "inside").expect_err("a nested checkpoint is not resumable");
+    assert!(
+        matches!(error, RunError::NotResumable { nested: true, .. }),
+        "{error}"
+    );
+    let text = error.to_string();
+    assert!(text.contains("inside a branch or a loop"), "{text}");
+    assert!(
+        text.contains("half-way"),
+        "it offers what is available: {text}"
+    );
+}
+
+#[test]
+fn stopping_at_a_label_nobody_wrote_is_refused() {
+    let ir = paused();
+    let error = stop_at(&ir, "nowhere").expect_err("no such checkpoint");
+    assert!(
+        matches!(error, RunError::NotResumable { nested: false, .. }),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_run_that_is_not_stopped_reports_no_snapshot() {
+    let ir = paused();
+    let report = run(
+        &ir,
+        &BTreeMap::new(),
+        &mut ScriptedProvider::new(vec![json!("a whole report")]),
+        &mut DenyAllTools,
+        &mut CollectingSink::default(),
+        RunOptions::default(),
+    )
+    .expect("the run finishes");
+    assert!(report.stopped.is_none());
+    assert!(report.outputs.contains_key("report"));
+}
+
+#[test]
+fn resuming_continues_from_the_node_the_snapshot_names() {
+    let ir = paused();
+    let snapshot = stop_at(&ir, "half-way")
+        .expect("stopping is not a failure")
+        .stopped
+        .expect("a snapshot");
+
+    let mut sink = CollectingSink::default();
+    let report = run(
+        &ir,
+        &BTreeMap::new(),
+        // No answer scripted: the second half makes no model call, because the
+        // first half already made the only one.
+        &mut ScriptedProvider::new(vec![]),
+        &mut DenyAllTools,
+        &mut sink,
+        RunOptions {
+            resume: Some(snapshot),
+            ..RunOptions::default()
+        },
+    )
+    .expect("the second half finishes");
+
+    assert!(report.outputs.contains_key("report"));
+    // The counters continued rather than restarting.
+    assert_eq!(report.steps, 1);
+    assert!(
+        !sink
+            .events
+            .iter()
+            .any(|event| matches!(event, RunEvent::Checkpoint { .. })),
+        "the checkpoint was re-emitted: {:?}",
+        sink.events
+    );
+}
+
+#[test]
+fn resuming_against_a_changed_artifact_is_refused() {
+    let ir = paused();
+    let snapshot = stop_at(&ir, "half-way")
+        .expect("stopping is not a failure")
+        .stopped
+        .expect("a snapshot");
+
+    let mut edited = ir.clone();
+    edited.budget.steps = Some(11);
+    let error = run(
+        &edited,
+        &BTreeMap::new(),
+        &mut ScriptedProvider::new(vec![]),
+        &mut DenyAllTools,
+        &mut CollectingSink::default(),
+        RunOptions {
+            resume: Some(snapshot),
+            ..RunOptions::default()
+        },
+    )
+    .expect_err("a different program");
+    assert!(error
+        .to_string()
+        .contains("has changed since the run stopped"));
+}

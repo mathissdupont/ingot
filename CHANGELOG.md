@@ -8,6 +8,34 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
 
 ## [Unreleased]
 
+**A checkpoint you can stop at** (Agent IR 0.2, Runtime 0.5; closes
+[GAP-008](docs/gaps.md#gap-008), opens [GAP-036](docs/gaps.md#gap-036),
+specified in [RFC-0018](rfcs/0018-state-that-outlives-a-run.md))
+
+- `ingot run --stop-at "<label>"` stops at a checkpoint and writes a snapshot;
+  `ingot run --resume <FILE>` continues from it.
+- **Only a checkpoint at the top level of a flow is resumable.** One inside a
+  branch or a loop would need a serialised continuation, which is not a file
+  anybody could read. The compiler marks each checkpoint, and `--stop-at` on a
+  nested one is refused with the reason rather than silently never firing.
+- A new `runStopped` event ends a stopped run. It is the only thing that
+  suppresses the "every declared output was emitted" check, and it is in the
+  record so a reader can see the check was suppressed.
+- The events of the two halves, framing removed, concatenate to exactly the
+  events of one uninterrupted run — byte for byte. That is
+  [Runtime 0.5 §2.5](specs/runtime/v0.5.md) and an executable test.
+- The counters carry across a stop, so stopping is not a way to spend twice what
+  the artifact permits. So does the cassette position, so a replayed second half
+  picks up where the first stopped.
+- An artifact that changed since the run stopped is refused, with no override.
+  So are inputs that differ from the ones the snapshot carries.
+- A top-level `checkpoint` node gains `"resumable": true`, so an artifact that
+  has one **does** change bytes. It is the only such change here, and the golden
+  IR for the research example records it.
+- The generated Python backend does not resume, and its portability report says
+  why: a straight-line program has no node walker to re-enter. See
+  [GAP-036](docs/gaps.md#gap-036).
+
 **Persistent memory** (language 0.2, Agent IR 0.2, Runtime 0.5; closes
 [GAP-014](docs/gaps.md#gap-014), opens [GAP-035](docs/gaps.md#gap-035),
 specified in [RFC-0018](rfcs/0018-state-that-outlives-a-run.md))
