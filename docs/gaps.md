@@ -298,7 +298,7 @@ which makes `ingot new` execute the agent it just wrote and needs its own
 consent step, or nothing: the one recorded run may simply be the right price for
 a test that means something.
 
-*Recorded in.* [README](../README.md#authoring-with-a-model), the generated
+*Recorded in.* [README](guide/the-toolchain.md#authoring-with-a-model), the generated
 project README, [RFC-0007](../rfcs/0007-the-ingot-product-loop.md).
 
 ### GAP-010
@@ -807,7 +807,7 @@ has to keep in step. `[run] timeout-seconds` and `--timeout` override it;
 default.
 
 *Recorded in.* [RFC-0005](../rfcs/0005-the-contained-run.md),
-[README](../README.md#putting-the-agent-in-the-box-too),
+[README](guide/the-toolchain.md#putting-the-agent-in-the-box-too),
 `crates/ingot-supervisor/src/host.rs`.
 
 ### GAP-002
@@ -944,7 +944,7 @@ image, custom images remain explicit operator choices, and a missing runtime or
 image never falls back to a host run. M6 added digest pinning for an image
 reference; signed acquisition is separately open as [GAP-029](#gap-029).
 
-*Recorded in.* [README](../README.md#putting-the-agent-in-the-box-too),
+*Recorded in.* [README](guide/the-toolchain.md#putting-the-agent-in-the-box-too),
 [CHANGELOG](../CHANGELOG.md),
 [RFC-0007](../rfcs/0007-the-ingot-product-loop.md).
 
