@@ -19,8 +19,8 @@ use std::collections::{BTreeMap, HashMap};
 
 use ingot_ir::{
     node::Argument, AgentIr, Budget, ContextTokens, Cost, Decision, FieldType, ModelRequirement,
-    Node, NodeKind, PolicyRule, RecordType, RefScope, Requirements, SourceSpan, TemplatePart,
-    ToolBinding, ToolSignature, Value, IR_VERSION,
+    Node, NodeKind, PersistentField, PolicyRule, RecordType, RefScope, Requirements, SourceSpan,
+    TemplatePart, ToolBinding, ToolSignature, Value, IR_VERSION,
 };
 use ingot_semantic::{AgentInfo, Analysis, CallTarget, ModelInfo};
 use ingot_source::{FileId, SourceMap, Span};
@@ -86,6 +86,7 @@ pub fn lower_agent(
             .iter()
             .map(|param| (param.name.clone(), param.ty.to_string()))
             .collect(),
+        persistent: lower_persistent(agent, decl),
         budget: Budget {
             steps: agent.budget.steps,
             tokens: agent.budget.tokens,
@@ -118,6 +119,62 @@ pub fn lower_agent(
         effects: agent.effects.names(),
         entry,
         nodes: lowerer.nodes,
+    }
+}
+
+/// Persistent fields, paired with the literal each starts from.
+///
+/// The checker validated both the type and the literal-ness; this reads the
+/// value back out of the syntax tree, which is where a literal lives. A field
+/// the checker rejected is absent from `agent.persistent` and so never reaches
+/// here.
+fn lower_persistent(agent: &AgentInfo, decl: &AgentDecl) -> BTreeMap<String, PersistentField> {
+    let declared = decl
+        .memory
+        .as_ref()
+        .and_then(|memory| memory.persistent.as_ref());
+    let Some(block) = declared else {
+        return BTreeMap::new();
+    };
+
+    agent
+        .persistent
+        .iter()
+        .filter_map(|param| {
+            let field = block
+                .fields
+                .iter()
+                .find(|field| field.name.text == param.name)?;
+            let initial = literal_json(field.initial.as_ref()?)?;
+            Some((
+                param.name.clone(),
+                PersistentField {
+                    ty: param.ty.to_string(),
+                    initial,
+                },
+            ))
+        })
+        .collect()
+}
+
+/// A literal expression as canonical JSON.
+///
+/// Mirrors the checker's `literal_ty`: what one accepts the other encodes, and
+/// anything else was already refused with a diagnostic.
+fn literal_json(expr: &Expr) -> Option<serde_json::Value> {
+    match expr {
+        Expr::Str(literal) if literal.is_plain() => {
+            Some(serde_json::Value::String(literal.plain_text()))
+        }
+        Expr::Int { value, .. } => Some(serde_json::Value::from(*value)),
+        Expr::Float { value, .. } => serde_json::Number::from_f64(*value).map(Into::into),
+        Expr::Bool { value, .. } => Some(serde_json::Value::Bool(*value)),
+        Expr::List { items, .. } => items
+            .iter()
+            .map(literal_json)
+            .collect::<Option<Vec<_>>>()
+            .map(serde_json::Value::Array),
+        _ => None,
     }
 }
 
@@ -207,7 +264,9 @@ struct Lowerer<'a> {
     temp_counter: usize,
     /// Pure bindings, inlined at their use sites instead of becoming nodes.
     aliases: HashMap<String, Value>,
-    /// State fields already read in the statement being lowered.
+    /// Store fields already read in the statement being lowered, keyed by the
+    /// qualified name (`state.notes`, `memory.seen`) so the two stores cannot
+    /// share a read.
     state_reads: HashMap<String, String>,
 }
 
@@ -303,11 +362,17 @@ impl<'a> Lowerer<'a> {
                     self.aliases.insert(name.text.clone(), lowered);
                 }
             }
-            Stmt::StateWrite { field, value, span } => {
+            Stmt::StateWrite {
+                scope,
+                field,
+                value,
+                span,
+            } => {
                 let lowered = self.lower_value(level, value);
                 let mut node = Node::new(String::new(), NodeKind::StateWrite);
                 node.source_span = Some(self.source_span(*span));
                 node.field = Some(field.text.clone());
+                node.scope = ref_scope(*scope);
                 node.value = Some(lowered);
                 self.push(level, node);
             }
@@ -707,11 +772,12 @@ impl<'a> Lowerer<'a> {
         let field_names = || segments.iter().map(|segment| segment.text.clone());
 
         match root {
-            PathRoot::State { .. } => {
+            PathRoot::State { .. } | PathRoot::Memory { .. } => {
                 let Some(field) = segments.first() else {
                     return Value::Unknown;
                 };
-                let binding = self.read_state(level, &field.text, span);
+                let scope = root.scope().expect("both arms address a store");
+                let binding = self.read_state(level, scope, &field.text, span);
                 let mut path = vec![binding];
                 path.extend(segments[1..].iter().map(|segment| segment.text.clone()));
                 Value::Ref {
@@ -754,18 +820,38 @@ impl<'a> Lowerer<'a> {
     }
 
     /// Emit one `state.read` per field per statement and reuse it afterwards.
-    fn read_state(&mut self, level: &mut Vec<usize>, field: &str, span: Span) -> String {
-        if let Some(binding) = self.state_reads.get(field) {
+    fn read_state(
+        &mut self,
+        level: &mut Vec<usize>,
+        scope: StateScope,
+        field: &str,
+        span: Span,
+    ) -> String {
+        let qualified = format!("{}.{field}", scope.root());
+        if let Some(binding) = self.state_reads.get(&qualified) {
             return binding.clone();
         }
-        let binding = format!("$state.{field}");
+        let binding = format!("${qualified}");
         let mut node = Node::new(String::new(), NodeKind::StateRead);
         node.source_span = Some(self.source_span(span));
         node.field = Some(field.to_string());
+        node.scope = ref_scope(scope);
         node.binding = Some(binding.clone());
         self.push(level, node);
-        self.state_reads.insert(field.to_string(), binding.clone());
+        self.state_reads.insert(qualified, binding.clone());
         binding
+    }
+}
+
+/// The IR scope for a store, or `None` for working memory.
+///
+/// Working memory is the absent case so that an artifact that uses no
+/// persistent memory -- which is every artifact compiled before IR 0.2 grew it
+/// -- encodes byte for byte as it always did.
+fn ref_scope(scope: StateScope) -> Option<RefScope> {
+    match scope {
+        StateScope::Ephemeral => None,
+        StateScope::Persistent => Some(RefScope::Memory),
     }
 }
 

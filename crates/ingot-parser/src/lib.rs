@@ -75,6 +75,15 @@ impl<'a> Parser<'a> {
         self.peek().keyword() == Some(keyword)
     }
 
+    /// An ordinary identifier spelled exactly `text`.
+    ///
+    /// For section names that stay unreserved because they appear in only one
+    /// position — `persistent` is one — so that the reserved set does not grow
+    /// every time the vocabulary does.
+    fn at_ident_text(&self, text: &str) -> bool {
+        matches!(&self.peek().kind, TokenKind::Ident(found) if found == text)
+    }
+
     fn bump(&mut self) -> Token {
         let token = self.peek().clone();
         if !self.at_eof() {
@@ -374,6 +383,22 @@ impl<'a> Parser<'a> {
                     .with_note(
                         "without a body a verifier is only a name and a signature, and a run \
                          reports it as `notPerformed`",
+                    )
+                    .with_help("change the file header to `language 0.2`"),
+                );
+            }
+        }
+        if !language_supports_v0_2_types(program.language) {
+            if let Some(span) = first_persistent_span(&program) {
+                self.error(
+                    Diagnostic::error(
+                        codes::UNSUPPORTED_LANGUAGE_VERSION,
+                        "persistent memory requires language 0.2 or newer",
+                    )
+                    .with_primary(span, "not available in this language version")
+                    .with_note(
+                        "language 0.1 has one memory lifetime, `working ephemeral`, and its \
+                         state is discarded when the run ends",
                     )
                     .with_help("change the file header to `language 0.2`"),
                 );
@@ -1092,6 +1117,7 @@ impl<'a> Parser<'a> {
             return None;
         }
         let mut working = None;
+        let mut persistent = None;
         while !self.at(&TokenKind::RBrace) && !self.at_barrier() {
             let before = self.position;
             if self.at_keyword(Keyword::Working) {
@@ -1111,15 +1137,25 @@ impl<'a> Parser<'a> {
                         fields,
                     });
                 }
+            } else if self.at_ident_text("persistent") {
+                // Not a keyword. `persistent` appears in exactly one position,
+                // and the reserved set is kept to words that do not.
+                let block_start = self.span();
+                self.bump();
+                let fields = self.parse_persistent_fields();
+                persistent = Some(PersistentMemory {
+                    span: block_start.merge(self.previous_span()),
+                    fields,
+                });
             } else {
                 let found = self.peek().kind.describe();
                 let span = self.span();
                 self.error(
                     Diagnostic::error(
                         codes::UNEXPECTED_TOKEN,
-                        format!("expected `working`, found {found}"),
+                        format!("expected `working` or `persistent`, found {found}"),
                     )
-                    .with_primary(span, "only `working` memory exists in language 0.1"),
+                    .with_primary(span, "a memory block holds `working` and `persistent`"),
                 );
                 self.bump();
             }
@@ -1131,7 +1167,45 @@ impl<'a> Parser<'a> {
         self.expect(TokenKind::RBrace);
         Some(MemoryBlock {
             working,
+            persistent,
             span: start.merge(end),
+        })
+    }
+
+    /// `{ seen: string[] = [], depth: int = 0 }`
+    fn parse_persistent_fields(&mut self) -> Vec<PersistentFieldDecl> {
+        let mut fields = Vec::new();
+        if !self.expect(TokenKind::LBrace) {
+            return fields;
+        }
+        while !self.at(&TokenKind::RBrace) && !self.at_barrier() {
+            let before = self.position;
+            if let Some(field) = self.parse_persistent_field() {
+                fields.push(field);
+            }
+            self.eat(&TokenKind::Comma);
+            if self.position == before {
+                self.bump();
+            }
+        }
+        self.expect(TokenKind::RBrace);
+        fields
+    }
+
+    fn parse_persistent_field(&mut self) -> Option<PersistentFieldDecl> {
+        let name = self.expect_ident("a field name")?;
+        self.expect(TokenKind::Colon);
+        let ty = self.parse_type()?;
+        // Absence is diagnosed by the checker rather than here, so that the
+        // message can say *why* an initial value is required instead of only
+        // that a token was expected.
+        let initial = self.eat(&TokenKind::Eq).then(|| self.parse_expr());
+        let span = name.span.merge(self.previous_span());
+        Some(PersistentFieldDecl {
+            name,
+            ty,
+            initial,
+            span,
         })
     }
 
@@ -1494,18 +1568,28 @@ impl<'a> Parser<'a> {
                     span: start.merge(self.previous_span()),
                 }
             }
-            Some(Keyword::State) if self.peek_at(1).is(&TokenKind::Dot) => {
+            Some(keyword @ (Keyword::State | Keyword::Memory))
+                if self.peek_at(1).is(&TokenKind::Dot) =>
+            {
+                let scope = match keyword {
+                    Keyword::Memory => StateScope::Persistent,
+                    _ => StateScope::Ephemeral,
+                };
                 // `state.field = expr` is a write; anything else is a read expression.
                 let is_write = matches!(self.peek_at(3).kind, TokenKind::Eq);
                 if is_write {
-                    self.bump(); // `state`
+                    self.bump(); // `state` or `memory`
                     self.bump(); // `.`
-                    let Some(field) = self.expect_ident("a state field name") else {
+                    let Some(field) = self.expect_ident(match scope {
+                        StateScope::Ephemeral => "a state field name",
+                        StateScope::Persistent => "a persistent memory field name",
+                    }) else {
                         return self.error_statement(start);
                     };
                     self.expect(TokenKind::Eq);
                     let value = self.parse_expr();
                     Stmt::StateWrite {
+                        scope,
                         field,
                         value,
                         span: start.merge(self.previous_span()),
@@ -1602,6 +1686,7 @@ impl<'a> Parser<'a> {
                     | Keyword::Call
                     | Keyword::Parallel
                     | Keyword::State
+                    | Keyword::Memory
                     | Keyword::True
                     | Keyword::False
             ),
@@ -1803,11 +1888,15 @@ impl<'a> Parser<'a> {
                     span: start.merge(self.previous_span()),
                 }
             }
-            TokenKind::Keyword(Keyword::State) => {
+            TokenKind::Keyword(keyword @ (Keyword::State | Keyword::Memory)) => {
                 self.bump();
                 let segments = self.parse_path_segments();
+                let root = match keyword {
+                    Keyword::Memory => PathRoot::Memory { span: start },
+                    _ => PathRoot::State { span: start },
+                };
                 Expr::Path(PathExpr {
-                    root: PathRoot::State { span: start },
+                    root,
                     span: start.merge(self.previous_span()),
                     segments,
                 })
@@ -1924,7 +2013,11 @@ impl<'a> Parser<'a> {
     }
 }
 
-/// Keywords that unambiguously begin a statement, used as recovery anchors.
+/// Keywords that begin a statement, used as recovery anchors.
+///
+/// `memory` is also an agent section name. Both readings are anchors worth
+/// stopping at — a persistent write inside a flow, or the end of the flow —
+/// so the overlap costs nothing here.
 fn starts_statement(keyword: Keyword) -> bool {
     matches!(
         keyword,
@@ -1937,6 +2030,7 @@ fn starts_statement(keyword: Keyword) -> bool {
             | Keyword::Ask
             | Keyword::Parallel
             | Keyword::State
+            | Keyword::Memory
     )
 }
 
@@ -1949,6 +2043,17 @@ fn language_supports_v0_2_types(version: Option<LanguageVersion>) -> bool {
             ..
         })
     )
+}
+
+/// The first `persistent` memory block, if any agent declares one.
+fn first_persistent_span(program: &Program) -> Option<Span> {
+    program.agents.iter().find_map(|agent| {
+        agent
+            .memory
+            .as_ref()
+            .and_then(|memory| memory.persistent.as_ref())
+            .map(|block| block.span)
+    })
 }
 
 fn first_v0_2_type_span(program: &Program) -> Option<Span> {

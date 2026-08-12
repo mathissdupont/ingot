@@ -165,7 +165,12 @@ def bless(case_dir: Path):
             run(
                 [ingot(), "run", source, "--provider", "openai", "--model",
                  "openai/stub-1", "--record", str(work / "cassette.json"),
-                 "--out-dir", str(work / "rec"), "--no-history", "--events", "quiet"]
+                 "--out-dir", str(work / "rec"), "--no-history", "--events", "quiet",
+                 # This run exists only to record a cassette. The expectation
+                 # comes from the adapter, which a conformance request never
+                 # hands a store, so opening one here would write a file into
+                 # the case directory that nothing reads.
+                 "--no-memory"]
                 + inputs_as_args(inputs),
                 env={"OPENAI_API_KEY": "stub", "INGOT_OPENAI_BASE_URL": url},
                 check=False,

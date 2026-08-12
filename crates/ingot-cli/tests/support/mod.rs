@@ -18,6 +18,8 @@ use serde_json::{json, Value};
 
 pub const EXIT_OK: i32 = 0;
 pub const EXIT_DIAGNOSTICS: i32 = 1;
+/// An operational failure: something outside the source went wrong.
+pub const EXIT_FAILURE: i32 = 2;
 
 pub fn binary() -> &'static str {
     env!("CARGO_BIN_EXE_ingot")

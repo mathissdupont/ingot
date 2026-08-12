@@ -56,6 +56,20 @@ pub fn prepare(
     mode: Containment,
     entry: &AgentIr,
 ) -> Result<Command> {
+    // A persistent store is a file outside the box, and nothing crosses the
+    // boundary but the artifact, the inputs and the tool configuration. Running
+    // anyway would silently start from the declared values and throw away
+    // everything written, which is `--no-memory` without anyone asking for it.
+    if !entry.persistent.is_empty() && config.memory_mode != crate::memory::MemoryMode::Disabled {
+        anyhow::bail!(
+            "`{}` declares persistent memory, which a contained run cannot reach\n  \
+             the store is a file outside the boundary, and only the artifact, the inputs \
+             and the tool configuration cross it\n  \
+             help: `--no-memory` runs from the declared values and discards what is written",
+            entry.agent
+        );
+    }
+
     // What is in force is stated before anything starts, never inferred from
     // which flags the operator remembered.
     match mode {
@@ -121,6 +135,9 @@ pub fn execute(
             let report = RunReport {
                 agent: finished.agent,
                 outputs: finished.outputs,
+                // A contained run opens no store, so there is nothing to hand
+                // back. `prepare` refuses an artifact that declares one.
+                memory: Default::default(),
                 usage: finished.usage,
                 steps: finished.steps,
                 // The guest charged its own budget inside the box; what crossed
@@ -431,6 +448,10 @@ pub fn exec() -> Result<u8> {
             // out there where the operator is.
             approval: ApprovalMode::Ask(Box::new(guest.approvals())),
             max_steps: config.max_steps,
+            // The store is a file outside the box, and nothing crosses the
+            // boundary but the artifact, the inputs and the tool
+            // configuration. `prepare` refuses before it gets here.
+            memory: std::collections::BTreeMap::new(),
             // No prices inside. The manifest does not cross the boundary — only
             // the artifact, the inputs and the tool configuration do — so a
             // contained run reports its cost budget as uncharged rather than

@@ -132,6 +132,11 @@ fn cycle(target: Target, revision: u64, last_good: &mut Option<u64>, config: &De
             // bury the runs somebody meant to keep under the ones they did not.
             history: None,
             events: config.events,
+            // A watch loop runs on every save. Persisting memory across those
+            // runs would make each one start from the last accidental one.
+            build_dir: None,
+            memory: None,
+            memory_mode: crate::memory::MemoryMode::Disabled,
             yes: config.yes,
             max_steps: config.max_steps,
             root: target.root.clone(),

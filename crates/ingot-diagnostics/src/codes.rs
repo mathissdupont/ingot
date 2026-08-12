@@ -62,6 +62,10 @@ pub const NOT_A_RECORD: &str = "ING3009";
 pub const UNKNOWN_FIELD: &str = "ING3010";
 pub const MISSING_ARGUMENT: &str = "ING3011";
 pub const INVALID_OPERAND_TYPE: &str = "ING3012";
+/// A `persistent` field declared without the value it starts from.
+pub const MISSING_INITIAL_VALUE: &str = "ING3013";
+/// A `persistent` field whose initial value is not a literal.
+pub const INITIAL_VALUE_NOT_LITERAL: &str = "ING3014";
 
 // --- ING4xxx: effects, capabilities and policy ---------------------------
 

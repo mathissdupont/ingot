@@ -47,6 +47,10 @@ pub struct RunOptions {
     /// Stop after this many steps even if the artifact allows more. A backstop
     /// for artifacts with no `steps` budget.
     pub max_steps: u32,
+    /// Persistent memory this run starts from, usually loaded from the agent's
+    /// store. Fields absent here start from the artifact's declared value, so
+    /// an empty map is a correct first run rather than a missing one.
+    pub memory: BTreeMap<String, Value>,
     /// What each model costs, so `budget.cost` can be charged.
     ///
     /// Empty by default. A run with no prices charges nothing and reports every
@@ -62,6 +66,7 @@ impl Default for RunOptions {
             inputs: BTreeMap::new(),
             approval: ApprovalMode::Deny,
             max_steps: 1_000,
+            memory: BTreeMap::new(),
             pricing: Pricing::default(),
         }
     }
@@ -80,6 +85,9 @@ struct Interp<'a> {
 
     bindings: BTreeMap<String, Value>,
     state: BTreeMap<String, Value>,
+    /// Persistent memory, seeded before the first node and handed back in the
+    /// report so the caller can write it to the agent's store.
+    memory: BTreeMap<String, Value>,
     outputs: BTreeMap<String, Artifact>,
 
     steps: u32,
@@ -102,6 +110,7 @@ pub fn run(
         inputs,
         mut approval,
         max_steps,
+        memory,
         pricing,
     } = options;
     run_nested(
@@ -113,6 +122,7 @@ pub fn run(
         inputs,
         &mut approval,
         max_steps,
+        memory,
         &pricing,
     )
 }
@@ -134,6 +144,10 @@ fn run_nested(
     inputs: BTreeMap<String, Value>,
     approval: &mut ApprovalMode,
     step_ceiling: u32,
+    // Whatever the caller loaded from the agent's store. A sub-agent gets none
+    // of its caller's: persistent memory belongs to an agent, and a sub-agent
+    // is a fresh run against its own artifact.
+    stored: BTreeMap<String, Value>,
     // Prices are a property of the deployment, not of an agent, so a sub-agent
     // is charged with the same ones its caller was.
     pricing: &Pricing,
@@ -165,6 +179,34 @@ fn run_nested(
         }
     }
 
+    // Seed persistent memory before anything runs, so every declared field has
+    // a value and a read can never find one missing. A stored value wins over
+    // the declared one; a field the store does not carry starts from the
+    // artifact. Validating here rather than at the first read means a store
+    // holding the wrong shape stops the run before it spends anything.
+    let mut memory = BTreeMap::new();
+    for (name, field) in &ir.persistent {
+        let value = stored
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| field.initial.clone());
+        schema::validate(&value, &field.ty, &ir.types).map_err(|reason| {
+            RunError::InvalidMemory {
+                field: name.clone(),
+                reason,
+            }
+        })?;
+        memory.insert(name.clone(), value);
+    }
+    for name in stored.keys() {
+        if !ir.persistent.contains_key(name) {
+            return Err(RunError::UnknownMemoryField {
+                field: name.clone(),
+                expected: ir.persistent.keys().cloned().collect(),
+            });
+        }
+    }
+
     sink.emit(RunEvent::RunStarted {
         agent: ir.agent.clone(),
         provider: provider.name().to_string(),
@@ -184,6 +226,7 @@ fn run_nested(
         approval,
         bindings,
         state: BTreeMap::new(),
+        memory,
         outputs: BTreeMap::new(),
         steps: 0,
         max_steps,
@@ -199,6 +242,7 @@ fn run_nested(
             let report = RunReport {
                 agent: ir.agent.clone(),
                 outputs: interp.outputs,
+                memory: interp.memory,
                 usage: interp.usage,
                 steps: interp.steps,
                 spend: interp.spend.clone(),
@@ -587,6 +631,10 @@ impl Interp<'_> {
             inputs,
             &mut *self.approval,
             self.max_steps.saturating_sub(self.steps).max(1),
+            // No store. A sub-agent's persistent memory is its own, and the
+            // interpreter cannot open one anyway — a caller that wants a
+            // sub-agent to keep memory runs it as an agent.
+            BTreeMap::new(),
             &self.pricing,
         )
         .map_err(|error| RunError::SubAgent {
@@ -810,14 +858,22 @@ impl Interp<'_> {
             .field
             .clone()
             .ok_or_else(|| RunError::MalformedIr(format!("`{}` names no state field", node.id)))?;
-        let value = self
-            .state
-            .get(&field)
-            .cloned()
-            .ok_or_else(|| RunError::StateNotSet {
-                node: node.id.clone(),
-                field: field.clone(),
-            })?;
+        let value = match node.scope {
+            Some(RefScope::Memory) => self.memory.get(&field).cloned().ok_or_else(|| {
+                RunError::MalformedIr(format!(
+                    "`{}` reads `memory.{field}`, which is not declared",
+                    node.id
+                ))
+            })?,
+            _ => self
+                .state
+                .get(&field)
+                .cloned()
+                .ok_or_else(|| RunError::StateNotSet {
+                    node: node.id.clone(),
+                    field: field.clone(),
+                })?,
+        };
         self.bind(node, value);
         Ok(())
     }
@@ -832,16 +888,27 @@ impl Interp<'_> {
             .as_ref()
             .ok_or_else(|| RunError::MalformedIr(format!("`{}` has no value", node.id)))?;
         let value = self.eval(value)?;
-        if let Some(declared) = self.ir.state.get(&field) {
-            schema::validate(&value, declared, &self.ir.types).map_err(|reason| {
+        let persistent = matches!(node.scope, Some(RefScope::Memory));
+        let declared = if persistent {
+            self.ir.persistent.get(&field).map(|field| field.ty.clone())
+        } else {
+            self.ir.state.get(&field).cloned()
+        };
+        if let Some(declared) = declared {
+            let root = if persistent { "memory" } else { "state" };
+            schema::validate(&value, &declared, &self.ir.types).map_err(|reason| {
                 RunError::TypeMismatch {
                     node: node.id.clone(),
-                    what: format!("state.{field}"),
+                    what: format!("{root}.{field}"),
                     reason,
                 }
             })?;
         }
-        self.state.insert(field.clone(), value);
+        if persistent {
+            self.memory.insert(field.clone(), value);
+        } else {
+            self.state.insert(field.clone(), value);
+        }
         self.sink.emit(RunEvent::StateWritten {
             node: node.id.clone(),
             field,
@@ -1051,6 +1118,12 @@ impl Interp<'_> {
                         field: root.clone(),
                     })?
             }
+            // Never absent: every persistent field is seeded from its declared
+            // initial value before the first node runs, which is the whole
+            // reason that value is required.
+            RefScope::Memory => self.memory.get(root).cloned().ok_or_else(|| {
+                RunError::MalformedIr(format!("`memory.{root}` is not a declared field"))
+            })?,
         };
         for field in fields {
             current = current

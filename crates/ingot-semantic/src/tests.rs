@@ -880,3 +880,205 @@ fn a_reach_is_sorted_and_deduplicated_at_the_declaration() {
     let values: Vec<&str> = tool.reach.iter().map(|r| r.value.as_str()).collect();
     assert_eq!(values, vec!["arxiv.org", "github.com"]);
 }
+
+// --- persistent memory ------------------------------------------------------
+//
+// RFC-0018. Two stores, told apart at every use site, and a persistent field
+// that always has a value.
+
+/// The same as [`check`], with a language 0.2 header.
+///
+/// `persistent` is gated in the parser, so a 0.1 header would fail the
+/// parses-cleanly assertion before the checker saw anything.
+fn check_v2(body: &str) -> Analysis {
+    let source = format!(
+        "{}\n{body}",
+        PRELUDE.replacen("language 0.1", "language 0.2", 1)
+    );
+    let mut map = SourceMap::new();
+    let file = map.add_virtual("test.ing", source);
+    let parsed = ingot_parser::parse(map.file(file));
+    assert!(
+        !parsed.diagnostics.has_errors(),
+        "test source must parse cleanly: {:?}",
+        parsed
+            .diagnostics
+            .iter()
+            .map(|d| &d.message)
+            .collect::<Vec<_>>()
+    );
+    analyze(&parsed.program)
+}
+
+const REMEMBERS: &str = r#"
+agent Remembers(note: text) -> log<text> {
+  model requires { tool_calling }
+
+  memory {
+    working ephemeral { scratch: text }
+    persistent { seen: text[] = [], depth: int = 0 }
+  }
+
+  budget { steps <= 3 }
+  policy { network deny }
+
+  flow {
+    state.scratch = note
+    memory.seen = [state.scratch]
+    memory.depth = memory.depth + 1
+    emit log = state.scratch
+  }
+}
+"#;
+
+#[test]
+fn the_two_stores_are_separate_and_both_resolve() {
+    let analysis = check_v2(REMEMBERS);
+    assert_clean(&analysis);
+    let agent = analysis
+        .agents
+        .iter()
+        .find(|agent| agent.name == "Remembers")
+        .expect("the agent is checked");
+    assert_eq!(
+        agent
+            .state
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["scratch"]
+    );
+    assert_eq!(
+        agent
+            .persistent
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["seen", "depth"]
+    );
+}
+
+#[test]
+fn a_persistent_field_without_an_initial_value_is_refused() {
+    let analysis = check_v2(
+        r#"
+agent Forgets() -> log<json> {
+  memory { persistent { seen: string[] } }
+  flow { emit log = memory.seen }
+}
+"#,
+    );
+    assert!(
+        codes_of(&analysis).contains(&codes::MISSING_INITIAL_VALUE),
+        "{:?}",
+        codes_of(&analysis)
+    );
+}
+
+#[test]
+fn an_initial_value_that_is_not_a_literal_is_refused() {
+    // Nothing is bound when an initial value is resolved, so an expression here
+    // would have nothing to read even if it looked reasonable.
+    let analysis = check_v2(
+        r#"
+agent Forgets(seed: int) -> log<json> {
+  memory { persistent { depth: int = seed } }
+  flow { emit log = memory.depth }
+}
+"#,
+    );
+    assert!(
+        codes_of(&analysis).contains(&codes::INITIAL_VALUE_NOT_LITERAL),
+        "{:?}",
+        codes_of(&analysis)
+    );
+}
+
+#[test]
+fn an_initial_value_is_checked_against_the_declared_type() {
+    let analysis = check_v2(
+        r#"
+agent Forgets() -> log<json> {
+  memory { persistent { depth: int = "none" } }
+  flow { emit log = memory.depth }
+}
+"#,
+    );
+    assert!(
+        codes_of(&analysis).contains(&codes::TYPE_MISMATCH),
+        "{:?}",
+        codes_of(&analysis)
+    );
+}
+
+#[test]
+fn an_empty_list_starts_a_persistent_list_of_any_element_type() {
+    // `= []` is how most persistent collections start, so `list<unknown>` has
+    // to be assignable to the declared list rather than a mismatch.
+    let analysis = check_v2(
+        r#"
+agent Collects(note: text) -> log<text> {
+  memory { persistent { seen: search_result[] = [] } }
+  flow {
+    memory.seen = memory.seen
+    emit log = note
+  }
+}
+"#,
+    );
+    assert_clean(&analysis);
+}
+
+#[test]
+fn naming_the_wrong_store_points_at_the_other_one() {
+    // The likeliest mistake: the two roots look alike and hold the same kind of
+    // thing, so a field that exists on the other side is worth more than a
+    // spelling suggestion.
+    let analysis = check_v2(
+        r#"
+agent Confused() -> log<json> {
+  memory {
+    working ephemeral { scratch: string }
+    persistent { seen: string[] = [] }
+  }
+  flow {
+    state.scratch = "x"
+    emit log = memory.scratch
+  }
+}
+"#,
+    );
+    let help: Vec<String> = analysis
+        .diagnostics
+        .iter()
+        .filter_map(|d| d.help.clone())
+        .collect();
+    assert!(
+        help.iter().any(|text| text.contains("state.scratch")),
+        "expected a pointer at the other store, got {help:?}"
+    );
+}
+
+#[test]
+fn a_persistent_write_inside_parallel_map_is_refused() {
+    // Same rule as an ephemeral write, and for the same reason: iterations run
+    // concurrently, so a write one of them can observe is not well defined.
+    let analysis = check_v2(
+        r#"
+agent Fans(topics: string[]) -> log<json> {
+  memory { persistent { seen: string[] = [] } }
+  flow {
+    all = parallel map topics as topic {
+      memory.seen = [topic]
+    }
+    emit log = memory.seen
+  }
+}
+"#,
+    );
+    assert!(
+        codes_of(&analysis).contains(&codes::INVALID_IN_PARALLEL),
+        "{:?}",
+        codes_of(&analysis)
+    );
+}

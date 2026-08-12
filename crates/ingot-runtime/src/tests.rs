@@ -41,6 +41,7 @@ fn base(agent: &str) -> AgentIr {
         },
         tools: Vec::new(),
         state: BTreeMap::new(),
+        persistent: BTreeMap::new(),
         budget: Budget::default(),
         policy: BTreeMap::new(),
         effects: vec!["model_access".to_string()],
@@ -1549,4 +1550,198 @@ fn a_replay_shows_nothing_live() {
     report.expect("replayed run");
     assert!(replayed.deltas.is_empty(), "{:?}", replayed.deltas);
     assert!(replayed.settled.is_empty());
+}
+
+// --- persistent memory ------------------------------------------------------
+//
+// RFC-0018. The interpreter never touches the filesystem: it is handed what a
+// store held and hands back what the run left.
+
+/// An artifact that reads a persistent field, adds one, and emits the result.
+fn counter() -> AgentIr {
+    let mut ir = base("test.Counter");
+    ir.outputs
+        .insert("log".to_string(), "artifact<json>".to_string());
+    ir.persistent.insert(
+        "depth".to_string(),
+        ingot_ir::PersistentField {
+            ty: "int".to_string(),
+            initial: json!(0),
+        },
+    );
+
+    let mut read = Node::new("n0", NodeKind::StateRead);
+    read.field = Some("depth".to_string());
+    read.scope = Some(RefScope::Memory);
+    read.binding = Some("$memory.depth".to_string());
+    read.next = Some("n1".to_string());
+
+    let mut write = Node::new("n1", NodeKind::StateWrite);
+    write.field = Some("depth".to_string());
+    write.scope = Some(RefScope::Memory);
+    write.value = Some(IrValue::Binary {
+        op: "+".to_string(),
+        lhs: Box::new(IrValue::Ref {
+            scope: RefScope::Binding,
+            path: vec!["$memory.depth".to_string()],
+        }),
+        rhs: Box::new(IrValue::Literal {
+            ty: "int".to_string(),
+            value: json!(1),
+        }),
+    });
+    write.next = Some("n2".to_string());
+
+    let mut read_back = Node::new("n2", NodeKind::StateRead);
+    read_back.field = Some("depth".to_string());
+    read_back.scope = Some(RefScope::Memory);
+    read_back.binding = Some("$memory.depth2".to_string());
+    read_back.next = Some("n3".to_string());
+
+    ir.nodes = vec![
+        read,
+        write,
+        read_back,
+        emit("n3", "log", "$memory.depth2", None),
+    ];
+    ir.entry = Some("n0".to_string());
+    ir
+}
+
+fn run_counter(stored: BTreeMap<String, serde_json::Value>) -> crate::RunReport {
+    let ir = counter();
+    let mut provider = ScriptedProvider::new(vec![]);
+    let mut tools = DenyAllTools;
+    let mut sink = CollectingSink::default();
+    run(
+        &ir,
+        &BTreeMap::new(),
+        &mut provider,
+        &mut tools,
+        &mut sink,
+        RunOptions {
+            memory: stored,
+            ..RunOptions::default()
+        },
+    )
+    .expect("the counter runs")
+}
+
+#[test]
+fn a_first_run_starts_from_the_declared_initial_value() {
+    // No store, and no error: this is what makes an initial value required
+    // rather than optional.
+    let report = run_counter(BTreeMap::new());
+    assert_eq!(report.memory.get("depth"), Some(&json!(1)));
+}
+
+#[test]
+fn a_stored_value_wins_over_the_declared_one() {
+    let stored = [("depth".to_string(), json!(7))].into_iter().collect();
+    let report = run_counter(stored);
+    assert_eq!(report.memory.get("depth"), Some(&json!(8)));
+}
+
+#[test]
+fn a_stored_value_of_the_wrong_type_stops_the_run_before_it_spends_anything() {
+    let ir = counter();
+    let mut provider = ScriptedProvider::new(vec![]);
+    let mut tools = DenyAllTools;
+    let mut sink = CollectingSink::default();
+    let error = run(
+        &ir,
+        &BTreeMap::new(),
+        &mut provider,
+        &mut tools,
+        &mut sink,
+        RunOptions {
+            memory: [("depth".to_string(), json!("seven"))]
+                .into_iter()
+                .collect(),
+            ..RunOptions::default()
+        },
+    )
+    .expect_err("a string is not an int");
+    assert!(
+        matches!(error, RunError::InvalidMemory { ref field, .. } if field == "depth"),
+        "{error}"
+    );
+    // Before anything: not even the run started.
+    assert!(
+        sink.events.is_empty(),
+        "the run should not have begun: {:?}",
+        sink.events
+    );
+}
+
+#[test]
+fn a_store_carrying_a_field_the_artifact_does_not_declare_is_refused() {
+    // The mirror of an unknown input. Silently dropping it would lose whatever
+    // an older version of the agent was keeping without saying so.
+    let ir = counter();
+    let mut provider = ScriptedProvider::new(vec![]);
+    let mut tools = DenyAllTools;
+    let mut sink = CollectingSink::default();
+    let error = run(
+        &ir,
+        &BTreeMap::new(),
+        &mut provider,
+        &mut tools,
+        &mut sink,
+        RunOptions {
+            memory: [("gone".to_string(), json!(1))].into_iter().collect(),
+            ..RunOptions::default()
+        },
+    )
+    .expect_err("`gone` is not declared");
+    let text = error.to_string();
+    assert!(text.contains("gone"), "{text}");
+    assert!(text.contains("depth"), "{text}");
+}
+
+#[test]
+fn a_persistent_write_reports_the_same_event_an_ephemeral_one_does() {
+    // Which store a field lives in is a property of the artifact, not of the
+    // run, so the event stream does not carry a second kind of write.
+    let ir = counter();
+    let mut provider = ScriptedProvider::new(vec![]);
+    let mut tools = DenyAllTools;
+    let mut sink = CollectingSink::default();
+    run(
+        &ir,
+        &BTreeMap::new(),
+        &mut provider,
+        &mut tools,
+        &mut sink,
+        RunOptions::default(),
+    )
+    .expect("the counter runs");
+    let written: Vec<&str> = sink
+        .events
+        .iter()
+        .filter_map(|event| match event {
+            RunEvent::StateWritten { field, .. } => Some(field.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(written, vec!["depth"]);
+}
+
+#[test]
+fn an_artifact_with_no_persistent_block_reports_no_memory() {
+    let report = run(
+        &summarizer(),
+        &BTreeMap::new(),
+        &mut ScriptedProvider::new(vec![json!("done")]),
+        &mut DenyAllTools,
+        &mut CollectingSink::default(),
+        RunOptions {
+            inputs: [("document".to_string(), json!("a paragraph"))]
+                .into_iter()
+                .collect(),
+            ..RunOptions::default()
+        },
+    )
+    .expect("the summarizer runs");
+    assert!(report.memory.is_empty());
 }

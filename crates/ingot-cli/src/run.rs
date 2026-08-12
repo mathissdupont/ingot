@@ -75,6 +75,17 @@ pub struct RunConfig {
     /// results are doing.
     pub history: Option<PathBuf>,
     pub events: EventFormat,
+    /// The project's build directory, where a default memory store lives.
+    ///
+    /// Deliberately not `history`, which is `None` under `--no-history`. Where
+    /// an agent keeps what it remembers and whether this run is written down
+    /// are different questions, and tying them together made `--no-history`
+    /// silently mean `--no-memory` too.
+    pub build_dir: Option<PathBuf>,
+    /// Where the agent's persistent memory store lives, when the operator named
+    /// a place. Absent means the default under `build_dir`.
+    pub memory: Option<PathBuf>,
+    pub memory_mode: crate::memory::MemoryMode,
     pub yes: bool,
     pub max_steps: u32,
     /// The project directory; tool servers start here.
@@ -364,6 +375,19 @@ pub fn execute(compilation: &Compilation, config: &RunConfig) -> Result<u8> {
         printer: printer_for(config, compilation, false),
     };
 
+    let store = crate::memory::open(
+        &ir,
+        config.memory.as_deref(),
+        config.build_dir.as_deref(),
+        config.memory_mode.clone(),
+    )?;
+    if !store.note.is_empty() && config.events != EventFormat::Quiet {
+        eprintln!("{}", store.note);
+    }
+    if let Some(dropped) = &store.dropped {
+        eprintln!("{dropped}");
+    }
+
     let result = run_agent(
         &ir,
         &registry,
@@ -374,6 +398,7 @@ pub fn execute(compilation: &Compilation, config: &RunConfig) -> Result<u8> {
             inputs,
             approval,
             max_steps: config.max_steps,
+            memory: store.fields,
             pricing: config.models.pricing(),
         },
     );
@@ -403,6 +428,12 @@ pub fn execute(compilation: &Compilation, config: &RunConfig) -> Result<u8> {
             return Ok(super::EXIT_DIAGNOSTICS);
         }
     };
+
+    // Written before the artifacts, so a failure to write the store cannot be
+    // mistaken for a run that did not reach the end.
+    if let Some(path) = &store.path {
+        crate::memory::save(path, &ir, &report.memory)?;
+    }
 
     sink.printer.finish_record(crate::runs::Outcome::Finished {
         steps: report.steps,
@@ -1384,6 +1415,10 @@ pub fn test(compilation: &Compilation, config: &TestConfig) -> Result<u8> {
                 inputs,
                 approval: ApprovalMode::Deny,
                 max_steps: 1_000,
+                // No store. A test is offline and repeatable, and a run that
+                // started from whatever a previous run happened to leave on
+                // disk would be neither.
+                memory: std::collections::BTreeMap::new(),
                 // The same prices a live run uses, so `cost <= 5 usd` is a
                 // property `ingot test` can hold the agent to rather than a
                 // line nothing checks.

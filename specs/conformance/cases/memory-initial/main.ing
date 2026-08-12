@@ -1,0 +1,24 @@
+language 0.2
+package conformance.recall
+
+/// Persistent memory, read and written inside one run.
+///
+/// A conformance request carries an artifact, a cassette and inputs — never a
+/// store — so every backend starts this case from the declared initial values.
+/// That is the property being pinned: a first run is answerable without one.
+agent Recall(topic: string) -> report<markdown> {
+  model requires { structured_output }
+  budget { steps <= 2 }
+  policy { network deny }
+
+  memory {
+    persistent { seen: string[] = [], depth: int = 0 }
+  }
+
+  flow {
+    memory.depth = memory.depth + 1
+    memory.seen = [topic]
+    answer = ask<markdown>("Write about ${topic}. This is visit ${memory.depth}.")
+    emit report = answer
+  }
+}

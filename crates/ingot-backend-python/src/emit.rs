@@ -363,8 +363,9 @@ impl Emitter<'_> {
         self.line(
             depth,
             &format!(
-                "{} = rt.state_read({}, {})",
+                "{} = rt.{}({}, {})",
                 binding_of(node),
+                reader_for(node),
                 quote(&node.id),
                 quote(field)
             ),
@@ -385,7 +386,8 @@ impl Emitter<'_> {
         self.line(
             depth,
             &format!(
-                "rt.state_write({}, {}, {rendered})",
+                "rt.{}({}, {}, {rendered})",
+                writer_for(node),
                 quote(&node.id),
                 quote(field)
             ),
@@ -519,16 +521,20 @@ impl Emitter<'_> {
         let mut expression = match scope {
             RefScope::Input => format!("rt.inputs[{}]", quote(root)),
             RefScope::Binding => local(root),
-            // A state read is a node in IR 0.1 (§4.4), so a `state` reference
-            // here is one the compiler should have lowered. Refusing beats
-            // reading a dict that may never have been written.
-            RefScope::State => {
+            // A store read is a node in IR 0.1 (§4.4), so a `state` or
+            // `memory` reference here is one the compiler should have lowered.
+            // Refusing beats reading a dict that may never have been written.
+            RefScope::State | RefScope::Memory => {
+                let store = match scope {
+                    RefScope::Memory => "memory",
+                    _ => "state",
+                };
                 return Err(EmitError::UnsupportedValue {
                     what: format!(
-                        "an inline `state.{root}` reference; IR 0.1 lowers state reads to \
+                        "an inline `{store}.{root}` reference; IR 0.1 lowers store reads to \
                          `state.read` nodes"
                     ),
-                })
+                });
             }
         };
         for field in fields {
@@ -570,6 +576,21 @@ fn binding_of(node: &Node) -> String {
 
 fn binding_name(node: &Node) -> Option<&str> {
     node.binding.as_deref()
+}
+
+/// Which of the runtime's two readers a `state.read` node calls.
+fn reader_for(node: &Node) -> &'static str {
+    match node.scope {
+        Some(RefScope::Memory) => "memory_read",
+        _ => "state_read",
+    }
+}
+
+fn writer_for(node: &Node) -> &'static str {
+    match node.scope {
+        Some(RefScope::Memory) => "memory_write",
+        _ => "state_write",
+    }
 }
 
 /// A binding name as a Python identifier.
@@ -684,6 +705,7 @@ fn assemble(ir: &AgentIr, body: &str) -> String {
                 .collect()
         )
     ));
+    out.push_str(&format!("PERSISTENT = {}\n", py_json(&ir.persistent)));
     out.push_str(&format!("TYPES = {}\n", py_json(&ir.types)));
     out.push_str(&format!("POLICY = {}\n", py_json(&ir.policy)));
     out.push_str(&format!("BUDGET = {}\n", py_json(&budget(ir))));
@@ -701,6 +723,7 @@ fn assemble(ir: &AgentIr, body: &str) -> String {
     out.push_str("            ir_version=IR_VERSION,\n");
     out.push_str("            declared_inputs=INPUTS,\n");
     out.push_str("            declared_outputs=OUTPUTS,\n");
+    out.push_str("            declared_persistent=PERSISTENT,\n");
     out.push_str("            types=TYPES,\n");
     out.push_str("            policy=POLICY,\n");
     out.push_str("            budget=BUDGET,\n");

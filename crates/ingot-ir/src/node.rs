@@ -151,6 +151,11 @@ pub struct Node {
     /// State field for `state.read` and `state.write`.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub field: Option<String>,
+    /// Which store `field` lives in. Absent means working memory, which is
+    /// what every artifact compiled before IR 0.2 gained persistent memory
+    /// meant — so those artifacts still encode byte for byte identically.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub scope: Option<RefScope>,
     /// Value written by `state.write` or emitted by `artifact.emit`.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub value: Option<Value>,
@@ -160,6 +165,15 @@ pub struct Node {
     /// Label of a `checkpoint`, or the reason an `approval` was inserted.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub label: Option<String>,
+    /// Whether a run can be stopped at this `checkpoint` and continued later.
+    ///
+    /// True only at the top level of a flow. A checkpoint inside a branch arm
+    /// or a loop body is reached with a partially unwound interpreter, and
+    /// resuming into one would mean serialising a continuation — which stops
+    /// being a file a person can read. Omitted when false, so a nested
+    /// checkpoint encodes exactly as it always has.
+    #[serde(skip_serializing_if = "std::ops::Not::not", default)]
+    pub resumable: bool,
     /// Effects the approval gate covers.
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub effects: Vec<String>,
@@ -191,9 +205,11 @@ impl Node {
             max_iterations: None,
             guard: None,
             field: None,
+            scope: None,
             value: None,
             output: None,
             label: None,
+            resumable: false,
             effects: Vec::new(),
             next: None,
         }
@@ -217,6 +233,13 @@ pub enum RefScope {
     Binding,
     /// A working-memory field.
     State,
+    /// A persistent-memory field, which outlives the run.
+    ///
+    /// Read and written by the same two node kinds as [`RefScope::State`]. A
+    /// parallel pair of node kinds would have had to be kept in step with them
+    /// for no gain. See
+    /// [RFC-0018](../../../rfcs/0018-state-that-outlives-a-run.md).
+    Memory,
 }
 
 /// A pure expression the runtime evaluates without calling anything.

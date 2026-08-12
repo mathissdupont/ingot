@@ -88,6 +88,12 @@ pub use tools::{
 pub struct RunReport {
     pub agent: String,
     pub outputs: BTreeMap<String, Artifact>,
+    /// Persistent memory as the run left it, for the caller to write back.
+    ///
+    /// The interpreter does not touch the filesystem, so it hands the store's
+    /// new contents up rather than saving them. Empty when the artifact
+    /// declares no `persistent` block.
+    pub memory: BTreeMap<String, serde_json::Value>,
     pub usage: Usage,
     pub steps: u32,
     /// What the run cost, and every model it could not price.
@@ -158,6 +164,13 @@ pub enum RunError {
     },
     /// The flow finished without producing a declared output.
     OutputNotProduced { name: String },
+    /// A stored persistent value did not match its declared type.
+    InvalidMemory { field: String, reason: String },
+    /// The store carries a field this artifact does not declare.
+    UnknownMemoryField {
+        field: String,
+        expected: Vec<String>,
+    },
     /// The artifact's IR major version is not implemented.
     UnsupportedIrVersion { found: String, supported: String },
     /// The artifact is internally inconsistent.
@@ -222,6 +235,16 @@ impl fmt::Display for RunError {
             RunError::OutputNotProduced { name } => {
                 write!(f, "the run finished without producing the declared output `{name}`")
             }
+            RunError::InvalidMemory { field, reason } => write!(
+                f,
+                "the stored value for `memory.{field}` does not match its declared type: {reason}"
+            ),
+            RunError::UnknownMemoryField { field, expected } => write!(
+                f,
+                "the store carries `{field}`, which this agent does not declare
+                   it declares: {}",
+                if expected.is_empty() { "nothing".to_string() } else { expected.join(", ") }
+            ),
             RunError::UnsupportedIrVersion { found, supported } => write!(
                 f,
                 "this artifact declares IR version `{found}`; this runtime implements `{supported}`. \

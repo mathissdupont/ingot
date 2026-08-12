@@ -52,6 +52,13 @@ pub struct AgentIr {
     /// Working memory field name to type.
     #[serde(skip_serializing_if = "BTreeMap::is_empty", default)]
     pub state: BTreeMap<String, String>,
+    /// Persistent memory field name to its type and the value it starts from.
+    ///
+    /// Separate from `state` rather than a lifetime flag on it, because the two
+    /// differ in more than lifetime: a persistent field always has a value, and
+    /// this map is also the declaration a store is checked against.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty", default)]
+    pub persistent: BTreeMap<String, PersistentField>,
     pub budget: Budget,
     /// Policy decision per subject. Subjects absent here are denied.
     pub policy: BTreeMap<String, PolicyRule>,
@@ -95,6 +102,18 @@ impl AgentIr {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RecordType {
     pub fields: Vec<FieldType>,
+}
+
+/// One persistent memory field: its declared type and where it starts.
+///
+/// `initial` is resolved at compile time from a literal, so a run has a value
+/// for every persistent field before any node executes and "read before
+/// written" cannot arise.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PersistentField {
+    #[serde(rename = "type")]
+    pub ty: String,
+    pub initial: serde_json::Value,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -247,6 +266,7 @@ mod tests {
             },
             tools: Vec::new(),
             state: BTreeMap::new(),
+            persistent: BTreeMap::new(),
             budget: Budget {
                 steps: Some(60),
                 tokens: None,

@@ -42,7 +42,6 @@ to you*.
 | [GAP-010](#gap-010) | `parallel` executes sequentially | Degraded | a scheduler in the interpreter |
 | [GAP-011](#gap-011) | No package semantics beyond project-local imports | Absent | a package model (RFC) |
 | [GAP-012](#gap-012) | No generics | Absent | evidence, then an RFC |
-| [GAP-014](#gap-014) | No persistent memory or state migration | Absent | a memory model (RFC) |
 | [GAP-020](#gap-020) | The boundary needs Linux containers | Refused | a second expression of the boundary |
 | [GAP-023](#gap-023) | A contained run cannot cross a boundary to a sub-agent | Refused | a box per agent, over the supervisor |
 | [GAP-028](#gap-028) | A model-authored project has no offline test until one run is recorded | Degraded | cassette synthesis, or nothing |
@@ -50,6 +49,7 @@ to you*.
 | [GAP-031](#gap-031) | A contained run does not stream, and keeps the 16k ceiling | Refused | a delta notification on the supervisor channel |
 | [GAP-033](#gap-033) | `--effort` cannot be honoured by the Gemini protocol | Refused | one thinking control that holds across model generations |
 | [GAP-034](#gap-034) | A verifier can only inspect the shape of a value | Absent | a verifier kind with effects |
+| [GAP-035](#gap-035) | Two runs sharing one memory store are not made safe | Refused | a lock, or a per-field merge with a conflict model |
 
 ---
 
@@ -436,14 +436,27 @@ the eventual design is likely to keep.
 *Recorded in.* [Runtime 0.4](../specs/runtime/v0.4.md),
 [Language 0.2 §10.1](../specs/language/v0.2.md).
 
-### GAP-014
+### GAP-035
 
-**No persistent memory or state migration.**
+**Two runs sharing one memory store are not made safe.**
 
-`memory { working ephemeral { … } }` is the only form. State lives for one run.
-There is no `persistent`, and therefore no question yet of migrating it.
+Each run writes the whole document when it ends, so two runs against the same
+store interleave and the second to finish wins outright. There is no lock and
+no detection.
 
-*Recorded in.* [Language 0.1 §9](../specs/language/v0.1.md).
+*Why not yet.* The fix is not small. A lock file brings every staleness
+question with it — what happens when a run is killed, how long a stale lock is
+honoured, whether a reader blocks — and per-field merge needs a conflict model
+the language does not have. Neither is worth designing before anybody has hit
+the problem.
+
+*Why it is survivable.* The default store path is per-agent and under the build
+directory, so reaching the collision takes two runs of the same agent, at the
+same time, in the same project. `--memory <FILE>` makes it reachable
+deliberately, which is the case this entry exists to warn.
+
+*Recorded in.* [RFC-0018 §5](../rfcs/0018-state-that-outlives-a-run.md),
+`crates/ingot-cli/src/memory.rs`.
 
 ---
 
@@ -452,6 +465,52 @@ There is no `persistent`, and therefore no question yet of migrating it.
 When a gap closes it moves here with the release that closed it, and its section
 stays where a link can find it. Identifiers are never reused: a link to GAP-007
 must keep meaning what it meant.
+
+### GAP-014
+
+**No persistent memory or state migration.**
+*Closed 2026-08-12.*
+
+`memory { working ephemeral { … } }` was the only form, and state lived for one
+run. An agent that read a page today could not know tomorrow that it already
+had.
+
+*What closed it.* A `persistent { … }` block, addressed by `memory.`, and a
+store on disk that carries the declaration it was written under.
+
+Three decisions did the work, and each is the answer to a question the register
+did not ask:
+
+* **A second root, not a lifetime flag.** `state.x` and `memory.x` are told
+  apart at every use site, because a write that outlives the run is a different
+  act from a write to a scratchpad.
+* **Every persistent field declares a literal initial value.** That removes
+  "read before written" from persistent memory entirely, rather than making
+  every author guard against the first run at every read site.
+* **The store carries the full declaration, not a digest.** A digest can only
+  say no. A changed declaration is refused with a per-field diff — added,
+  removed, retyped — and `--migrate-memory` keeps what still matches, drops the
+  rest, and says what it dropped even under `--events quiet`.
+
+*Migration, which the gap's title also asked for.* A store written under a
+different declaration is refused by default. `--migrate-memory` is the way
+through, and it loses data loudly rather than reinterpreting a stored value as a
+new type.
+
+*Both backends.* The reference interpreter and the generated Python program read
+and write the same format, so a store written by one is readable by the other.
+The `memory-initial` conformance case holds them to the same seeding behaviour.
+
+*What it deliberately is not.* Not a database, not a shared key-value store, and
+not safe against concurrent writers — see [GAP-035](#gap-035). A store over
+4 MiB is refused on open, because a store that large is an agent accumulating
+without bound into a document rewritten in full every run.
+
+*Recorded in.* [RFC-0018](../rfcs/0018-state-that-outlives-a-run.md),
+[Language 0.2 §11](../specs/language/v0.2.md),
+[Agent IR 0.2 §7](../specs/ir/v0.2.md),
+[Runtime 0.5 §3](../specs/runtime/v0.5.md),
+`crates/ingot-cli/src/memory.rs`.
 
 ### GAP-017
 

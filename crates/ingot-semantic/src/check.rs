@@ -64,6 +64,8 @@ struct FlowCtx {
     agent: String,
     scopes: Vec<Scope>,
     state: Vec<Param>,
+    /// Persistent memory fields, addressed by `memory.`.
+    persistent: Vec<Param>,
     granted: BTreeSet<String>,
     used_tools: BTreeSet<String>,
     effects: EffectSet,
@@ -126,6 +128,25 @@ impl FlowCtx {
 
     fn state_field(&self, name: &str) -> Option<&Param> {
         self.state.iter().find(|field| field.name == name)
+    }
+
+    /// The declared fields of one of the two stores.
+    fn store(&self, scope: StateScope) -> &[Param] {
+        match scope {
+            StateScope::Ephemeral => &self.state,
+            StateScope::Persistent => &self.persistent,
+        }
+    }
+
+    fn store_field(&self, scope: StateScope, name: &str) -> Option<&Param> {
+        self.store(scope).iter().find(|field| field.name == name)
+    }
+
+    fn store_names(&self, scope: StateScope) -> Vec<String> {
+        self.store(scope)
+            .iter()
+            .map(|param| param.name.clone())
+            .collect()
     }
 
     fn visible_names(&self) -> Vec<String> {
@@ -463,6 +484,7 @@ impl<'a> Checker<'a> {
                 agent: format!("verifier {name}"),
                 scopes: Vec::new(),
                 state: Vec::new(),
+                persistent: Vec::new(),
                 granted: BTreeSet::new(),
                 used_tools: BTreeSet::new(),
                 effects: EffectSet::new(),
@@ -556,6 +578,7 @@ impl<'a> Checker<'a> {
                 agent: format!("fn {}", decl.name.text),
                 scopes: Vec::new(),
                 state: Vec::new(),
+                persistent: Vec::new(),
                 granted: BTreeSet::new(),
                 used_tools: BTreeSet::new(),
                 effects: EffectSet::new(),
@@ -698,6 +721,7 @@ impl<'a> Checker<'a> {
         let model = self.check_model(decl);
         let (grants, granted) = self.check_tool_grants(decl);
         let state = self.check_memory(decl);
+        let persistent = self.check_persistent_memory(decl);
         let budget = self.check_budget(decl);
         let policy = self.check_policy(decl);
 
@@ -728,6 +752,7 @@ impl<'a> Checker<'a> {
             agent: name.clone(),
             scopes: Vec::new(),
             state,
+            persistent,
             granted,
             used_tools: BTreeSet::new(),
             effects: EffectSet::new(),
@@ -797,6 +822,7 @@ impl<'a> Checker<'a> {
             model,
             grants,
             state: ctx.state.clone(),
+            persistent: ctx.persistent.clone(),
             budget,
             policy,
             effects,
@@ -959,12 +985,14 @@ impl<'a> Checker<'a> {
                     codes::UNSUPPORTED_MEMORY_LIFETIME,
                     format!("unsupported memory lifetime `{}`", working.lifetime.text),
                 )
-                .with_primary(working.lifetime.span, "not supported in language 0.1")
+                .with_primary(working.lifetime.span, "not supported")
                 .with_note(format!(
                     "supported lifetimes: {}",
                     SUPPORTED_MEMORY_LIFETIMES.join(", ")
                 ))
-                .with_help("persistent state arrives with the state store RFC"),
+                .with_help(
+                    "state that outlives the run goes in a sibling `persistent { … }` block",
+                ),
             );
         }
 
@@ -976,6 +1004,93 @@ impl<'a> Checker<'a> {
             }
             seen.insert(field.name.text.clone(), field.name.span);
             let ty = self.resolve_type(&field.ty);
+            fields.push(Param {
+                name: field.name.text.clone(),
+                ty,
+            });
+        }
+        fields
+    }
+
+    /// The `persistent { … }` block, and the literal each field starts from.
+    ///
+    /// Returns the fields paired with their initial value, because the value is
+    /// part of the declaration rather than an afterthought: it is what makes a
+    /// persistent read always answerable. See
+    /// [RFC-0018](../../../rfcs/0018-state-that-outlives-a-run.md) §2.2.
+    fn check_persistent_memory(&mut self, decl: &AgentDecl) -> Vec<Param> {
+        let mut fields = Vec::new();
+        let Some(block) = decl
+            .memory
+            .as_ref()
+            .and_then(|memory| memory.persistent.as_ref())
+        else {
+            return fields;
+        };
+
+        let mut seen: HashMap<String, Span> = HashMap::new();
+        for field in &block.fields {
+            if let Some(previous) = seen.get(&field.name.text).copied() {
+                self.duplicate(
+                    &field.name.text,
+                    StateScope::Persistent.noun(),
+                    field.name.span,
+                    previous,
+                );
+                continue;
+            }
+            seen.insert(field.name.text.clone(), field.name.span);
+            let ty = self.resolve_type(&field.ty);
+
+            let Some(expr) = field.initial.as_ref() else {
+                self.error(
+                    Diagnostic::error(
+                        codes::MISSING_INITIAL_VALUE,
+                        format!(
+                            "persistent memory field `{}` has no initial value",
+                            field.name.text
+                        ),
+                    )
+                    .with_primary(field.span, "expected `= <literal>`")
+                    .with_note(
+                        "persistent memory has no \"not yet written\" state: the first run \
+                         starts from the declared value and every later run from the store",
+                    )
+                    .with_help(format!(
+                        "write `{}: {} = …`",
+                        field.name.text,
+                        field.ty.text()
+                    )),
+                );
+                continue;
+            };
+
+            let Some(initial_ty) = literal_ty(expr) else {
+                self.error(
+                    Diagnostic::error(
+                        codes::INITIAL_VALUE_NOT_LITERAL,
+                        "a persistent memory field must start from a literal",
+                    )
+                    .with_primary(expr.span(), "not a literal")
+                    .with_note(
+                        "the initial value is resolved before any node runs, so there is \
+                         nothing here for an expression to read",
+                    ),
+                );
+                continue;
+            };
+
+            if !initial_ty.is_unknown() && !initial_ty.is_assignable_to(&ty) {
+                self.error(
+                    Diagnostic::error(
+                        codes::TYPE_MISMATCH,
+                        format!("initial value is `{initial_ty}`, but the field is `{ty}`"),
+                    )
+                    .with_primary(expr.span(), format!("expected `{ty}`")),
+                );
+                continue;
+            }
+
             fields.push(Param {
                 name: field.name.text.clone(),
                 ty,
@@ -1304,41 +1419,34 @@ impl<'a> Checker<'a> {
                 }
                 ctx.insert(name.text.clone(), ty, name.span);
             }
-            Stmt::StateWrite { field, value, span } => {
+            Stmt::StateWrite {
+                scope,
+                field,
+                value,
+                span,
+            } => {
                 if ctx.parallel_depth > 0 {
                     self.error(
                         Diagnostic::error(
                             codes::INVALID_IN_PARALLEL,
-                            "writing to `state` inside `parallel map` is not allowed",
+                            format!(
+                                "writing to `{}` inside `parallel map` is not allowed",
+                                scope.root()
+                            ),
                         )
                         .with_primary(*span, "iterations run concurrently")
                         .with_help("collect the values the map returns and write them afterwards"),
                     );
                 }
                 let value_ty = self.check_expr(ctx, value, policy);
-                let Some(expected) = ctx.state_field(&field.text).map(|param| param.ty.clone())
+                let Some(expected) = ctx
+                    .store_field(*scope, &field.text)
+                    .map(|param| param.ty.clone())
                 else {
-                    let known: Vec<String> =
-                        ctx.state.iter().map(|param| param.name.clone()).collect();
-                    let mut diagnostic = Diagnostic::error(
-                        codes::UNKNOWN_STATE_FIELD,
-                        format!("no state field named `{}`", field.text),
-                    )
-                    .with_primary(field.span, "not declared in `memory`");
-                    diagnostic = if known.is_empty() {
-                        diagnostic.with_help(
-                            "declare it, e.g. `memory { working ephemeral { notes: string[] } }`",
-                        )
-                    } else {
-                        diagnostic.with_note(format!("declared state fields: {}", known.join(", ")))
-                    };
-                    if let Some(suggestion) = closest_match(&field.text, &known) {
-                        diagnostic = diagnostic.with_help(format!("did you mean `{suggestion}`?"));
-                    }
-                    self.error(diagnostic);
+                    self.error(self.no_such_field(ctx, *scope, &field.text, field.span));
                     return;
                 };
-                self.expect_assignable(&value_ty, &expected, value.span(), "state field");
+                self.expect_assignable(&value_ty, &expected, value.span(), scope.noun());
             }
             Stmt::Expr { value, .. } => {
                 let ty = self.check_expr(ctx, value, policy);
@@ -1997,35 +2105,71 @@ impl<'a> Checker<'a> {
         (function.result, EffectSet::new())
     }
 
+    /// "no such field" for either store, with the neighbouring store checked.
+    ///
+    /// Naming the wrong root is the mistake this is most likely to be reporting
+    /// — the two look alike and hold the same kind of thing — so a field that
+    /// exists on the other side is worth more than a spelling suggestion.
+    fn no_such_field(
+        &self,
+        ctx: &FlowCtx,
+        scope: StateScope,
+        name: &str,
+        span: Span,
+    ) -> Diagnostic {
+        let other = match scope {
+            StateScope::Ephemeral => StateScope::Persistent,
+            StateScope::Persistent => StateScope::Ephemeral,
+        };
+        let mut diagnostic = Diagnostic::error(
+            codes::UNKNOWN_STATE_FIELD,
+            format!("no {} named `{name}`", scope.noun()),
+        )
+        .with_primary(span, "not declared in `memory`");
+
+        if ctx.store_field(other, name).is_some() {
+            return diagnostic.with_help(format!(
+                "`{name}` is declared as a {}; write `{}.{name}`",
+                other.noun(),
+                other.root()
+            ));
+        }
+
+        let known = ctx.store_names(scope);
+        diagnostic = if known.is_empty() {
+            diagnostic.with_help(match scope {
+                StateScope::Ephemeral => {
+                    "declare it, e.g. `memory { working ephemeral { notes: string[] } }`"
+                }
+                StateScope::Persistent => {
+                    "declare it, e.g. `memory { persistent { seen: string[] = [] } }`"
+                }
+            })
+        } else {
+            diagnostic.with_note(format!("declared: {}", known.join(", ")))
+        };
+        match closest_match(name, &known) {
+            Some(suggestion) => diagnostic.with_help(format!("did you mean `{suggestion}`?")),
+            None => diagnostic,
+        }
+    }
+
     fn infer_path(&mut self, ctx: &mut FlowCtx, path: &PathExpr) -> Ty {
         let mut current = match &path.root {
-            PathRoot::State { span } => {
+            PathRoot::State { span } | PathRoot::Memory { span } => {
+                let scope = path.root.scope().expect("both arms address a store");
                 let Some(first) = path.segments.first() else {
                     self.error(
                         Diagnostic::error(
                             codes::UNKNOWN_STATE_FIELD,
-                            "`state` must be followed by a field name",
+                            format!("`{}` must be followed by a field name", scope.root()),
                         )
-                        .with_primary(*span, "expected `state.field`"),
+                        .with_primary(*span, format!("expected `{}.field`", scope.root())),
                     );
                     return Ty::Unknown;
                 };
-                let Some(field) = ctx.state_field(&first.text).cloned() else {
-                    let known: Vec<String> =
-                        ctx.state.iter().map(|param| param.name.clone()).collect();
-                    let mut diagnostic = Diagnostic::error(
-                        codes::UNKNOWN_STATE_FIELD,
-                        format!("no state field named `{}`", first.text),
-                    )
-                    .with_primary(first.span, "not declared in `memory`");
-                    if !known.is_empty() {
-                        diagnostic = diagnostic
-                            .with_note(format!("declared state fields: {}", known.join(", ")));
-                    }
-                    if let Some(suggestion) = closest_match(&first.text, &known) {
-                        diagnostic = diagnostic.with_help(format!("did you mean `{suggestion}`?"));
-                    }
-                    self.error(diagnostic);
+                let Some(field) = ctx.store_field(scope, &first.text).cloned() else {
+                    self.error(self.no_such_field(ctx, scope, &first.text, first.span));
                     return Ty::Unknown;
                 };
                 return self.walk_fields(field.ty, &path.segments[1..]);
@@ -2111,25 +2255,23 @@ impl<'a> Checker<'a> {
                 continue;
             };
             let ty = match &path.root {
-                PathRoot::State { .. } => {
+                PathRoot::State { .. } | PathRoot::Memory { .. } => {
+                    let scope = path.root.scope().expect("both arms address a store");
                     let Some(first) = path.segments.first() else {
                         self.error(
                             Diagnostic::error(
                                 codes::UNRESOLVED_INTERPOLATION,
-                                "`${state}` must name a field",
+                                format!("`${{{}}}` must name a field", scope.root()),
                             )
-                            .with_primary(path.span, "expected `${state.field}`"),
+                            .with_primary(
+                                path.span,
+                                format!("expected `${{{}.field}}`", scope.root()),
+                            ),
                         );
                         continue;
                     };
-                    let Some(field) = ctx.state_field(&first.text).cloned() else {
-                        self.error(
-                            Diagnostic::error(
-                                codes::UNKNOWN_STATE_FIELD,
-                                format!("no state field named `{}`", first.text),
-                            )
-                            .with_primary(path.span, "not declared in `memory`"),
-                        );
+                    let Some(field) = ctx.store_field(scope, &first.text).cloned() else {
+                        self.error(self.no_such_field(ctx, scope, &first.text, path.span));
                         continue;
                     };
                     self.walk_fields(field.ty, &path.segments[1..])
@@ -2770,15 +2912,50 @@ fn collect_agent_calls(
     }
 }
 
+/// The type of a literal expression, or `None` when it is not one.
+///
+/// One function rather than a separate "is this a literal" predicate and a type
+/// inference: the two would have to agree about what counts, and a persistent
+/// field's initial value is checked against its declared type immediately
+/// afterwards.
+///
+/// An empty list is `list<unknown>`, which is assignable to any list — the
+/// common case, since `= []` is how most persistent collections start.
+fn literal_ty(expr: &Expr) -> Option<Ty> {
+    match expr {
+        Expr::Str(literal) if literal.is_plain() => Some(Ty::String),
+        Expr::Int { .. } => Some(Ty::Int),
+        Expr::Float { .. } => Some(Ty::Float),
+        Expr::Bool { .. } => Some(Ty::Bool),
+        Expr::List { items, .. } => {
+            let mut element = Ty::Unknown;
+            for item in items {
+                let item_ty = literal_ty(item)?;
+                if element.is_unknown() {
+                    element = item_ty;
+                } else if !item_ty.is_assignable_to(&element) {
+                    // Reported as a type mismatch against the declared element
+                    // type by the caller, which has a better span for it.
+                    return Some(Ty::Unknown);
+                }
+            }
+            Some(Ty::List(Box::new(element)))
+        }
+        // An interpolated string is not a literal: it reads a binding, and
+        // there is nothing bound when an initial value is resolved.
+        _ => None,
+    }
+}
+
 /// The binding a path expression is rooted at, if it is a path at all.
 ///
-/// `found.body` and `found` both answer `found`. A `state` root answers
-/// nothing: working memory is not what an artifact is emitted from.
+/// `found.body` and `found` both answer `found`. A store root answers nothing:
+/// neither kind of memory is what an artifact is emitted from.
 fn expr_root_binding(expr: &Expr) -> Option<String> {
     match expr {
         Expr::Path(path) => match &path.root {
             PathRoot::Binding(ident) => Some(ident.text.clone()),
-            PathRoot::State { .. } => None,
+            PathRoot::State { .. } | PathRoot::Memory { .. } => None,
         },
         _ => None,
     }

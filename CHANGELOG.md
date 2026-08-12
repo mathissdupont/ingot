@@ -8,6 +8,31 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
 
 ## [Unreleased]
 
+**Persistent memory** (language 0.2, Agent IR 0.2, Runtime 0.5; closes
+[GAP-014](docs/gaps.md#gap-014), opens [GAP-035](docs/gaps.md#gap-035),
+specified in [RFC-0018](rfcs/0018-state-that-outlives-a-run.md))
+
+- An agent may declare state that outlives the run:
+  `memory { persistent { seen: string[] = [], visits: int = 0 } }`.
+- Persistent fields are addressed by `memory.`, ephemeral ones stay on `state.`.
+  Two roots rather than one, so a write that outlives the run does not look like
+  a write to a scratchpad.
+- Every persistent field declares a **literal** initial value. That removes
+  "read before written" from persistent memory rather than making every author
+  guard against the first run at every read site.
+- The store is `<out-dir>/memory/<agent>.json`, relocated with `--memory FILE`
+  and skipped with `--no-memory`. Every run that opens one says so.
+- A store records the declaration it was written under, **in full**. A changed
+  declaration is refused with a per-field diff; `--migrate-memory` keeps what
+  still matches, drops the rest, and reports the loss even under
+  `--events quiet`.
+- Both backends read and write the same format, and the `memory-initial`
+  conformance case holds them to the same seeding behaviour.
+- Two runs sharing one store are **not** made safe. Stated in
+  [GAP-035](docs/gaps.md#gap-035) rather than implied away.
+- `--no-history` no longer suppresses the store. Where an agent keeps what it
+  remembers and whether this run is written down are different questions.
+
 **A `verify` that runs** (language 0.2, Agent IR 0.2, Runtime 0.4; closes
 [GAP-030](docs/gaps.md#gap-030), opens [GAP-034](docs/gaps.md#gap-034),
 specified in [RFC-0017](rfcs/0017-a-verifier-that-runs.md))

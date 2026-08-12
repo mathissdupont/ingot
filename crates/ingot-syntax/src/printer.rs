@@ -281,6 +281,26 @@ fn print_memory_block(out: &mut String, block: &MemoryBlock) {
             out.push_str("}\n");
         }
     }
+    if let Some(persistent) = &block.persistent {
+        indent(out, 2);
+        out.push_str("persistent {\n");
+        for field in &persistent.fields {
+            indent(out, 3);
+            let _ = write!(out, "{}: {}", field.name.text, field.ty.text());
+            match &field.initial {
+                Some(initial) => {
+                    let mut rendered = String::new();
+                    print_expr(&mut rendered, initial, 3);
+                    let _ = writeln!(out, " = {rendered}");
+                }
+                // Malformed source. The formatter shows what is there rather
+                // than inventing the value the checker is about to ask for.
+                None => out.push('\n'),
+            }
+        }
+        indent(out, 2);
+        out.push_str("}\n");
+    }
     indent(out, 1);
     out.push_str("}\n");
 }
@@ -369,8 +389,14 @@ fn print_statement(out: &mut String, statement: &Stmt, level: usize) {
         Stmt::Bind { name, value, .. } => {
             print_expr_statement(out, &format!("{} = ", name.text), value, level);
         }
-        Stmt::StateWrite { field, value, .. } => {
-            print_expr_statement(out, &format!("state.{} = ", field.text), value, level);
+        Stmt::StateWrite {
+            scope,
+            field,
+            value,
+            ..
+        } => {
+            let prefix = format!("{}.{} = ", scope.root(), field.text);
+            print_expr_statement(out, &prefix, value, level);
         }
         Stmt::Expr { value, .. } => {
             print_expr_statement(out, "", value, level);
@@ -618,6 +644,7 @@ fn path_text(path: &crate::PathExpr) -> String {
     let mut out = match &path.root {
         crate::PathRoot::Binding(ident) => ident.text.clone(),
         crate::PathRoot::State { .. } => "state".to_string(),
+        crate::PathRoot::Memory { .. } => "memory".to_string(),
     };
     for segment in &path.segments {
         out.push('.');

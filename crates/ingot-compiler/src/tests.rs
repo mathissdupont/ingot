@@ -1041,3 +1041,98 @@ agent Parent(topic: string) -> report<markdown> {
         .expect("parent should call child");
     assert_eq!(call.source_span.as_ref().unwrap().source, "nested.ing");
 }
+
+// --- persistent memory ------------------------------------------------------
+
+const REMEMBERS: &str = r#"
+agent Remembers(note: text) -> log<text> {
+  memory {
+    working ephemeral { scratch: text }
+    persistent { seen: text[] = [], depth: int = 0 }
+  }
+
+  flow {
+    state.scratch = note
+    memory.seen = [state.scratch]
+    memory.depth = memory.depth + 1
+    emit log = state.scratch
+  }
+}
+"#;
+
+fn compile_v2(body: &str) -> crate::Compilation {
+    let source = format!(
+        "{}\n{body}",
+        PRELUDE.replacen("language 0.1", "language 0.2", 1)
+    );
+    let compilation = compile_source("test.ing", source);
+    assert!(
+        !compilation.has_errors(),
+        "expected a clean compile:\n{}",
+        compilation.render_diagnostics(ingot_diagnostics::ColorChoice::Never)
+    );
+    compilation
+}
+
+#[test]
+fn persistent_fields_carry_their_type_and_initial_value() {
+    let compilation = compile_v2(REMEMBERS);
+    let ir = compilation.primary_agent().unwrap();
+    let seen = ir.persistent.get("seen").expect("`seen` is lowered");
+    assert_eq!(seen.ty, "text[]");
+    assert_eq!(seen.initial, serde_json::json!([]));
+    let depth = ir.persistent.get("depth").expect("`depth` is lowered");
+    assert_eq!(depth.ty, "int");
+    assert_eq!(depth.initial, serde_json::json!(0));
+    // Ephemeral state stays where it was; the two maps do not merge.
+    assert!(ir.state.contains_key("scratch"));
+    assert!(!ir.state.contains_key("seen"));
+}
+
+#[test]
+fn a_store_read_and_write_names_which_store() {
+    let compilation = compile_v2(REMEMBERS);
+    let ir = compilation.primary_agent().unwrap();
+    let scoped: Vec<(&str, Option<RefScope>)> = ir
+        .nodes
+        .iter()
+        .filter(|node| matches!(node.kind, NodeKind::StateRead | NodeKind::StateWrite))
+        .map(|node| (node.field.as_deref().unwrap_or(""), node.scope))
+        .collect();
+    assert!(
+        scoped.contains(&("scratch", None)),
+        "working memory is the absent case: {scoped:?}"
+    );
+    assert!(
+        scoped.contains(&("seen", Some(RefScope::Memory))),
+        "{scoped:?}"
+    );
+    assert!(
+        scoped.contains(&("depth", Some(RefScope::Memory))),
+        "{scoped:?}"
+    );
+}
+
+#[test]
+fn an_artifact_without_persistent_memory_encodes_exactly_as_before() {
+    // Both additions are omitted when empty, which is what keeps every artifact
+    // compiled before RFC-0018 byte-for-byte identical.
+    let compilation = compile(
+        r#"
+agent Plain(note: text) -> log<text> {
+  memory { working ephemeral { scratch: text } }
+  flow {
+    state.scratch = note
+    emit log = state.scratch
+  }
+}
+"#,
+    );
+    let ir = compilation.primary_agent().unwrap();
+    let json = ir.to_canonical_json();
+    assert!(!json.contains("\"persistent\""), "{json}");
+    assert!(!json.contains("\"resumable\""), "{json}");
+    // A node-level `scope` is the new key. `Value::Ref` has always carried one
+    // of its own, so this checks the nodes rather than the text.
+    assert!(ir.nodes.iter().all(|node| node.scope.is_none()), "{json}");
+}

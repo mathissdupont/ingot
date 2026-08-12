@@ -138,10 +138,10 @@ fn parse_interpolation_path(
     }
 
     let first = segments.remove(0);
-    let root = if first.text == "state" {
-        PathRoot::State { span: first.span }
-    } else {
-        PathRoot::Binding(first)
+    let root = match first.text.as_str() {
+        "state" => PathRoot::State { span: first.span },
+        "memory" => PathRoot::Memory { span: first.span },
+        _ => PathRoot::Binding(first),
     };
 
     Ok(InterpolationPath {

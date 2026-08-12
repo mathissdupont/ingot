@@ -785,6 +785,16 @@ fn add_expr_symbols(map: &SourceMap, expr: &Expr, symbols: &mut Vec<EditorSymbol
                     name_range: source_range(map, *span),
                     declaration_range: source_range(map, path.span),
                 }),
+                PathRoot::Memory { span } => symbols.push(EditorSymbol {
+                    name: "memory".to_string(),
+                    kind: SymbolKind::State,
+                    detail: "memory".to_string(),
+                    documentation: Some(
+                        "Agent persistent memory root. Survives the run.".to_string(),
+                    ),
+                    name_range: source_range(map, *span),
+                    declaration_range: source_range(map, path.span),
+                }),
             }
             for segment in &path.segments {
                 symbols.push(symbol_from_ident(
@@ -905,6 +915,14 @@ fn add_interpolation_symbols(
             kind: SymbolKind::State,
             detail: "state".to_string(),
             documentation: Some("Agent working memory root.".to_string()),
+            name_range: source_range(map, *span),
+            declaration_range: source_range(map, path.span),
+        }),
+        PathRoot::Memory { span } => symbols.push(EditorSymbol {
+            name: "memory".to_string(),
+            kind: SymbolKind::State,
+            detail: "memory".to_string(),
+            documentation: Some("Agent persistent memory root. Survives the run.".to_string()),
             name_range: source_range(map, *span),
             declaration_range: source_range(map, path.span),
         }),
