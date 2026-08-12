@@ -212,14 +212,22 @@ pub struct EffectDecl {
     pub span: Span,
 }
 
-/// `verifier CitationCheck(draft: markdown, min_sources: int)`
+/// `verifier MinSources(d: draft, min: int) = len(d.sources) >= min`
 ///
 /// Verifiers are deterministic checks the runtime performs on a value. They are
 /// declared so that `verify` calls can be type-checked like any other call.
+///
+/// A verifier with a `body` is one the toolchain can carry out: the body is a
+/// pure `bool` expression over the parameters, inlined at each `verify` site.
+/// A verifier without one is a name and a signature, which is all Language 0.1
+/// could express — it still type-checks, and a run still reports it as
+/// `notPerformed` rather than claiming it passed.
 #[derive(Debug, Clone)]
 pub struct VerifierDecl {
     pub name: Ident,
     pub params: Vec<ParamDecl>,
+    /// The check itself, when the author wrote one. Requires language 0.2.
+    pub body: Option<Expr>,
     pub doc: Option<String>,
     pub span: Span,
 }

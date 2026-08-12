@@ -69,6 +69,12 @@ struct FlowCtx {
     effects: EffectSet,
     output: Option<OutputInfo>,
     emitted_anywhere: bool,
+    /// Root binding names whose value has already left the flow via `emit`.
+    ///
+    /// Roots rather than whole paths: a record cannot be an artifact, so an
+    /// `emit` almost always takes a *field* of the value a `verify` names, and
+    /// comparing whole paths would never match.
+    emitted_roots: BTreeSet<String>,
     /// Depth of enclosing `parallel map` bodies.
     parallel_depth: usize,
 }
@@ -178,6 +184,7 @@ impl<'a> Checker<'a> {
         self.collect_functions();
         self.collect_agent_signatures();
         self.check_function_bodies();
+        self.check_verifier_bodies();
         self.detect_recursion();
 
         if self.program.agents.is_empty() {
@@ -400,7 +407,7 @@ impl<'a> Checker<'a> {
     }
 
     fn collect_verifiers(&mut self) {
-        for decl in &self.program.verifiers {
+        for (index, decl) in self.program.verifiers.iter().enumerate() {
             if let Some(previous) = self.verifiers.get(&decl.name.text).map(|info| info.span) {
                 self.duplicate(&decl.name.text, "verifier", decl.name.span, previous);
                 continue;
@@ -413,8 +420,93 @@ impl<'a> Checker<'a> {
                     params,
                     doc: decl.doc.clone(),
                     span: decl.name.span,
+                    decl_index: index,
+                    performable: decl.body.is_some(),
                 },
             );
+        }
+    }
+
+    /// A verifier body is a pure `bool` expression over the parameters.
+    ///
+    /// This is `check_function_bodies` with two differences: the expected type
+    /// is fixed rather than declared, and calling a `fn` helper is allowed.
+    /// Language 0.2 §7 forbids helper-to-helper calls, so inlining a helper
+    /// into a verifier stays one level deep and still terminates.
+    fn check_verifier_bodies(&mut self) {
+        for index in 0..self.program.verifiers.len() {
+            let decl = &self.program.verifiers[index];
+            let Some(body) = decl.body.clone() else {
+                continue;
+            };
+            let Some(signature) = self.verifiers.get(&decl.name.text).cloned() else {
+                continue;
+            };
+            let name = decl.name.text.clone();
+            let name_span = decl.name.span;
+
+            if let Some(span) = first_impure_expr(&body, true) {
+                self.error(
+                    Diagnostic::error(
+                        codes::FUNCTION_NOT_PURE,
+                        format!("verifier `{name}` is not a pure check"),
+                    )
+                    .with_primary(span, "this expression is not allowed in a verifier body")
+                    .with_help(
+                        "a verifier body is one boolean expression over its parameters; \
+                         a check that needs to `ask` or `call` is not a verifier",
+                    ),
+                );
+            }
+
+            let mut ctx = FlowCtx {
+                agent: format!("verifier {name}"),
+                scopes: Vec::new(),
+                state: Vec::new(),
+                granted: BTreeSet::new(),
+                used_tools: BTreeSet::new(),
+                effects: EffectSet::new(),
+                output: None,
+                emitted_anywhere: false,
+                emitted_roots: BTreeSet::new(),
+                parallel_depth: 0,
+            };
+            ctx.push_scope(false);
+            for param in &signature.params {
+                let span = self.program.verifiers[index]
+                    .params
+                    .iter()
+                    .find(|syntax| syntax.name.text == param.name)
+                    .map(|syntax| syntax.name.span)
+                    .unwrap_or(name_span);
+                ctx.insert(param.name.clone(), param.ty.clone(), span);
+            }
+
+            let empty_policy = BTreeMap::new();
+            let actual = self.check_expr(&mut ctx, &body, &empty_policy);
+            if !ctx.effects.is_empty() {
+                self.error(
+                    Diagnostic::error(
+                        codes::FUNCTION_NOT_PURE,
+                        format!("verifier `{name}` is not a pure check"),
+                    )
+                    .with_primary(body.span(), "this expression performs agent work")
+                    .with_help("a verifier cannot `ask`, `call` tools or run agents"),
+                );
+            }
+            if !matches!(actual, Ty::Bool) && !actual.is_unknown() {
+                self.error(
+                    Diagnostic::error(
+                        codes::VERIFIER_BODY_NOT_BOOL,
+                        format!("verifier `{name}` does not decide anything"),
+                    )
+                    .with_primary(body.span(), format!("this produces `{actual}`, not `bool`"))
+                    .with_help(
+                        "a verifier body answers whether the property holds, \
+                         e.g. `len(d.sources) >= min`",
+                    ),
+                );
+            }
         }
     }
 
@@ -447,7 +539,7 @@ impl<'a> Checker<'a> {
                 continue;
             };
 
-            if let Some(span) = first_disallowed_helper_expr(&decl.body) {
+            if let Some(span) = first_impure_expr(&decl.body, false) {
                 self.error(
                     Diagnostic::error(
                         codes::FUNCTION_NOT_PURE,
@@ -469,6 +561,7 @@ impl<'a> Checker<'a> {
                 effects: EffectSet::new(),
                 output: None,
                 emitted_anywhere: false,
+                emitted_roots: BTreeSet::new(),
                 parallel_depth: 0,
             };
             ctx.push_scope(false);
@@ -640,6 +733,7 @@ impl<'a> Checker<'a> {
             effects: EffectSet::new(),
             output: signature.output.clone(),
             emitted_anywhere: false,
+            emitted_roots: BTreeSet::new(),
             parallel_depth: 0,
         };
         ctx.push_scope(false);
@@ -1298,6 +1392,9 @@ impl<'a> Checker<'a> {
                     return;
                 }
                 ctx.emitted_anywhere = true;
+                if let Some(root) = expr_root_binding(value) {
+                    ctx.emitted_roots.insert(root);
+                }
                 if !value_ty.is_assignable_to(&declared.content) {
                     self.error(
                         Diagnostic::error(
@@ -1448,23 +1545,41 @@ impl<'a> Checker<'a> {
             &verifier.name,
             "verifier",
         );
-        // The declaration is correct, and nothing can carry it out. Agent IR
-        // records a verifier's name and signature and has no representation for
-        // the check itself, so this is the last moment before the run where the
-        // gap can be pointed at — which is the whole reason the compiler exists.
-        // A warning rather than an error: the source keeps its meaning when
-        // verifiers gain an execution model.
-        self.diagnostics.push(
-            Diagnostic::warning(
-                codes::VERIFIER_NOT_PERFORMED,
-                format!(
-                    "`{}` names a verifier this toolchain cannot perform",
+        if !verifier.performable {
+            // The declaration is correct, and there is no check to carry out:
+            // the artifact will name a property and carry nothing that tests
+            // it. This is the last moment before the run where that can be
+            // pointed at, which is the whole reason the compiler exists. A
+            // warning rather than an error, because a bodyless verifier is
+            // still valid source and still says something true.
+            self.diagnostics.push(
+                Diagnostic::warning(
+                    codes::VERIFIER_NOT_PERFORMED,
+                    format!("`{}` names a verifier with no body", verifier.name),
+                )
+                .with_primary(span, "there is no check to carry out")
+                .with_note("the run reports it as `notPerformed` rather than claiming it passed")
+                .with_help(format!(
+                    "give it one, e.g. `verifier {}(...) = <boolean expression>`",
                     verifier.name
-                ),
-            )
-            .with_primary(span, "no backend can carry out this check")
-            .with_note("the run reports it as `notPerformed` rather than claiming it passed"),
-        );
+                )),
+            );
+        } else if let Some(emitted) = self.emitted_before_verify(ctx, args) {
+            // A check that runs after publication cannot prevent it. Failing
+            // ends the run, but the artifact has already been written.
+            self.diagnostics.push(
+                Diagnostic::warning(
+                    codes::VERIFY_AFTER_EMIT,
+                    format!(
+                        "`{}` checks a value that was already emitted",
+                        verifier.name
+                    ),
+                )
+                .with_primary(span, "this check cannot prevent the emit above")
+                .with_note(format!("`{emitted}` was emitted earlier in this flow"))
+                .with_help("move the `verify` above the `emit`, so a failing check stops it"),
+            );
+        }
 
         self.verifies.insert(
             span,
@@ -1473,6 +1588,17 @@ impl<'a> Checker<'a> {
                 arg_order,
             },
         );
+    }
+
+    /// The already-emitted binding a `verify` argument names, if any.
+    ///
+    /// The check runs against roots, so `emit report = found.body` followed by
+    /// `verify MinSources(found, ...)` matches: the field that left the flow
+    /// came out of the value being checked.
+    fn emitted_before_verify(&self, ctx: &FlowCtx, args: &[Arg]) -> Option<String> {
+        args.iter()
+            .filter_map(|arg| expr_root_binding(&arg.value))
+            .find(|root| ctx.emitted_roots.contains(root))
     }
 
     fn check_output_emission(&mut self, decl: &AgentDecl, flow: &FlowBlock, ctx: &FlowCtx) {
@@ -2644,18 +2770,48 @@ fn collect_agent_calls(
     }
 }
 
-fn first_disallowed_helper_expr(expr: &Expr) -> Option<Span> {
+/// The binding a path expression is rooted at, if it is a path at all.
+///
+/// `found.body` and `found` both answer `found`. A `state` root answers
+/// nothing: working memory is not what an artifact is emitted from.
+fn expr_root_binding(expr: &Expr) -> Option<String> {
     match expr {
-        Expr::FunctionCall { span, .. }
-        | Expr::Ask { span, .. }
-        | Expr::Call { span, .. }
-        | Expr::ParallelMap { span, .. } => Some(*span),
-        Expr::List { items, .. } => items.iter().find_map(first_disallowed_helper_expr),
-        Expr::Builtin { args, .. } => args.iter().find_map(first_disallowed_helper_expr),
-        Expr::Unary { operand, .. } => first_disallowed_helper_expr(operand),
-        Expr::Binary { lhs, rhs, .. } => {
-            first_disallowed_helper_expr(lhs).or_else(|| first_disallowed_helper_expr(rhs))
+        Expr::Path(path) => match &path.root {
+            PathRoot::Binding(ident) => Some(ident.text.clone()),
+            PathRoot::State { .. } => None,
+        },
+        _ => None,
+    }
+}
+
+/// The first expression a pure body may not contain.
+///
+/// `allow_helper_call` is the only difference between a helper body and a
+/// verifier body. Language 0.2 §7 forbids helper-to-helper calls, which is what
+/// keeps inlining one level deep; a verifier is not a helper, so calling one
+/// from a verifier body is still one level and stays allowed.
+fn first_impure_expr(expr: &Expr, allow_helper_call: bool) -> Option<Span> {
+    match expr {
+        Expr::FunctionCall { args, span, .. } => {
+            if allow_helper_call {
+                args.iter()
+                    .find_map(|arg| first_impure_expr(&arg.value, allow_helper_call))
+            } else {
+                Some(*span)
+            }
         }
+        Expr::Ask { span, .. } | Expr::Call { span, .. } | Expr::ParallelMap { span, .. } => {
+            Some(*span)
+        }
+        Expr::List { items, .. } => items
+            .iter()
+            .find_map(|item| first_impure_expr(item, allow_helper_call)),
+        Expr::Builtin { args, .. } => args
+            .iter()
+            .find_map(|arg| first_impure_expr(arg, allow_helper_call)),
+        Expr::Unary { operand, .. } => first_impure_expr(operand, allow_helper_call),
+        Expr::Binary { lhs, rhs, .. } => first_impure_expr(lhs, allow_helper_call)
+            .or_else(|| first_impure_expr(rhs, allow_helper_call)),
         Expr::Str(_)
         | Expr::Int { .. }
         | Expr::Float { .. }

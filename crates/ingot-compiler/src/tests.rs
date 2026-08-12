@@ -592,6 +592,214 @@ agent A() -> report<markdown> {
         .any(|diagnostic| diagnostic.code == ingot_diagnostics::codes::EMIT_TYPE_MISMATCH));
 }
 
+/// A project whose verifier carries a check, shaped the way the guide shows.
+fn verifier_source(body: &str, flow: &str) -> String {
+    format!(
+        r#"
+language 0.2
+package heptapus.test
+
+type source {{
+  url: string
+  title: string
+}}
+
+type draft {{
+  body: markdown
+  sources: source[]
+}}
+
+verifier MinSources(d: draft, min: int){body}
+
+agent A(topic: string) -> report<markdown> {{
+  model requires {{ structured_output }}
+  budget {{ steps <= 8 }}
+  policy {{ network deny }}
+  flow {{
+{flow}
+  }}
+}}
+"#
+    )
+}
+
+const VERIFY_THEN_EMIT: &str = r#"    found = ask<draft>("Write about ${topic}.")
+    verify MinSources(found, min: 3)
+    emit report = found.body"#;
+
+#[test]
+fn a_verifier_body_lowers_into_the_verify_nodes_condition() {
+    let source = verifier_source(" = len(d.sources) >= min", VERIFY_THEN_EMIT);
+    let compilation = compile_source("verifier.ing", &source);
+    assert!(
+        !compilation.has_errors(),
+        "expected a verifier body to compile:\n{}",
+        compilation.render_diagnostics(ingot_diagnostics::ColorChoice::Never)
+    );
+
+    let ir = compilation.primary_agent().expect("expected an agent");
+    let verify = ir
+        .nodes
+        .iter()
+        .find(|node| node.kind == NodeKind::Verify)
+        .expect("expected a verify node");
+
+    // Substituted, not parameterised: `d` is gone and the argument's path took
+    // its place, so a backend evaluates it against the run's own bindings.
+    assert_eq!(
+        verify.condition,
+        Some(Value::Binary {
+            op: ">=".to_string(),
+            lhs: Box::new(Value::Builtin {
+                name: "len".to_string(),
+                args: vec![Value::Ref {
+                    scope: RefScope::Binding,
+                    path: vec!["found".to_string(), "sources".to_string()],
+                }],
+            }),
+            rhs: Box::new(Value::int(3)),
+        })
+    );
+
+    // `args` survives beside it: it is what a trace and the canvas read.
+    assert_eq!(verify.verifier.as_deref(), Some("MinSources"));
+    assert_eq!(verify.args.len(), 2);
+    assert_eq!(verify.args[0].name, "d");
+    assert_eq!(verify.args[1].name, "min");
+}
+
+#[test]
+fn a_bodyless_verifier_lowers_without_a_condition() {
+    let source = verifier_source("", VERIFY_THEN_EMIT);
+    let compilation = compile_source("verifier.ing", &source);
+    assert!(!compilation.has_errors());
+
+    let ir = compilation.primary_agent().expect("expected an agent");
+    let verify = ir
+        .nodes
+        .iter()
+        .find(|node| node.kind == NodeKind::Verify)
+        .expect("expected a verify node");
+    assert_eq!(verify.condition, None, "there is no check to carry out");
+    assert!(compilation
+        .diagnostics
+        .iter()
+        .any(|d| d.code == ingot_diagnostics::codes::VERIFIER_NOT_PERFORMED));
+}
+
+#[test]
+fn a_verifier_body_must_decide() {
+    let source = verifier_source(" = len(d.sources)", VERIFY_THEN_EMIT);
+    let compilation = compile_source("verifier.ing", &source);
+    assert!(compilation.has_errors());
+    assert!(compilation
+        .diagnostics
+        .iter()
+        .any(|d| d.code == ingot_diagnostics::codes::VERIFIER_BODY_NOT_BOOL));
+}
+
+#[test]
+fn a_verifier_body_cannot_ask() {
+    let source = verifier_source(
+        r#" = len(ask<markdown>("is this fine?")) > min"#,
+        VERIFY_THEN_EMIT,
+    );
+    let compilation = compile_source("verifier.ing", &source);
+    assert!(compilation.has_errors());
+    assert!(compilation
+        .diagnostics
+        .iter()
+        .any(|d| d.code == ingot_diagnostics::codes::FUNCTION_NOT_PURE));
+}
+
+#[test]
+fn a_verifier_body_may_call_a_pure_helper() {
+    // Depth-one inlining: Language 0.2 §7 forbids helper-to-helper calls, so
+    // this terminates by construction.
+    let compilation = compile_source(
+        "verifier-helper.ing",
+        r#"
+language 0.2
+package heptapus.test
+
+type draft {
+  body: markdown
+  sources: string[]
+}
+
+fn enough(n: int) -> bool = n >= 3
+
+verifier MinSources(d: draft) = enough(len(d.sources))
+
+agent A(topic: string) -> report<markdown> {
+  model requires { structured_output }
+  budget { steps <= 8 }
+  policy { network deny }
+  flow {
+    found = ask<draft>("Write about ${topic}.")
+    verify MinSources(found)
+    emit report = found.body
+  }
+}
+"#,
+    );
+    assert!(
+        !compilation.has_errors(),
+        "expected a helper call in a verifier body to compile:\n{}",
+        compilation.render_diagnostics(ingot_diagnostics::ColorChoice::Never)
+    );
+    let ir = compilation.primary_agent().expect("expected an agent");
+    let verify = ir
+        .nodes
+        .iter()
+        .find(|node| node.kind == NodeKind::Verify)
+        .expect("expected a verify node");
+    // Both the helper and the verifier vanished into one value.
+    assert_eq!(
+        verify.condition,
+        Some(Value::Binary {
+            op: ">=".to_string(),
+            lhs: Box::new(Value::Builtin {
+                name: "len".to_string(),
+                args: vec![Value::Ref {
+                    scope: RefScope::Binding,
+                    path: vec!["found".to_string(), "sources".to_string()],
+                }],
+            }),
+            rhs: Box::new(Value::int(3)),
+        })
+    );
+}
+
+#[test]
+fn verifying_a_value_after_emitting_it_warns() {
+    let source = verifier_source(
+        " = len(d.sources) >= min",
+        r#"    found = ask<draft>("Write about ${topic}.")
+    emit report = found.body
+    verify MinSources(found, min: 3)"#,
+    );
+    let compilation = compile_source("verifier.ing", &source);
+    assert!(
+        !compilation.has_errors(),
+        "the ordering is a warning, not an error"
+    );
+    assert!(compilation
+        .diagnostics
+        .iter()
+        .any(|d| d.code == ingot_diagnostics::codes::VERIFY_AFTER_EMIT));
+}
+
+#[test]
+fn verifying_before_emitting_does_not_warn() {
+    let source = verifier_source(" = len(d.sources) >= min", VERIFY_THEN_EMIT);
+    let compilation = compile_source("verifier.ing", &source);
+    assert!(!compilation
+        .diagnostics
+        .iter()
+        .any(|d| d.code == ingot_diagnostics::codes::VERIFY_AFTER_EMIT));
+}
+
 #[test]
 fn pure_function_calls_inline_into_ir_values() {
     let compilation = compile_source(

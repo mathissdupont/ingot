@@ -156,6 +156,7 @@ impl Emitter<'_> {
             NodeKind::StateRead => self.state_read(node, depth),
             NodeKind::StateWrite => self.state_write(node, depth),
             NodeKind::ArtifactEmit => self.artifact_emit(node, depth),
+            NodeKind::Verify => self.verify(node, depth),
             NodeKind::Checkpoint => {
                 let label = node.label.clone().unwrap_or_default();
                 self.line(
@@ -167,12 +168,10 @@ impl Emitter<'_> {
             // Refused rather than skipped. `report::analyse` already told the
             // operator this would happen; reaching here means they were told and
             // the build proceeded anyway, so the failure has to be loud.
-            NodeKind::ToolCall | NodeKind::AgentCall | NodeKind::Verify => {
-                Err(EmitError::UnsupportedNode {
-                    node: id.clone(),
-                    kind: node.kind.as_str().to_string(),
-                })
-            }
+            NodeKind::ToolCall | NodeKind::AgentCall => Err(EmitError::UnsupportedNode {
+                node: id.clone(),
+                kind: node.kind.as_str().to_string(),
+            }),
         }
     }
 
@@ -240,6 +239,42 @@ impl Emitter<'_> {
             &format!("rt.branch({}, \"else\")", quote(&node.id)),
         );
         self.region(node.otherwise.as_deref(), depth + 1)?;
+        Ok(())
+    }
+
+    /// A `verify`, which is a `branch`'s condition without the branching.
+    ///
+    /// The check is inlined into the artifact, so this renders the same value
+    /// form `branch` renders and hands the answer to the runtime. A node with
+    /// no `condition` is a verifier declared without a body: it reports
+    /// `notPerformed`, and must not report `passed`.
+    fn verify(&mut self, node: &Node, depth: usize) -> Result<(), EmitError> {
+        let verifier = node
+            .verifier
+            .as_ref()
+            .ok_or_else(|| EmitError::Malformed(format!("`{}` names no verifier", node.id)))?;
+
+        // Arguments are not rendered. Anything in one that does work — a state
+        // read, a call — was hoisted into its own node before this one, so what
+        // is left is refs and literals, and the condition already names the
+        // ones the check depends on.
+        match &node.condition {
+            Some(condition) => {
+                let rendered = self.value(condition)?;
+                self.line(
+                    depth,
+                    &format!(
+                        "rt.verify({}, {}, {rendered})",
+                        quote(&node.id),
+                        quote(verifier)
+                    ),
+                );
+            }
+            None => self.line(
+                depth,
+                &format!("rt.not_verified({}, {})", quote(&node.id), quote(verifier)),
+            ),
+        }
         Ok(())
     }
 
@@ -835,12 +870,46 @@ mod tests {
 
     #[test]
     fn a_node_kind_this_target_cannot_do_is_refused_not_commented_out() {
-        for kind in [NodeKind::ToolCall, NodeKind::AgentCall, NodeKind::Verify] {
+        for kind in [NodeKind::ToolCall, NodeKind::AgentCall] {
             let error = emit(&with(Node::new("n0", kind))).unwrap_err();
             let text = error.to_string();
             assert!(text.contains(kind.as_str()), "{text}");
             assert!(text.contains("silently skip"), "{text}");
         }
+    }
+
+    #[test]
+    fn a_verify_with_a_condition_renders_the_check_in_place() {
+        let mut node = Node::new("n0", NodeKind::Verify);
+        node.verifier = Some("MinSources".to_string());
+        node.condition = Some(Value::Binary {
+            op: ">=".to_string(),
+            lhs: Box::new(Value::Builtin {
+                name: "len".to_string(),
+                args: vec![Value::Ref {
+                    scope: ingot_ir::RefScope::Binding,
+                    path: vec!["found".to_string(), "sources".to_string()],
+                }],
+            }),
+            rhs: Box::new(Value::int(3)),
+        });
+        let code = emit(&with(node)).expect("a check with a body is executable");
+        assert!(code.contains("rt.verify("), "{code}");
+        assert!(code.contains("\"MinSources\""), "{code}");
+        // The check itself, not a call out to something that holds it.
+        assert!(code.contains("len("), "{code}");
+    }
+
+    #[test]
+    fn a_verify_without_a_condition_reports_not_performed() {
+        let mut node = Node::new("n0", NodeKind::Verify);
+        node.verifier = Some("CitationCheck".to_string());
+        let code = emit(&with(node)).expect("a bodyless verifier still runs");
+        assert!(code.contains("rt.not_verified("), "{code}");
+        assert!(
+            !code.contains("rt.verify("),
+            "a check nothing performed must not look like one that passed: {code}"
+        );
     }
 
     #[test]

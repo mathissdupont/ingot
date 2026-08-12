@@ -256,14 +256,62 @@ agent Fanout(topic: string) -> report<markdown> {
 * `emit` is how an output is produced. An output that is never emitted is a
   compile error.
 
-## Verifiers are declared, and honestly reported
+## Verifiers are checks that run, or say they did not
+
+A verifier carries the check, as one boolean expression over its parameters:
+
+```ingot
+language 0.2
+
+type source {
+  url: string
+  title: string
+}
+
+type draft {
+  body: markdown
+  sources: source[]
+}
+
+verifier MinSources(d: draft, min: int) = len(d.sources) >= min
+
+agent Careful(topic: string) -> report<markdown> {
+  model requires { structured_output }
+  budget { steps <= 8 }
+  policy { network deny }
+
+  flow {
+    found = ask<draft>("Write about ${topic}. Cite your sources.")
+    verify MinSources(found, min: 3)
+    emit report = found.body
+  }
+}
+```
+
+If the check does not hold, the run **stops there** and the record says which
+verifier failed. Note the ordering: the value is bound, checked, and only then
+emitted. Write it the other way round and the compiler warns (`ING6007`),
+because a check that runs after publication cannot prevent it.
+
+The body is pure on purpose — parameters, field reads, `len`, operators, and
+calls to `fn` helpers. It cannot `ask` or `call`. That is what makes a check's
+outcome reproducible from the run record alone: replay the run and the same
+`verified` event comes back, with no cassette involved. A property that really
+needs to reach outside the run — resolving a URL, reading prose — is a `tool`
+call, whose result is a value you can then verify.
+
+Which is the limit worth knowing: a check inspects the *shape* of a value.
+"Cites eight distinct sources" is only expressible if the sources are a field,
+not a claim buried in markdown. [GAP-034](../gaps.md#gap-034) is that limit.
+
+A verifier may still be declared with no body, as Language 0.1 required:
 
 ```ingot
 language 0.1
 
 verifier CitationCheck(draft: markdown, min_sources: int)
 
-agent Careful(topic: string) -> report<markdown> {
+agent Hopeful(topic: string) -> report<markdown> {
   model requires { structured_output }
   budget { steps <= 8 }
   policy { network deny }
@@ -276,10 +324,9 @@ agent Careful(topic: string) -> report<markdown> {
 }
 ```
 
-A `verify` is a check that must pass for the run to succeed. Nothing can execute
-one yet: the run reports it as `notPerformed` rather than claiming it passed,
-and [GAP-030](../gaps.md#gap-030) is that gap. This is the project's general
-habit — say what did not happen rather than let silence read as success.
+That still compiles, with a warning (`ING6006`), and the run reports the node as
+`notPerformed` — not `passed`. This is the project's general habit: say what did
+not happen rather than let silence read as success.
 
 ## Projects, packages and imports
 

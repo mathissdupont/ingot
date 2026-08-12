@@ -728,6 +728,42 @@ class Runtime:
         }
         self.events.emit(event="emitted", node=node, output=output)
 
+    def verify(self, node, verifier, held):
+        """Report a check, and stop the run when it did not hold.
+
+        `held` is already decided: the check is a pure expression over values
+        this run bound, inlined into the artifact as the node's `condition`,
+        so the emitter renders it in place and hands the answer here. There is
+        nothing to call out to, which is what makes the outcome reproducible
+        from the run record alone.
+
+        The event is emitted before the failure so the record says what the
+        check found and then says the run ended.
+        """
+        if not isinstance(held, bool):
+            _fail("node `%s` condition did not evaluate to a boolean" % node)
+        self.events.emit(
+            event="verified",
+            node=node,
+            verifier=verifier,
+            outcome="passed" if held else "failed",
+        )
+        if not held:
+            _fail(
+                "the check `%s` did not hold at node `%s`, so the run stopped there"
+                % (verifier, node)
+            )
+
+    def not_verified(self, node, verifier):
+        """A verifier declared without a body: there is no check to carry out.
+
+        Reported rather than skipped, and never as `passed`. Runtime 0.2 §1
+        requires a consumer to read `notPerformed` as *unknown*.
+        """
+        self.events.emit(
+            event="verified", node=node, verifier=verifier, outcome="notPerformed"
+        )
+
     def checkpoint(self, node, label):
         self.events.emit(event="checkpoint", node=node, label=label)
 

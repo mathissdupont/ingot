@@ -117,6 +117,13 @@ pub enum RunError {
     },
     /// An approval gate was refused.
     ApprovalDenied { node: String, reason: String },
+    /// A `verify` ran its check and the property did not hold.
+    ///
+    /// The `verified` event carrying `failed` is emitted before this is
+    /// returned, so the record says what the check found and then says the run
+    /// ended. Artifacts emitted earlier in the flow stay in the record: they
+    /// happened.
+    VerificationFailed { node: String, verifier: String },
     /// A budget ran out.
     BudgetExceeded {
         budget: String,
@@ -183,6 +190,10 @@ impl fmt::Display for RunError {
             RunError::ApprovalDenied { node, reason } => {
                 write!(f, "approval was refused at node `{node}`: {reason}")
             }
+            RunError::VerificationFailed { node, verifier } => write!(
+                f,
+                "the check `{verifier}` did not hold at node `{node}`, so the run stopped there"
+            ),
             RunError::BudgetExceeded { budget, limit, node } => write!(
                 f,
                 "the `{budget}` budget of {limit} was exhausted at node `{node}`"

@@ -1135,6 +1135,140 @@ fn a_verify_that_cannot_run_is_reported_as_not_performed() {
     );
 }
 
+/// The same flow, with the check carried in the artifact.
+///
+/// `len(draft) >= n` over the model's markdown answer: a shape check, which is
+/// all a pure condition can be.
+fn verifying_with(minimum: i64) -> AgentIr {
+    let mut ir = verifying();
+    let check = ir
+        .nodes
+        .iter_mut()
+        .find(|node| node.kind == NodeKind::Verify)
+        .expect("the fixture has a verify node");
+    check.condition = Some(IrValue::Binary {
+        op: ">=".into(),
+        lhs: Box::new(IrValue::Builtin {
+            name: "len".into(),
+            args: vec![IrValue::Ref {
+                scope: RefScope::Binding,
+                path: vec!["draft".into()],
+            }],
+        }),
+        rhs: Box::new(IrValue::int(minimum)),
+    });
+    ir
+}
+
+fn run_verifying(minimum: i64) -> (Result<crate::RunReport, RunError>, Vec<RunEvent>) {
+    let mut provider = ScriptedProvider::new(vec![json!("# Draft")]);
+    let mut tools = StaticToolHost::default();
+    let inputs = BTreeMap::from([("topic".to_string(), json!("compiler design"))]);
+    run_with(&verifying_with(minimum), &mut provider, &mut tools, inputs)
+}
+
+fn verify_outcome(events: &[RunEvent]) -> crate::VerifyOutcome {
+    events
+        .iter()
+        .find_map(|event| match event {
+            RunEvent::Verified { outcome, .. } => Some(*outcome),
+            _ => None,
+        })
+        .expect("a verify node emits an event")
+}
+
+#[test]
+fn a_check_that_holds_passes_and_the_run_continues() {
+    // "# Draft" is 7 characters.
+    let (result, events) = run_verifying(7);
+    assert!(result.is_ok(), "{:?}", result.err());
+    assert_eq!(verify_outcome(&events), crate::VerifyOutcome::Passed);
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, RunEvent::Emitted { .. })),
+        "the statement after a passing check still runs"
+    );
+}
+
+#[test]
+fn a_check_that_does_not_hold_fails_and_ends_the_run() {
+    let (result, events) = run_verifying(8);
+
+    let error = result.expect_err("a failed check ends the run");
+    let RunError::VerificationFailed { verifier, .. } = &error else {
+        panic!("expected a verification failure, got {error:?}");
+    };
+    assert_eq!(verifier, "CitationCheck");
+    assert!(error.to_string().contains("did not hold"), "{error}");
+
+    assert_eq!(verify_outcome(&events), crate::VerifyOutcome::Failed);
+    assert!(
+        verify_outcome(&events).is_failure(),
+        "unlike `notPerformed`, this one is a failure"
+    );
+}
+
+#[test]
+fn a_failed_check_says_what_it_found_before_the_run_ends() {
+    // The ordering is normative: a record has to say what the check found
+    // before it says the run ended, or the outcome cannot be attributed.
+    let (_, events) = run_verifying(8);
+    let verified = events
+        .iter()
+        .position(|event| matches!(event, RunEvent::Verified { .. }))
+        .expect("a verify node emits an event");
+    let failed = events
+        .iter()
+        .position(|event| matches!(event, RunEvent::RunFailed { .. }))
+        .expect("the run ends by saying so");
+
+    assert_eq!(verified + 1, failed, "nothing comes between the two");
+    assert_eq!(failed, events.len() - 1, "and the run ends there");
+}
+
+#[test]
+fn no_statement_after_a_failed_check_executes() {
+    let (_, events) = run_verifying(8);
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, RunEvent::Emitted { .. })),
+        "the emit that followed the failing check must not have happened"
+    );
+}
+
+#[test]
+fn a_condition_that_is_not_a_boolean_is_a_malformed_artifact() {
+    let mut ir = verifying_with(1);
+    let check = ir
+        .nodes
+        .iter_mut()
+        .find(|node| node.kind == NodeKind::Verify)
+        .expect("the fixture has a verify node");
+    check.condition = Some(IrValue::int(1));
+
+    let mut provider = ScriptedProvider::new(vec![json!("# Draft")]);
+    let mut tools = StaticToolHost::default();
+    let inputs = BTreeMap::from([("topic".to_string(), json!("compiler design"))]);
+    let (result, _) = run_with(&ir, &mut provider, &mut tools, inputs);
+
+    let error = result.expect_err("a non-boolean condition cannot decide anything");
+    assert!(
+        matches!(error, RunError::MalformedIr(_)),
+        "the artifact is wrong, not the check: {error:?}"
+    );
+}
+
+#[test]
+fn a_replayed_run_reproduces_every_verified_event() {
+    // A pure condition is a function of the events before it, so this holds
+    // for the same reason it holds for a branch.
+    let (_, first) = run_verifying(7);
+    let (_, second) = run_verifying(7);
+    assert_eq!(first, second);
+}
+
 #[test]
 fn a_not_performed_verify_never_serialises_as_a_pass() {
     let event = RunEvent::Verified {

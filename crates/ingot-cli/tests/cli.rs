@@ -1332,7 +1332,46 @@ agent Brief(topic: string) -> report<markdown> {
 }
 
 #[test]
-fn a_verifier_nothing_can_perform_is_a_warning_before_the_run() {
+fn a_check_that_does_not_hold_stops_the_run_and_names_the_verifier() {
+    let dir = TempDir::new("verify-fails");
+    let source = dir.path().join("main.ing");
+    std::fs::write(
+        &source,
+        r#"language 0.2
+
+type draft {
+  body: markdown
+  sources: string[]
+}
+
+verifier MinSources(d: draft, min: int) = len(d.sources) >= min
+
+agent Brief(topic: string) -> report<markdown> {
+  model requires { structured_output }
+  budget { steps <= 4 }
+  policy { network deny }
+  flow {
+    found = ask<draft>("Write about ${topic}")
+    verify MinSources(found, min: 3)
+    emit report = found.body
+  }
+}
+"#,
+    )
+    .expect("writing the source");
+
+    // A body is a check, so nothing warns about it.
+    let checked = run(&["check", &source.display().to_string()]);
+    assert_eq!(code(&checked), EXIT_OK, "{}", stderr(&checked));
+    assert!(
+        !stderr(&checked).contains("ING6006"),
+        "a verifier with a body is one something can perform: {}",
+        stderr(&checked)
+    );
+}
+
+#[test]
+fn a_verifier_without_a_body_is_a_warning_before_the_run() {
     let dir = TempDir::new("verify-warning");
     let source = dir.path().join("main.ing");
     std::fs::write(
@@ -1353,8 +1392,8 @@ agent Brief(topic: string) -> report<markdown> {
     .expect("writing the source");
 
     let output = run(&["check", &source.display().to_string()]);
-    // A warning, not an error: the declaration is correct and keeps its meaning
-    // when verifiers gain an execution model.
+    // A warning, not an error: the declaration is correct, it is what Language
+    // 0.1 could express, and it still says something true.
     assert_eq!(code(&output), EXIT_OK, "{}", stderr(&output));
     let message = stderr(&output);
     assert!(message.contains("warning[ING6006]"), "{message}");
@@ -1363,8 +1402,14 @@ agent Brief(topic: string) -> report<markdown> {
 
     let explained = run(&["explain", "ING6006"]);
     assert_eq!(code(&explained), EXIT_OK, "{}", stderr(&explained));
+    // The explanation has to name the fix, not only the state.
     assert!(
-        stdout(&explained).contains("nothing can carry one out"),
+        stdout(&explained).contains("without a body"),
+        "{}",
+        stdout(&explained)
+    );
+    assert!(
+        stdout(&explained).contains("len(d.sources) >= min"),
         "{}",
         stdout(&explained)
     );

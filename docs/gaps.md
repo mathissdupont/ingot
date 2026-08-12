@@ -48,10 +48,10 @@ to you*.
 | [GAP-023](#gap-023) | A contained run cannot cross a boundary to a sub-agent | Refused | a box per agent, over the supervisor |
 | [GAP-028](#gap-028) | A model-authored project has no offline test until one run is recorded | Degraded | cassette synthesis, or nothing |
 | [GAP-029](#gap-029) | An image cannot be verified by signature, so acquisition stays manual | Refused | a signature scheme and a trust root |
-| [GAP-030](#gap-030) | A verifier cannot be executed at all | Absent | a verifier execution model (RFC) |
 | [GAP-031](#gap-031) | A contained run does not stream, and keeps the 16k ceiling | Refused | a delta notification on the supervisor channel |
 | [GAP-032](#gap-032) | The Python backend does not stream, so the two backends accept different answer lengths | Degraded | streaming in the Python prelude |
 | [GAP-033](#gap-033) | `--effort` cannot be honoured by the Gemini protocol | Refused | one thinking control that holds across model generations |
+| [GAP-034](#gap-034) | A verifier can only inspect the shape of a value | Absent | a verifier kind with effects |
 
 ---
 
@@ -436,33 +436,47 @@ them — and then an RFC. Not the other way round.
 *Recorded in.* [Language 0.2](../specs/language/v0.2.md),
 [RFC-0011](../rfcs/0011-language-v0.2-generics-decision.md).
 
-### GAP-030
+### GAP-034
 
-**A verifier cannot be executed at all.**
+**A verifier can only inspect the shape of a value.**
 
-*The half of [GAP-002](#gap-002) that was a design rather than a bug.*
-`verifier CitationCheck(draft: markdown, min_sources: int)` parses, type-checks
-and reaches the IR as a name and a signature. Nothing can carry the check out.
+*The narrower half of [GAP-030](#gap-030), which closed by giving verifiers a
+body.* A verifier body is a pure expression, so a check can test fields, lengths
+and thresholds:
 
-*How it shows up.* `ingot check` warns (`ING6006`) and the run reports the node
-as `notPerformed`, so nothing claims the property holds — but nothing tests it
-either. A `verify` is documentation with a type signature.
+```ingot
+verifier MinSources(d: draft, min: int) = len(d.sources) >= min
+```
 
-*Why not yet.* A verifier is either a tool call, a model call with a rubric, or
-host-provided code, and those have different security stories: the first needs an
-effect, the second needs a budget, the third needs a way to ship code with an
-artifact. Picking one by implementing it would settle the design by accident.
+It cannot read prose, call a tool, or reach the network. The register's own
+motivating example — *does this markdown draft cite eight distinct sources?* —
+is still not expressible, because counting citations in prose is not something
+an expression over fields can do.
 
-*What closing it needs.* An RFC. At minimum: what a verifier *is*, which effects
-it declares, how a failing check affects a run, and what a backend that cannot
-execute one must do — which [Runtime 0.2 §1](../specs/runtime/v0.2.md) already
-answers for the reporting half.
+*How it shows up.* You restructure: ask the model for a record with a `sources`
+field, verify the record, emit its markdown field. That is a better program and
+a real cost — the model now has to answer in a structured shape, which needs
+`structured_output` and gives it less room. Where restructuring is not possible,
+the property stays unchecked.
 
-*The workaround.* A `tool` call does execute, and its effects are checked at the
-call site. A property worth enforcing today should be a tool.
+*Why not yet.* Reach is what the [RFC-0017](../rfcs/0017-a-verifier-that-runs.md)
+design deliberately deferred, and the rule it left behind is the hard part: a
+`verified` outcome must be derivable from the run record alone. A tool-backed
+verifier can satisfy that, because Cassette 0.2 records tool calls. A
+model-graded one cannot without making a verdict depend on a file beside the
+artifact — and would not be deterministic, which is what
+[Language 0.1 §5.2](../specs/language/v0.1.md) defines a verifier to be.
 
-*Recorded in.* [Runtime 0.2 §4](../specs/runtime/v0.2.md),
-[Language 0.1 §6](../specs/language/v0.1.md).
+*What closing it needs.* A verifier kind with effects: how it declares them, how
+they are checked at the `verify` site against the agent's policy, and how its
+outcome stays reproducible under replay.
+
+*The workaround.* A `tool` call, whose result is a value the flow can then check
+with a verifier. That splits the reaching from the deciding, which is the shape
+the eventual design is likely to keep.
+
+*Recorded in.* [Runtime 0.4](../specs/runtime/v0.4.md),
+[Language 0.2 §10.1](../specs/language/v0.2.md).
 
 ### GAP-014
 
@@ -822,16 +836,54 @@ gone. Leaving it present and adding `performed` beside it would have kept the
 misleading reading available and made the honest answer the one you get by
 reading two fields in the right order.
 
-The compiler now says it earlier too: `ING6006` warns that a declared verifier is
-one nothing in the toolchain can perform, so the gap is visible at `ingot check`
-rather than in an event stream after the fact.
+The compiler now says it earlier too: `ING6006` warns at `ingot check` rather
+than leaving the gap to be discovered in an event stream after the fact.
 
-*What this did not close.* Verifiers still cannot be executed —
-[GAP-030](#gap-030) is that half, and it needs an RFC rather than a fix. What
-changed is that the run no longer claims otherwise.
+*What this did not close.* Verifiers still could not be executed —
+[GAP-030](#gap-030) was that half, and it closed later. What this change did was
+stop the run claiming otherwise.
 
 *Recorded in.* [Runtime 0.2](../specs/runtime/v0.2.md),
 [`ingot explain ING6006`](../crates/ingot-diagnostics/src/codes.rs).
+
+### GAP-030
+
+**A verifier could not be executed at all.**
+*Closed in Runtime 0.4 / Language 0.2.*
+
+A verifier was a name and a signature. It parsed, type-checked and reached the
+IR, and nothing could carry the check out: every `verify` reported
+`notPerformed`, so a declared property was documentation with a type signature.
+
+The register said this needed a design first, because "a verifier is either a
+tool call, a model call with a rubric, or host-provided code". It turned out the
+language specification had already eliminated one of those —
+[Language 0.1 §5.2](../specs/language/v0.1.md) calls a verifier a *deterministic*
+check, which a model with a rubric is not — and the other two differ only in
+where the check's code lives. [RFC-0017](../rfcs/0017-a-verifier-that-runs.md)
+put it inside the artifact:
+
+```ingot
+verifier MinSources(d: draft, min: int) = len(d.sources) >= min
+```
+
+The body is a pure `bool` expression, inlined at each `verify` site as the
+node's `condition` — the same field and the same value forms a `branch` already
+uses, so no IR schema change and no new evaluator construct in either backend.
+A failing check ends the run, after emitting its `failed` event; `ING6007` warns
+when a `verify` comes after the `emit` of what it checks, where it could not
+have prevented anything.
+
+The rule the design left behind is the part that outlives it: **a `verified`
+outcome must be derivable from the run record alone**. That is what keeps a
+replay byte-exact, and what a later verifier kind with reach has to satisfy.
+
+*What this did not close.* A check can only inspect the shape of a value —
+[GAP-034](#gap-034) is that half.
+
+*Recorded in.* [Runtime 0.4](../specs/runtime/v0.4.md),
+[Language 0.2 §10](../specs/language/v0.2.md),
+[Agent IR 0.2 §5](../specs/ir/v0.2.md).
 
 ### GAP-019
 

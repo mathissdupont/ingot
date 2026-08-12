@@ -761,15 +761,48 @@ impl Interp<'_> {
         for argument in &node.args {
             self.eval(&argument.value)?;
         }
-        // Verifier implementations are not part of Agent IR: the artifact names
-        // a check and carries no way to perform it. Saying so is the whole
-        // point — `passed: true` here used to be a pass nothing earned.
+
+        // No `condition` means the source declared a verifier without a body:
+        // the artifact names a check and carries no way to perform it. Saying
+        // so is the whole point — `passed: true` here would be a pass nothing
+        // earned.
+        let Some(condition) = &node.condition else {
+            self.sink.emit(RunEvent::Verified {
+                node: node.id.clone(),
+                verifier: verifier.clone(),
+                outcome: VerifyOutcome::NotPerformed,
+            });
+            return Ok(());
+        };
+
+        let held = self.eval(condition)?.as_bool().ok_or_else(|| {
+            RunError::MalformedIr(format!(
+                "`{}` condition did not evaluate to a boolean",
+                node.id
+            ))
+        })?;
+
         self.sink.emit(RunEvent::Verified {
             node: node.id.clone(),
             verifier: verifier.clone(),
-            outcome: VerifyOutcome::NotPerformed,
+            outcome: if held {
+                VerifyOutcome::Passed
+            } else {
+                VerifyOutcome::Failed
+            },
         });
-        Ok(())
+
+        // The event is emitted first, so the record says what the check found
+        // before it says the run ended. A failure ends the run rather than
+        // letting it finish under a property that does not hold.
+        if held {
+            Ok(())
+        } else {
+            Err(RunError::VerificationFailed {
+                node: node.id.clone(),
+                verifier: verifier.clone(),
+            })
+        }
     }
 
     fn run_state_read(&mut self, node: &Node) -> Result<(), RunError> {
