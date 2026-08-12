@@ -8,6 +8,45 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
 
 ## [Unreleased]
 
+**A `verify` that runs** (language 0.2, Agent IR 0.2, Runtime 0.4; closes
+[GAP-030](docs/gaps.md#gap-030), opens [GAP-034](docs/gaps.md#gap-034),
+specified in [RFC-0017](rfcs/0017-a-verifier-that-runs.md))
+
+- A verifier may carry its check:
+  `verifier MinSources(d: draft, min: int) = len(d.sources) >= min`. The body is
+  a pure `bool` expression over the parameters, inlined at each `verify` site as
+  the node's `condition` — the field `branch` already carries, so the IR schema
+  is unchanged and both backends already evaluate that value form.
+- A failed check emits its `verified: failed` event and **then** ends the run,
+  naming the verifier. Artifacts emitted earlier stay in the record; nothing
+  after the failing node runs.
+- `ING2020` rejects a body that produces a value instead of deciding.
+  `ING6007` warns when a `verify` comes after the `emit` of what it checks,
+  where the check could not have prevented anything.
+- `ING6006` narrows to the only case left that nothing can carry out: a verifier
+  declared without a body. Such a declaration keeps its meaning and its
+  `notPerformed` outcome, so no existing program changes.
+- The rule a later verifier-with-reach has to satisfy is now written down: a
+  `verified` outcome must be derivable from the run record alone.
+
+**The Python backend streams** (closes [GAP-032](docs/gaps.md#gap-032))
+
+- Both providers in the generated program read a `text/event-stream`, so an
+  answer between 16,000 and 64,000 output tokens no longer completes on one
+  backend and fails on the other.
+- The output ceiling is asked of the provider instead of written into the
+  generated program. Runtime 0.3 §4 forbids an artifact selecting its own
+  ceiling, and the emitter used to put one in every `ask`.
+- **One parser, two transports**: each accumulator rebuilds the payload a
+  whole-body call would have returned and hands it to the same reader, so the
+  two transports produce identical values *and* identical errors by
+  construction rather than by testing.
+- Cassette replay reports that it does not stream. A recording produces its
+  answer at once, and inventing fragments would make a replayed run
+  indistinguishable from a call that never happened.
+- Fixed: the Python target's build report still explained its refusal of
+  `verify` with `passed: true` and GAP-002, which Runtime 0.2 had already fixed.
+
 ## [0.4.0] — 2026-08-11
 
 The release that makes the `policy` block true and gives the whole loop one
