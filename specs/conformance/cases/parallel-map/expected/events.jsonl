@@ -1,0 +1,16 @@
+{"event":"runStarted","agent":"conformance.fanned.Fanned","provider":"replay"}
+{"event":"nodeStarted","node":"n1","kind":"parallel"}
+{"event":"mapIteration","node":"n1","index":0,"total":2}
+{"event":"nodeStarted","node":"n0","kind":"llm.call"}
+{"event":"modelCall","node":"n0","model":"stub-1","responseType":"markdown","usage":{"inputTokens":100,"outputTokens":50}}
+{"event":"mapIteration","node":"n1","index":1,"total":2}
+{"event":"nodeStarted","node":"n0","kind":"llm.call"}
+{"event":"modelCall","node":"n0","model":"stub-1","responseType":"markdown","usage":{"inputTokens":100,"outputTokens":50}}
+{"event":"nodeStarted","node":"n2","kind":"state.write"}
+{"event":"stateWritten","node":"n2","field":"lines"}
+{"event":"nodeStarted","node":"n3","kind":"state.read"}
+{"event":"nodeStarted","node":"n4","kind":"llm.call"}
+{"event":"modelCall","node":"n4","model":"stub-1","responseType":"markdown","usage":{"inputTokens":100,"outputTokens":50}}
+{"event":"nodeStarted","node":"n5","kind":"artifact.emit"}
+{"event":"emitted","node":"n5","output":"digest"}
+{"event":"runFinished","steps":3,"usage":{"inputTokens":300,"outputTokens":150}}

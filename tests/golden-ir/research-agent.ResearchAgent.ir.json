@@ -155,6 +155,7 @@
         "start": 1216,
         "end": 1238
       },
+      "binding": "$tmp0",
       "tool": "mcp:web.search",
       "args": [
         {

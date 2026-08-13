@@ -1,0 +1,7 @@
+what = "A fan-out over a list: one iteration per element, numbered, and the list of results bound in order."
+outcome = "finished"
+pins = [
+  "Runtime 0.1 §5 — `parallel` runs the body once per element and binds the list of each iteration's last node",
+  "Runtime 0.1 §5.1 — the schedule is not asserted; a sequential and a concurrent backend must both pass",
+  "Runtime 0.1 §9 — `mapIteration` carries the index and the total",
+]

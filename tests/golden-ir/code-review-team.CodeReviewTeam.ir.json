@@ -153,6 +153,7 @@
         "start": 2295,
         "end": 2322
       },
+      "binding": "$tmp0",
       "agent": "heptapus.examples.review.SecurityReviewer",
       "args": [
         {
@@ -421,7 +422,7 @@
         "start": 2746,
         "end": 2811
       },
-      "binding": "$tmp0",
+      "binding": "$tmp1",
       "prompt": {
         "kind": "literal",
         "type": "string",
@@ -445,7 +446,7 @@
         "kind": "ref",
         "scope": "binding",
         "path": [
-          "$tmp0"
+          "$tmp1"
         ]
       },
       "output": "review",

@@ -468,7 +468,14 @@ impl<'a> Lowerer<'a> {
                 node.guard = lowered_guard;
                 let index = self.push(level, node);
 
-                let body_level = self.lower_region(body);
+                let mut body_level = self.lower_region(body);
+                // A guard is evaluated before **every** iteration, and the read
+                // above happens once, before the loop. Re-read each field the
+                // guard names at the end of the body, binding the same name, so
+                // the next evaluation sees what the body wrote. Without this a
+                // guard over working memory never changes and only `max` ever
+                // stops the loop.
+                self.refresh_guard_reads(&mut body_level, guard.as_ref(), *span);
                 self.link(&body_level);
                 self.nodes[index].body = body_level.first().map(|i| self.nodes[*i].id.clone());
             }
@@ -565,6 +572,19 @@ impl<'a> Lowerer<'a> {
                 let body_level = self.lower_region(body);
                 self.link(&body_level);
                 node.body = body_level.first().map(|i| self.nodes[*i].id.clone());
+
+                // An iteration's value is the result of the last node in the
+                // body (Runtime 0.1 §5), and a backend reads that result from
+                // the node's binding. A body written as a bare expression --
+                // `call web.search(query)`, which is the idiom -- produced a
+                // node with no binding, so every iteration collected null.
+                // Naming it here is what makes the value reachable.
+                if let Some(last) = body_level.last() {
+                    if self.nodes[*last].binding.is_none() {
+                        let name = self.next_temp();
+                        self.nodes[*last].binding = Some(name);
+                    }
+                }
                 Some(node)
             }
             _ => None,
@@ -836,6 +856,26 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    /// Re-read every store field a loop guard names, at the end of its body.
+    ///
+    /// The node binds the same `$state.<field>` name the guard's own read did,
+    /// so the guard's reference resolves to the refreshed value on the next
+    /// evaluation. A guard that names no store field appends nothing, which is
+    /// why a loop over an ordinary binding lowers exactly as it always has.
+    fn refresh_guard_reads(&mut self, level: &mut Vec<usize>, guard: Option<&Expr>, span: Span) {
+        let Some(guard) = guard else { return };
+        let mut fields = Vec::new();
+        collect_store_reads(guard, &mut fields);
+        for (scope, field) in fields {
+            let mut node = Node::new(String::new(), NodeKind::StateRead);
+            node.source_span = Some(self.source_span(span));
+            node.field = Some(field.clone());
+            node.scope = ref_scope(scope);
+            node.binding = Some(format!("${}.{field}", scope.root()));
+            self.push(level, node);
+        }
+    }
+
     /// Emit one `state.read` per field per statement and reuse it afterwards.
     fn read_state(
         &mut self,
@@ -857,6 +897,47 @@ impl<'a> Lowerer<'a> {
         self.push(level, node);
         self.state_reads.insert(qualified, binding.clone());
         binding
+    }
+}
+
+/// Every store field an expression reads, in source order and deduplicated.
+///
+/// Only the first path segment is a field; the rest are record accesses on the
+/// value it holds, and re-reading the root refreshes those too.
+fn collect_store_reads(expr: &Expr, out: &mut Vec<(StateScope, String)>) {
+    match expr {
+        Expr::Path(path) => {
+            if let (Some(scope), Some(first)) = (path.root.scope(), path.segments.first()) {
+                let entry = (scope, first.text.clone());
+                if !out.contains(&entry) {
+                    out.push(entry);
+                }
+            }
+        }
+        Expr::Unary { operand, .. } => collect_store_reads(operand, out),
+        Expr::Binary { lhs, rhs, .. } => {
+            collect_store_reads(lhs, out);
+            collect_store_reads(rhs, out);
+        }
+        Expr::Builtin { args, .. } => {
+            for argument in args {
+                collect_store_reads(argument, out);
+            }
+        }
+        Expr::FunctionCall { args, .. } => {
+            for argument in args {
+                collect_store_reads(&argument.value, out);
+            }
+        }
+        Expr::List { items, .. } => {
+            for item in items {
+                collect_store_reads(item, out);
+            }
+        }
+        // A guard is a pure expression: the checker refuses an `ask`, a `call`
+        // or a `parallel map` in one, so there is nothing else that can read a
+        // store. A string literal's interpolations cannot appear in a boolean.
+        _ => {}
     }
 }
 

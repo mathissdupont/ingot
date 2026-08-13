@@ -1,0 +1,8 @@
+what = "A run that outruns its `steps` budget: stopped at the node that would have exceeded it, with nothing emitted."
+outcome = "failed"
+failure-names = "steps"
+pins = [
+  "Language 0.1 §8 — `steps` bounds a run, and the bound is enforced at run time as well as checked statically",
+  "Runtime 0.1 §5 — `llm.call` charges one step",
+  "Runtime 0.1 §7 — a budget that is exceeded ends the run; it is not a warning",
+]

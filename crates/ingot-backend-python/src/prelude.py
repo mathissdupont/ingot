@@ -1156,7 +1156,11 @@ class Runtime:
         self.events.emit(event="branchTaken", node=node, arm=arm)
 
     def iteration(self, node, index):
-        self.events.emit(event="loopIteration", node=node, iteration=index)
+        # One-based. An *index* is zero-based and is paired with a total, which
+        # is what `mapIteration` carries; an *iteration* is a count of passes,
+        # and "iteration 1" is the first one. The two backends disagreed here
+        # until a conformance case asked.
+        self.events.emit(event="loopIteration", node=node, iteration=index + 1)
 
     def element(self, node, index, total):
         self.events.emit(event="mapIteration", node=node, index=index, total=total)

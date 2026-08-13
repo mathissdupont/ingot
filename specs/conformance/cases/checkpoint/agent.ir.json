@@ -1,0 +1,136 @@
+{
+  "irVersion": "0.2",
+  "language": "0.1",
+  "agent": "conformance.marked.Marked",
+  "doc": "A checkpoint an uninterrupted run passes straight through.\n\nThe event, and its position: after the node before it and before the node\nafter it. A conformance request is one run start to finish, so stopping at\none and continuing is not something this shape can express — see\nRuntime 0.5 §4. What it can pin is that the marker is in the stream at all,\nwhich a backend that dropped the node would fail.",
+  "inputs": {
+    "topic": "string"
+  },
+  "outputs": {
+    "notes": "artifact<markdown>"
+  },
+  "requirements": {
+    "model": {
+      "mode": "capabilities",
+      "capabilities": [
+        "structured_output"
+      ]
+    }
+  },
+  "state": {
+    "draft": "markdown"
+  },
+  "budget": {
+    "steps": 2
+  },
+  "policy": {
+    "network": {
+      "decision": "deny"
+    }
+  },
+  "effects": [
+    "model_access"
+  ],
+  "entry": "n0",
+  "nodes": [
+    {
+      "id": "n0",
+      "kind": "llm.call",
+      "sourceSpan": {
+        "source": "main.ing",
+        "start": 709,
+        "end": 756
+      },
+      "binding": "$tmp0",
+      "prompt": {
+        "kind": "template",
+        "parts": [
+          {
+            "kind": "text",
+            "value": "Write one line about "
+          },
+          {
+            "kind": "value",
+            "value": {
+              "kind": "ref",
+              "scope": "input",
+              "path": [
+                "topic"
+              ]
+            },
+            "type": "string"
+          },
+          {
+            "kind": "text",
+            "value": "."
+          }
+        ]
+      },
+      "responseType": "markdown",
+      "effects": [
+        "model_access"
+      ],
+      "next": "n1"
+    },
+    {
+      "id": "n1",
+      "kind": "state.write",
+      "sourceSpan": {
+        "source": "main.ing",
+        "start": 695,
+        "end": 756
+      },
+      "field": "draft",
+      "value": {
+        "kind": "ref",
+        "scope": "binding",
+        "path": [
+          "$tmp0"
+        ]
+      },
+      "next": "n2"
+    },
+    {
+      "id": "n2",
+      "kind": "checkpoint",
+      "sourceSpan": {
+        "source": "main.ing",
+        "start": 761,
+        "end": 781
+      },
+      "label": "drafted",
+      "resumable": true,
+      "next": "n3"
+    },
+    {
+      "id": "n3",
+      "kind": "state.read",
+      "sourceSpan": {
+        "source": "main.ing",
+        "start": 799,
+        "end": 810
+      },
+      "binding": "$state.draft",
+      "field": "draft",
+      "next": "n4"
+    },
+    {
+      "id": "n4",
+      "kind": "artifact.emit",
+      "sourceSpan": {
+        "source": "main.ing",
+        "start": 786,
+        "end": 810
+      },
+      "value": {
+        "kind": "ref",
+        "scope": "binding",
+        "path": [
+          "$state.draft"
+        ]
+      },
+      "output": "notes",
+      "next": null
+    }
+  ]
+}

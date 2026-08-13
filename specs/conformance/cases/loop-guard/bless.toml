@@ -1,0 +1,8 @@
+answers = [
+  "A first line.\n",
+  '''{"text":"A better line.\n","good_enough":false}''',
+  '''{"text":"The best line.\n","good_enough":true}''',
+]
+
+[inputs]
+topic = "iteration"

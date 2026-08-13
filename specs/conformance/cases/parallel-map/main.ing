@@ -1,0 +1,33 @@
+language 0.1
+package conformance.fanned
+
+/// A fan-out over a list, and the list of results it binds.
+///
+/// The node is called `parallel` because it marks an opportunity for
+/// concurrency, not an obligation. This case asserts the **result** and the
+/// per-element events, never the schedule: a backend that runs the body
+/// sequentially and one that runs it concurrently must both pass.
+agent Fanned(topics: string[]) -> digest<markdown> {
+  model requires { structured_output }
+
+  budget {
+    steps <= 4
+  }
+
+  policy {
+    network deny
+  }
+
+  memory {
+    working ephemeral { lines: markdown[] }
+  }
+
+  flow {
+    written = parallel map topics as topic {
+      ask<markdown>("Write one line about ${topic}.")
+    }
+    state.lines = written
+    joined = ask<markdown>("Join these into one paragraph.", context: state.lines)
+    emit digest = joined
+  }
+}

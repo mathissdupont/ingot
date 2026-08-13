@@ -1,0 +1,48 @@
+{
+  "cassetteVersion": "0.2",
+  "agent": "conformance.fanned.Fanned",
+  "inputs": {
+    "topics": [
+      "rivers",
+      "bridges"
+    ]
+  },
+  "interactions": [
+    {
+      "index": 0,
+      "node": "n0",
+      "requestDigest": "eeeee08e9dd5fd962b50df55986a492842d2b04778a8833905c01c1e73e84847",
+      "responseType": "markdown",
+      "value": "About rivers.\n",
+      "usage": {
+        "inputTokens": 100,
+        "outputTokens": 50
+      },
+      "model": "stub-1"
+    },
+    {
+      "index": 1,
+      "node": "n0",
+      "requestDigest": "500ba2b01c0f6549750dd67f34c2ece85da8d4d9e785ac591352491e5bbd59a1",
+      "responseType": "markdown",
+      "value": "About bridges.\n",
+      "usage": {
+        "inputTokens": 100,
+        "outputTokens": 50
+      },
+      "model": "stub-1"
+    },
+    {
+      "index": 2,
+      "node": "n4",
+      "requestDigest": "b6395cbf70770e0b226bc0d955c4bd1d145aa43e2019d416555d627c4c5643d9",
+      "responseType": "markdown",
+      "value": "Rivers, and the bridges over them.\n",
+      "usage": {
+        "inputTokens": 100,
+        "outputTokens": 50
+      },
+      "model": "stub-1"
+    }
+  ]
+}

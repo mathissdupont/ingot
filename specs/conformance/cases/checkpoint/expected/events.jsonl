@@ -1,0 +1,11 @@
+{"event":"runStarted","agent":"conformance.marked.Marked","provider":"replay"}
+{"event":"nodeStarted","node":"n0","kind":"llm.call"}
+{"event":"modelCall","node":"n0","model":"stub-1","responseType":"markdown","usage":{"inputTokens":100,"outputTokens":50}}
+{"event":"nodeStarted","node":"n1","kind":"state.write"}
+{"event":"stateWritten","node":"n1","field":"draft"}
+{"event":"nodeStarted","node":"n2","kind":"checkpoint"}
+{"event":"checkpoint","node":"n2","label":"drafted"}
+{"event":"nodeStarted","node":"n3","kind":"state.read"}
+{"event":"nodeStarted","node":"n4","kind":"artifact.emit"}
+{"event":"emitted","node":"n4","output":"notes"}
+{"event":"runFinished","steps":1,"usage":{"inputTokens":100,"outputTokens":50}}

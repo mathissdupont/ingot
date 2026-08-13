@@ -1,0 +1,177 @@
+{
+  "irVersion": "0.2",
+  "language": "0.1",
+  "agent": "conformance.fanned.Fanned",
+  "doc": "A fan-out over a list, and the list of results it binds.\n\nThe node is called `parallel` because it marks an opportunity for\nconcurrency, not an obligation. This case asserts the **result** and the\nper-element events, never the schedule: a backend that runs the body\nsequentially and one that runs it concurrently must both pass.",
+  "inputs": {
+    "topics": "string[]"
+  },
+  "outputs": {
+    "digest": "artifact<markdown>"
+  },
+  "requirements": {
+    "model": {
+      "mode": "capabilities",
+      "capabilities": [
+        "structured_output"
+      ]
+    }
+  },
+  "state": {
+    "lines": "markdown[]"
+  },
+  "budget": {
+    "steps": 4
+  },
+  "policy": {
+    "network": {
+      "decision": "deny"
+    }
+  },
+  "effects": [
+    "model_access"
+  ],
+  "entry": "n1",
+  "nodes": [
+    {
+      "id": "n0",
+      "kind": "llm.call",
+      "sourceSpan": {
+        "source": "main.ing",
+        "start": 670,
+        "end": 717
+      },
+      "binding": "$tmp0",
+      "prompt": {
+        "kind": "template",
+        "parts": [
+          {
+            "kind": "text",
+            "value": "Write one line about "
+          },
+          {
+            "kind": "value",
+            "value": {
+              "kind": "ref",
+              "scope": "binding",
+              "path": [
+                "topic"
+              ]
+            },
+            "type": "string"
+          },
+          {
+            "kind": "text",
+            "value": "."
+          }
+        ]
+      },
+      "responseType": "markdown",
+      "effects": [
+        "model_access"
+      ],
+      "next": null
+    },
+    {
+      "id": "n1",
+      "kind": "parallel",
+      "sourceSpan": {
+        "source": "main.ing",
+        "start": 633,
+        "end": 723
+      },
+      "binding": "written",
+      "body": "n0",
+      "binder": "topic",
+      "source": {
+        "kind": "ref",
+        "scope": "input",
+        "path": [
+          "topics"
+        ]
+      },
+      "mode": "map",
+      "next": "n2"
+    },
+    {
+      "id": "n2",
+      "kind": "state.write",
+      "sourceSpan": {
+        "source": "main.ing",
+        "start": 728,
+        "end": 749
+      },
+      "field": "lines",
+      "value": {
+        "kind": "ref",
+        "scope": "binding",
+        "path": [
+          "written"
+        ]
+      },
+      "next": "n3"
+    },
+    {
+      "id": "n3",
+      "kind": "state.read",
+      "sourceSpan": {
+        "source": "main.ing",
+        "start": 820,
+        "end": 831
+      },
+      "binding": "$state.lines",
+      "field": "lines",
+      "next": "n4"
+    },
+    {
+      "id": "n4",
+      "kind": "llm.call",
+      "sourceSpan": {
+        "source": "main.ing",
+        "start": 763,
+        "end": 832
+      },
+      "binding": "joined",
+      "prompt": {
+        "kind": "literal",
+        "type": "string",
+        "value": "Join these into one paragraph."
+      },
+      "responseType": "markdown",
+      "args": [
+        {
+          "name": "context",
+          "value": {
+            "kind": "ref",
+            "scope": "binding",
+            "path": [
+              "$state.lines"
+            ]
+          }
+        }
+      ],
+      "effects": [
+        "model_access"
+      ],
+      "next": "n5"
+    },
+    {
+      "id": "n5",
+      "kind": "artifact.emit",
+      "sourceSpan": {
+        "source": "main.ing",
+        "start": 837,
+        "end": 857
+      },
+      "value": {
+        "kind": "ref",
+        "scope": "binding",
+        "path": [
+          "joined"
+        ]
+      },
+      "output": "digest",
+      "next": null
+    }
+  ]
+}

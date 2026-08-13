@@ -1,0 +1,4 @@
+answers = ["A line about checkpoints.\n"]
+
+[inputs]
+topic = "checkpoints"

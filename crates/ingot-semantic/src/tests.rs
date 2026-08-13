@@ -1082,3 +1082,50 @@ agent Fans(topics: string[]) -> log<json> {
         codes_of(&analysis)
     );
 }
+
+#[test]
+fn the_last_expression_of_a_map_body_is_not_a_discarded_value() {
+    // It is the iteration's value — the most used expression in the agent. The
+    // warning fired on it because only a `call` was exempt, and the examples all
+    // used one. Found writing a conformance case for `parallel map`.
+    let analysis = check(
+        r#"
+agent Fanned(topics: string[]) -> digest<markdown> {
+  flow {
+    written = parallel map topics as topic {
+      ask<markdown>("Write about ${topic}.")
+    }
+    emit digest = ask<markdown>("Join these.", context: written)
+  }
+}
+"#,
+    );
+    let discarded: Vec<&str> = analysis
+        .diagnostics
+        .iter()
+        .filter(|d| d.message.contains("discarded"))
+        .map(|d| d.message.as_str())
+        .collect();
+    assert!(discarded.is_empty(), "{discarded:?}");
+}
+
+#[test]
+fn an_expression_that_really_is_discarded_still_warns() {
+    let analysis = check(
+        r#"
+agent Wasteful(topic: string) -> digest<markdown> {
+  flow {
+    ask<markdown>("Write about ${topic}.")
+    emit digest = ask<markdown>("Write again.")
+  }
+}
+"#,
+    );
+    assert!(
+        analysis
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("discarded")),
+        "the warning still has to fire where the value goes nowhere"
+    );
+}
