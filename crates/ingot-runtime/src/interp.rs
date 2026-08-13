@@ -907,12 +907,23 @@ impl Interp<'_> {
 
             // The value of an iteration is the result of the last node in the
             // body — the rule the IR specification states.
+            //
+            // A last node with no binding has no result, so an artifact that
+            // ends a map body with one is malformed. It used to collect `null`
+            // per element instead, which is a list of the right length and the
+            // wrong contents: the failure surfaced wherever the list was
+            // eventually used, a long way from the node that caused it.
             let value = match &last_body_node {
                 Some(id) => {
                     let last = self.node(id)?.clone();
                     match &last.binding {
                         Some(name) => self.bindings.get(name).cloned().unwrap_or(Value::Null),
-                        None => Value::Null,
+                        None => {
+                            return Err(RunError::MalformedIr(format!(
+                                "`{}` ends its body at `{id}`, which binds nothing, so an                                  iteration has no value to collect",
+                                node.id
+                            )))
+                        }
                     }
                 }
                 None => Value::Null,

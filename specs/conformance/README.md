@@ -133,14 +133,70 @@ clauses they pin.
 | `verify-fails` | A check that fails says so, *then* ends the run, and what followed never runs |
 | `verify-no-body` | A verifier with no body is `notPerformed` — never a pass |
 | `replay-mismatch` | A replay whose inputs the recording never saw is refused, not answered from the wrong interaction |
+| `memory-initial` | Persistent memory with no store starts from the value the artifact declares |
+| `loop-guard` | A bounded loop its guard ends before the bound, with each pass numbered |
+| `parallel-map` | A fan-out over a list, and the list of results it binds — the result, never the schedule |
+| `checkpoint` | A checkpoint an uninterrupted run passes through: the event, in order, changing nothing |
+| `budget-exhausted` | A run that outruns its `steps` budget stops at the node that would have exceeded it |
+
+### What these four found
+
+Writing them turned up three real bugs and one false positive, all of which had
+been in a shipped release:
+
+* `parallel map` collected `null` for every element, in **both** backends and in
+  both flagship examples. An iteration's value is the last body node's result,
+  read from that node's binding, and the idiom for a body — a bare expression —
+  lowered to a node with no binding.
+* A loop guard read its state once, before the loop, so a guard over working
+  memory never changed and only `max` ever stopped the loop.
+* The two backends numbered loop iterations differently, because nothing said
+  which. [Runtime 0.1 §9.1](../runtime/v0.1.md) now does.
+* The checker warned that the last expression of a `parallel map` body was a
+  discarded value. It is the iteration's value.
+
+The unit test for `parallel` did not catch the first because it hand-builds its
+IR and gave the node a binding the compiler never emitted. That is the argument
+for an end-to-end suite over a fixture, in one sentence.
 
 ### What is missing, and known to be
 
-No case yet covers a tool call, a sub-agent, a policy denial at run time, a
-budget being exhausted, or a `checkpoint`. Tools and sub-agents are not
-implemented by the Python target, so a case for them would test one backend;
-the others are simply not written. Saying so is the point — a suite that
-implied coverage it does not have would be worse than a small one.
+**A tool call and a sub-agent.** The Python target implements neither, so a case
+for either would test one backend and call it a contract.
+
+**A policy denial at run time.** [Runtime 0.1 §7](../runtime/v0.1.md) requires a
+backend to re-check every effect against the artifact's own policy, because
+whoever runs an artifact is often not whoever built it. Exercising it needs an
+artifact whose policy denies an effect one of its nodes carries — and the
+compiler will not produce one, by construction. A case would have to hand-write
+the artifact instead of deriving it from source, which is the discipline every
+other case rests on. Left uncovered rather than covered dishonestly.
+
+**Resumption.** A request carries an artifact, a cassette and inputs, and
+describes one run. Stopping at a checkpoint and continuing is a property of a
+*sequence* of runs, which this contract shape cannot express — see
+[Runtime 0.5 §4](../runtime/v0.5.md). The end-to-end test for it lives in
+`crates/ingot-cli/tests/resume.rs`.
+
+Saying all this is the point. A suite that implied coverage it does not have
+would be worse than a small one.
+
+## Running it without a checkout
+
+The suite is **built into the `ingot` binary**. There is nothing to clone and no
+version to keep in step: the cases test conformance to the specifications that
+binary was built from, so they travel together.
+
+```console
+$ ingot conform --backend "python my_adapter.py"
+$ ingot conform --list                    # what each case requires, and why
+$ ingot conform --export ./suite          # write the cases out to read or edit
+$ ingot conform --suite ./suite           # run an edited copy
+```
+
+Inside a checkout, `specs/conformance` wins over the built-in copy, so editing a
+case changes what runs. A test compares the two on every build, because a
+built-in copy that quietly drifted from the tree would be worse than none.
 
 ## Writing an adapter
 

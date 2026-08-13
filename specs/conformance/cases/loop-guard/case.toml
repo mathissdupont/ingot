@@ -1,0 +1,7 @@
+what = "A bounded loop that its guard ends before the bound: two iterations, each numbered, and no third."
+outcome = "finished"
+pins = [
+  "Runtime 0.1 §5 — `loop` checks its guard before each iteration and runs the body at most `maxIterations` times",
+  "Runtime 0.1 §9 — `loopIteration` numbers each pass, so a replay is comparable",
+  "Agent IR 0.1 §4 — a loop body is a region reached by `body` and terminated by a null `next`",
+]

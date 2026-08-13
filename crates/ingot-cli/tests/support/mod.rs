@@ -310,6 +310,28 @@ pub fn run_env(args: &[&str], env: &[(&str, &str)]) -> Output {
     command.output().expect("the ingot binary must be runnable")
 }
 
+/// The same, from a chosen working directory.
+///
+/// For commands whose behaviour depends on where they were typed — a run
+/// outside any checkout is the case `ingot conform` most needs to work.
+pub fn run_in(cwd: &Path, args: &[&str]) -> Output {
+    let mut command = Command::new(binary());
+    command
+        .args(args)
+        .arg("--color")
+        .arg("never")
+        .current_dir(cwd);
+    for name in [
+        "ANTHROPIC_API_KEY",
+        "INGOT_ANTHROPIC_BASE_URL",
+        "OPENAI_API_KEY",
+        "INGOT_OPENAI_BASE_URL",
+    ] {
+        command.env_remove(name);
+    }
+    command.output().expect("the ingot binary must be runnable")
+}
+
 pub fn stdout(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }

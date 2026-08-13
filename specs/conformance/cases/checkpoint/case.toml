@@ -1,0 +1,7 @@
+what = "A checkpoint an uninterrupted run passes through: the event is in the stream, in order, and changes nothing else."
+outcome = "finished"
+pins = [
+  "Runtime 0.1 §5 — `checkpoint` emits an event and consumes no step",
+  "Agent IR 0.2 §7.3 — a checkpoint at the top level of a flow carries `resumable`",
+  "Runtime 0.5 §2.2 — a run that passes a checkpoint finishes; only a stop reports `runStopped`",
+]

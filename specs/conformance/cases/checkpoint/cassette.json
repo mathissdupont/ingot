@@ -1,0 +1,21 @@
+{
+  "cassetteVersion": "0.2",
+  "agent": "conformance.marked.Marked",
+  "inputs": {
+    "topic": "checkpoints"
+  },
+  "interactions": [
+    {
+      "index": 0,
+      "node": "n0",
+      "requestDigest": "71daa42cf485c7ff5324574fc14792dee8d23422ee7ad0429069d1f7da80d0ca",
+      "responseType": "markdown",
+      "value": "A line about checkpoints.\n",
+      "usage": {
+        "inputTokens": 100,
+        "outputTokens": 50
+      },
+      "model": "stub-1"
+    }
+  ]
+}

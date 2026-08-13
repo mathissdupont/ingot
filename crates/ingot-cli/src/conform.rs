@@ -160,6 +160,32 @@ impl Report {
 }
 
 /// Every case in a suite directory, in a stable order.
+/// The suite as it was when this binary was compiled.
+///
+/// Embedded so `ingot conform` works from any directory, against any backend,
+/// with no checkout. See `build.rs`.
+mod embedded {
+    include!(concat!(env!("OUT_DIR"), "/conformance_suite.rs"));
+}
+
+/// Write the embedded suite into `dir` and answer where its root is.
+///
+/// Used both to run without a checkout and by `--export`, which is how an
+/// author reads the cases their backend just failed. It is also the only way
+/// out of the binary, which is what lets a test compare what ships against the
+/// tree rather than against another copy of itself.
+pub fn materialise(dir: &Path) -> Result<PathBuf> {
+    for (relative, bytes) in embedded::FILES {
+        let path = dir.join(relative);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("creating {}", parent.display()))?;
+        }
+        std::fs::write(&path, bytes).with_context(|| format!("writing {}", path.display()))?;
+    }
+    Ok(dir.to_path_buf())
+}
+
 pub fn cases(suite: &Path) -> Result<Vec<(String, PathBuf)>> {
     let dir = suite.join("cases");
     let mut found: Vec<(String, PathBuf)> = std::fs::read_dir(&dir)

@@ -1174,3 +1174,122 @@ agent Phases(topic: text) -> report<text> {
         vec![("top", true), ("in-a-branch", false), ("in-a-loop", false),]
     );
 }
+
+// --- what the conformance suite found ---------------------------------------
+
+#[test]
+fn a_map_bodys_last_node_is_named_so_its_value_can_be_read() {
+    // Runtime 0.1 §5: an iteration's value is the result of the last node in
+    // the body, and a backend reads that result from the node's binding. The
+    // idiom is a bare expression, which produced a node with no binding — so
+    // every iteration collected null, in both backends, including in the
+    // flagship example. Found by writing a conformance case for `parallel map`.
+    let compilation = compile(
+        r#"
+agent Fanned(topics: string[]) -> digest<markdown> {
+  flow {
+    written = parallel map topics as topic {
+      ask<markdown>("Write about ${topic}.")
+    }
+    emit digest = ask<markdown>("Join these.", context: written)
+  }
+}
+"#,
+    );
+    let ir = compilation.primary_agent().unwrap();
+    let map = ir
+        .nodes
+        .iter()
+        .find(|node| node.kind == NodeKind::Parallel)
+        .expect("the map is lowered");
+    let body = map.body.as_deref().expect("it has a body");
+    let last = {
+        let mut current = ir.node(body).expect("the body's first node");
+        while let Some(next) = current.next.as_deref() {
+            current = ir.node(next).expect("a linked node");
+        }
+        current
+    };
+    assert!(
+        last.binding.is_some(),
+        "the last node of a map body must be named: {last:?}"
+    );
+}
+
+#[test]
+fn a_loop_guard_re_reads_the_state_it_names() {
+    // A guard is evaluated before every iteration; the read that feeds it
+    // happened once, before the loop. So a guard over working memory never
+    // changed and only `max` ever stopped the loop.
+    let compilation = compile(
+        r#"
+agent Repeated(topic: string) -> notes<markdown> {
+  memory { working ephemeral { draft: markdown, done: bool } }
+  flow {
+    state.draft = ask<markdown>("Write about ${topic}.")
+    state.done = false
+    loop max 3 while !state.done {
+      state.done = true
+    }
+    emit notes = state.draft
+  }
+}
+"#,
+    );
+    let ir = compilation.primary_agent().unwrap();
+    let loop_node = ir
+        .nodes
+        .iter()
+        .find(|node| node.kind == NodeKind::Loop)
+        .expect("the loop is lowered");
+
+    let mut reads_in_body = 0;
+    let mut current = loop_node.body.as_deref();
+    while let Some(id) = current {
+        let node = ir.node(id).expect("a linked node");
+        if node.kind == NodeKind::StateRead && node.field.as_deref() == Some("done") {
+            reads_in_body += 1;
+        }
+        current = node.next.as_deref();
+    }
+    assert_eq!(
+        reads_in_body, 1,
+        "the guard's field must be re-read inside the body, once"
+    );
+}
+
+#[test]
+fn a_loop_guard_over_a_binding_lowers_exactly_as_it_did() {
+    // The refresh is per store field the guard names. A guard that names none
+    // appends nothing, so an existing artifact's bytes do not move.
+    let compilation = compile(
+        r#"
+agent Counted(limit: bool) -> notes<markdown> {
+  memory { working ephemeral { draft: markdown } }
+  flow {
+    state.draft = ask<markdown>("Write.")
+    loop max 3 while limit {
+      state.draft = ask<markdown>("Again.")
+    }
+    emit notes = state.draft
+  }
+}
+"#,
+    );
+    let ir = compilation.primary_agent().unwrap();
+    let loop_node = ir
+        .nodes
+        .iter()
+        .find(|node| node.kind == NodeKind::Loop)
+        .expect("the loop is lowered");
+    let mut current = loop_node.body.as_deref();
+    while let Some(id) = current {
+        let node = ir.node(id).expect("a linked node");
+        assert_ne!(
+            node.kind,
+            NodeKind::StateRead,
+            "nothing to refresh: the guard names no store field"
+        );
+        current = node.next.as_deref();
+    }
+}

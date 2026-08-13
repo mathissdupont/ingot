@@ -1,0 +1,33 @@
+{
+  "cassetteVersion": "0.2",
+  "agent": "conformance.bounded.Bounded",
+  "inputs": {
+    "topic": "bounds"
+  },
+  "interactions": [
+    {
+      "index": 0,
+      "node": "n1",
+      "requestDigest": "f500981c758637f49dacd0bd4d461ee243e788848bf7f6fb88f2228f6c9c99c9",
+      "responseType": "markdown",
+      "value": "First line.\n",
+      "usage": {
+        "inputTokens": 100,
+        "outputTokens": 50
+      },
+      "model": "stub-1"
+    },
+    {
+      "index": 1,
+      "node": "n1",
+      "requestDigest": "f500981c758637f49dacd0bd4d461ee243e788848bf7f6fb88f2228f6c9c99c9",
+      "responseType": "markdown",
+      "value": "Second line.\n",
+      "usage": {
+        "inputTokens": 100,
+        "outputTokens": 50
+      },
+      "model": "stub-1"
+    }
+  ]
+}

@@ -1,0 +1,39 @@
+language 0.1
+package conformance.repeated
+
+type verdict {
+  text: markdown
+  good_enough: bool
+}
+
+/// A bounded loop whose guard stops it before the bound.
+///
+/// `max` is the static bound the compiler enforces; the guard is what usually
+/// ends the loop first. Both matter, and a backend that honoured only one would
+/// pass a case that tested only the other.
+agent Repeated(topic: string) -> notes<markdown> {
+  model requires { structured_output }
+
+  budget {
+    steps <= 4
+  }
+
+  policy {
+    network deny
+  }
+
+  memory {
+    working ephemeral { draft: markdown, done: bool }
+  }
+
+  flow {
+    state.draft = ask<markdown>("Write one line about ${topic}.")
+    state.done = false
+    loop max 4 while !state.done {
+      graded = ask<verdict>("Improve this and say whether it is good enough.")
+      state.draft = graded.text
+      state.done = graded.good_enough
+    }
+    emit notes = state.draft
+  }
+}

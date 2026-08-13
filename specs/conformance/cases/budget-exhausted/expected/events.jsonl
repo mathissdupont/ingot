@@ -1,0 +1,15 @@
+{"event":"runStarted","agent":"conformance.bounded.Bounded","provider":"replay"}
+{"event":"nodeStarted","node":"n0","kind":"loop"}
+{"event":"loopIteration","node":"n0","iteration":1}
+{"event":"nodeStarted","node":"n1","kind":"llm.call"}
+{"event":"modelCall","node":"n1","model":"stub-1","responseType":"markdown","usage":{"inputTokens":100,"outputTokens":50}}
+{"event":"nodeStarted","node":"n2","kind":"state.write"}
+{"event":"stateWritten","node":"n2","field":"latest"}
+{"event":"loopIteration","node":"n0","iteration":2}
+{"event":"nodeStarted","node":"n1","kind":"llm.call"}
+{"event":"modelCall","node":"n1","model":"stub-1","responseType":"markdown","usage":{"inputTokens":100,"outputTokens":50}}
+{"event":"nodeStarted","node":"n2","kind":"state.write"}
+{"event":"stateWritten","node":"n2","field":"latest"}
+{"event":"loopIteration","node":"n0","iteration":3}
+{"event":"nodeStarted","node":"n1","kind":"llm.call"}
+{"event":"runFailed","reason":"the `steps` budget of 2 was exhausted at node `n1`"}

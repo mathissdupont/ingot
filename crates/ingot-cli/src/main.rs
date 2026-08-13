@@ -679,10 +679,20 @@ struct ConformArgs {
     #[arg(long, value_name = "NAME")]
     case: Option<String>,
 
-    /// Where the suite lives. Defaults to `specs/conformance`, searched for
-    /// upward from the working directory.
+    /// Where the suite lives.
+    ///
+    /// Defaults to the copy built into this binary. A checkout is used instead
+    /// when the working directory is inside one, so editing a case in the
+    /// repository changes what runs.
     #[arg(long, value_name = "DIR")]
     suite: Option<PathBuf>,
+
+    /// Write the built-in suite here and run nothing.
+    ///
+    /// For reading the case your backend just failed, and for editing one
+    /// before pointing `--suite` back at it.
+    #[arg(long, value_name = "DIR")]
+    export: Option<PathBuf>,
 
     /// Print what the suite requires, and run nothing.
     #[arg(long)]
@@ -2151,9 +2161,33 @@ fn run_conform(args: &ConformArgs) -> Result<u8> {
         return conform::adapt(request);
     }
 
+    if let Some(dir) = &args.export {
+        std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+        conform::materialise(dir)?;
+        println!(
+            "wrote {} case(s) to {}\n  run them with: ingot conform --suite {}",
+            conform::cases(dir)?.len(),
+            dir.display(),
+            dir.display()
+        );
+        return Ok(EXIT_OK);
+    }
+
+    // Held for the whole command: the embedded suite is written into a
+    // temporary directory, and dropping the guard removes it.
+    let unpacked;
     let suite = match &args.suite {
         Some(path) => path.clone(),
-        None => find_suite()?,
+        None => match find_checkout() {
+            // A checkout wins, so editing a case in the repository changes what
+            // runs. Outside one, the built-in copy is what a downloaded binary
+            // has, and it is the whole point of embedding it.
+            Some(path) => path,
+            None => {
+                unpacked = Unpacked::new()?;
+                conform::materialise(unpacked.path())?
+            }
+        },
     };
 
     if args.list {
@@ -2203,25 +2237,45 @@ fn run_conform(args: &ConformArgs) -> Result<u8> {
 ///
 /// A released binary is usually not standing in the repository, so the failure
 /// says what to pass rather than only that nothing was found.
-fn find_suite() -> Result<PathBuf> {
-    let start = std::env::current_dir().context("reading the working directory")?;
+/// The suite in the surrounding checkout, if the working directory is in one.
+///
+/// Absent is the ordinary case for a downloaded binary, and it is not an error:
+/// the caller falls back to the copy compiled into this one.
+fn find_checkout() -> Option<PathBuf> {
+    let start = std::env::current_dir().ok()?;
     let mut here = start.as_path();
     loop {
         let candidate = here.join("specs").join("conformance");
         if candidate.join("cases").is_dir() {
-            return Ok(candidate);
+            return Some(candidate);
         }
-        match here.parent() {
-            Some(parent) => here = parent,
-            None => break,
-        }
+        here = here.parent()?;
     }
-    bail!(
-        "no conformance suite found in {} or any parent directory\n  \
-         the suite ships in the Ingot repository at `specs/conformance`; \
-         point at a copy with `--suite <dir>`",
-        start.display()
-    )
+}
+
+/// A temporary directory holding the unpacked built-in suite.
+///
+/// Removed on drop. A run leaves nothing behind, which is what lets
+/// `ingot conform` be something you type in any directory.
+struct Unpacked(PathBuf);
+
+impl Unpacked {
+    fn new() -> Result<Unpacked> {
+        let path = std::env::temp_dir().join(format!("ingot-suite-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).with_context(|| format!("creating {}", path.display()))?;
+        Ok(Unpacked(path))
+    }
+
+    fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for Unpacked {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }
 
 // --- dev ------------------------------------------------------------------

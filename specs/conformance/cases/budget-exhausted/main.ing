@@ -1,0 +1,30 @@
+language 0.1
+package conformance.bounded
+
+/// A loop that asks more times than the step budget allows.
+///
+/// The static minimum of a bounded loop is zero — it may run no times — so this
+/// compiles. The bound is reached at run time, which is the only way to exercise
+/// a budget: an artifact the compiler could prove exceeds one never gets built.
+agent Bounded(topic: string) -> notes<markdown> {
+  model requires { structured_output }
+
+  budget {
+    steps <= 2
+  }
+
+  policy {
+    network deny
+  }
+
+  memory {
+    working ephemeral { latest: markdown }
+  }
+
+  flow {
+    loop max 5 {
+      state.latest = ask<markdown>("Write one line about ${topic}.")
+    }
+    emit notes = state.latest
+  }
+}

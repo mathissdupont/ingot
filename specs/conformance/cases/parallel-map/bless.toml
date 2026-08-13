@@ -1,0 +1,8 @@
+answers = [
+  "About rivers.\n",
+  "About bridges.\n",
+  "Rivers, and the bridges over them.\n",
+]
+
+[inputs]
+topics = ["rivers", "bridges"]

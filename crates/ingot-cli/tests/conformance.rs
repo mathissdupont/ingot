@@ -161,3 +161,65 @@ fn an_adapter_refuses_a_contract_version_it_does_not_implement() {
         stderr(&output)
     );
 }
+
+#[test]
+fn the_built_in_suite_is_the_suite_in_the_tree() {
+    // The binary carries a copy, and in a checkout the runner prefers the tree
+    // -- so the two could drift for a whole release without anybody noticing.
+    // This is the only thing that stops that, and it goes through `--export`
+    // rather than the module, so what it compares is what ships.
+    let dir = TempDir::new("suite-drift");
+    let exported = dir.path().join("suite");
+    let output = run(
+        &["conform", "--export", &exported.display().to_string()],
+        None,
+    );
+    assert_eq!(code(&output), EXIT_OK, "{}", stderr(&output));
+
+    let tree = repo_root().join("specs").join("conformance");
+    let mut differing = Vec::new();
+    let mut missing = Vec::new();
+    let mut stack = vec![tree.clone()];
+    while let Some(here) = stack.pop() {
+        for entry in std::fs::read_dir(&here)
+            .expect("reading the suite")
+            .flatten()
+        {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            let relative = path.strip_prefix(&tree).expect("under the suite");
+            // `tools/` is a worked example somebody reads in the repository,
+            // and is deliberately not carried in the binary.
+            if relative.starts_with("tools") {
+                continue;
+            }
+            let copy = exported.join(relative);
+            if !copy.is_file() {
+                missing.push(relative.display().to_string());
+                continue;
+            }
+            if std::fs::read(&path).ok() != std::fs::read(&copy).ok() {
+                differing.push(relative.display().to_string());
+            }
+        }
+    }
+    assert!(missing.is_empty(), "not built into the binary: {missing:?}");
+    assert!(
+        differing.is_empty(),
+        "the built-in copy has drifted: {differing:?}"
+    );
+}
+
+#[test]
+fn the_built_in_suite_runs_with_no_checkout_in_sight() {
+    // The point of embedding it. A backend author downloads the binary, points
+    // it at their command, and gets a verdict -- no clone, nothing to keep in
+    // step with a release.
+    let dir = TempDir::new("suite-standalone");
+    let output = run_in(dir.path(), &["conform", "--list"]);
+    assert_eq!(code(&output), EXIT_OK, "{}", stderr(&output));
+    assert!(stdout(&output).contains("prose"), "{}", stdout(&output));
+}

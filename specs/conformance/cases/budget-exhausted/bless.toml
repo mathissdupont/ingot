@@ -1,0 +1,10 @@
+answers = [
+  "First line.\n",
+  "Second line.\n",
+  "Third line.\n",
+  "Fourth line.\n",
+  "Fifth line.\n",
+]
+
+[inputs]
+topic = "bounds"

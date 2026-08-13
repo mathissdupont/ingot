@@ -39,7 +39,24 @@ Then the revisions, each short: **[0.2](../../specs/runtime/v0.2.md)** (the
 `verify` outcome, recorded tool calls, charged cost),
 **[0.3](../../specs/runtime/v0.3.md)** (streaming, and the live channel that is
 not the event stream), **[0.4](../../specs/runtime/v0.4.md)** (a `verify` that
-runs, and a failed check that stops the run).
+runs, and a failed check that stops the run),
+**[0.5](../../specs/runtime/v0.5.md)** (persistent memory, and a checkpoint a
+run can stop at).
+
+## Before anything: run the suite
+
+The cases are built into the `ingot` binary. Download it, point it at a command,
+and you have a verdict — there is nothing to clone and no version to keep in
+step.
+
+```sh
+ingot conform --list                      # what each case requires, and why
+ingot conform --backend "python adapter.py"
+ingot conform --export ./suite            # write the cases out to read
+```
+
+An empty backend fails every case, which is the right starting score and a
+useful check that your command is being invoked at all.
 
 ## The order to build it in
 
@@ -153,7 +170,8 @@ ingot conform --backend "python my-backend/adapter.py"
 ```
 
 Every case names the clause it holds you to, so a failure tells you what to read
-rather than only that something differs.
+rather than only that something differs. `--export` writes the case out when
+reading the fixture is faster than reading the clause.
 
 ## When you disagree with the reference
 
@@ -165,6 +183,13 @@ the one that was wrong.
 
 So: **the specification decides.** If it is silent, that is the most valuable
 thing you can find, and an issue saying so is worth more than a workaround.
+
+It keeps happening. Adding cases for `parallel map`, `loop`, `checkpoint` and an
+exhausted budget turned up three more: `parallel map` was collecting `null` for
+every element in **both** backends, a loop guard over working memory never
+changed so only `max` ever stopped the loop, and the two backends numbered loop
+iterations differently because nothing said which. Two implementations and a
+shared suite is the only arrangement that finds these.
 
 ## What is not settled yet
 

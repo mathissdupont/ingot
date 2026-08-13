@@ -1,0 +1,136 @@
+{
+  "irVersion": "0.2",
+  "language": "0.1",
+  "agent": "conformance.bounded.Bounded",
+  "doc": "A loop that asks more times than the step budget allows.\n\nThe static minimum of a bounded loop is zero — it may run no times — so this\ncompiles. The bound is reached at run time, which is the only way to exercise\na budget: an artifact the compiler could prove exceeds one never gets built.",
+  "inputs": {
+    "topic": "string"
+  },
+  "outputs": {
+    "notes": "artifact<markdown>"
+  },
+  "requirements": {
+    "model": {
+      "mode": "capabilities",
+      "capabilities": [
+        "structured_output"
+      ]
+    }
+  },
+  "state": {
+    "latest": "markdown"
+  },
+  "budget": {
+    "steps": 2
+  },
+  "policy": {
+    "network": {
+      "decision": "deny"
+    }
+  },
+  "effects": [
+    "model_access"
+  ],
+  "entry": "n0",
+  "nodes": [
+    {
+      "id": "n0",
+      "kind": "loop",
+      "sourceSpan": {
+        "source": "main.ing",
+        "start": 581,
+        "end": 668
+      },
+      "body": "n1",
+      "maxIterations": 5,
+      "next": "n3"
+    },
+    {
+      "id": "n1",
+      "kind": "llm.call",
+      "sourceSpan": {
+        "source": "main.ing",
+        "start": 615,
+        "end": 662
+      },
+      "binding": "$tmp0",
+      "prompt": {
+        "kind": "template",
+        "parts": [
+          {
+            "kind": "text",
+            "value": "Write one line about "
+          },
+          {
+            "kind": "value",
+            "value": {
+              "kind": "ref",
+              "scope": "input",
+              "path": [
+                "topic"
+              ]
+            },
+            "type": "string"
+          },
+          {
+            "kind": "text",
+            "value": "."
+          }
+        ]
+      },
+      "responseType": "markdown",
+      "effects": [
+        "model_access"
+      ],
+      "next": "n2"
+    },
+    {
+      "id": "n2",
+      "kind": "state.write",
+      "sourceSpan": {
+        "source": "main.ing",
+        "start": 600,
+        "end": 662
+      },
+      "field": "latest",
+      "value": {
+        "kind": "ref",
+        "scope": "binding",
+        "path": [
+          "$tmp0"
+        ]
+      },
+      "next": null
+    },
+    {
+      "id": "n3",
+      "kind": "state.read",
+      "sourceSpan": {
+        "source": "main.ing",
+        "start": 686,
+        "end": 698
+      },
+      "binding": "$state.latest",
+      "field": "latest",
+      "next": "n4"
+    },
+    {
+      "id": "n4",
+      "kind": "artifact.emit",
+      "sourceSpan": {
+        "source": "main.ing",
+        "start": 673,
+        "end": 698
+      },
+      "value": {
+        "kind": "ref",
+        "scope": "binding",
+        "path": [
+          "$state.latest"
+        ]
+      },
+      "output": "notes",
+      "next": null
+    }
+  ]
+}

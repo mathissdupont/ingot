@@ -1956,3 +1956,54 @@ fn resuming_against_a_changed_artifact_is_refused() {
         .to_string()
         .contains("has changed since the run stopped"));
 }
+
+#[test]
+fn a_map_body_that_ends_in_an_unbound_node_is_refused() {
+    // Runtime 0.1 §5 says an iteration's value is the last body node's result.
+    // A node that binds nothing has no result, and collecting `null` for it
+    // produced a list of the right length and the wrong contents — a failure
+    // that surfaced wherever the list was used, far from its cause.
+    let mut ir = base("test.Mapper");
+    ir.inputs.insert("items".into(), "string[]".into());
+    ir.outputs.insert("out".into(), "artifact<json>".into());
+    ir.entry = Some("n0".into());
+
+    let mut map = Node::new("n0", NodeKind::Parallel);
+    map.binding = Some("results".into());
+    map.mode = Some("map".into());
+    map.binder = Some("item".into());
+    map.source = Some(IrValue::Ref {
+        scope: RefScope::Input,
+        path: vec!["items".into()],
+    });
+    map.body = Some("n1".into());
+    map.next = Some("n2".into());
+
+    let mut emit_node = Node::new("n2", NodeKind::ArtifactEmit);
+    emit_node.output = Some("out".into());
+    emit_node.value = Some(IrValue::Ref {
+        scope: RefScope::Binding,
+        path: vec!["results".into()],
+    });
+
+    ir.nodes = vec![
+        map,
+        // No binding: the shape the compiler used to emit for a bare
+        // expression body.
+        llm("n1", None, "process", "markdown", None),
+        emit_node,
+    ];
+
+    let mut provider = ScriptedProvider::new(vec![json!("a-done")]);
+    let mut tools = DenyAllTools;
+    let (result, _) = run_with(
+        &ir,
+        &mut provider,
+        &mut tools,
+        [("items".to_string(), json!(["a"]))].into(),
+    );
+    let error = result.expect_err("an unbound last node has no value");
+    let text = error.to_string();
+    assert!(text.contains("binds nothing"), "{text}");
+    assert!(text.contains("n1"), "{text}");
+}

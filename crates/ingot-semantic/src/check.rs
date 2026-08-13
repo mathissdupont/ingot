@@ -45,6 +45,18 @@ struct AgentSignature {
     span: Span,
 }
 
+/// What happens to the last statement of a block.
+///
+/// Only a `parallel map` body has a value; every other block is performed for
+/// its effects. Without the distinction the checker warns that the one
+/// expression whose value is definitely used is being discarded — which is how
+/// this was found, writing a conformance case for `parallel map`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Tail {
+    Discarded,
+    IsTheValue,
+}
+
 #[derive(Debug)]
 struct Binding {
     ty: Ty,
@@ -776,7 +788,12 @@ impl<'a> Checker<'a> {
             Some(flow) => {
                 ctx.push_scope(true);
                 let policy_for_flow = policy.clone();
-                self.check_block(&mut ctx, &flow.statements, &policy_for_flow);
+                self.check_block(
+                    &mut ctx,
+                    &flow.statements,
+                    &policy_for_flow,
+                    Tail::Discarded,
+                );
                 self.close_scope(&mut ctx);
                 self.check_output_emission(decl, flow, &ctx);
                 self.check_static_steps(decl, flow, &budget);
@@ -1364,9 +1381,12 @@ impl<'a> Checker<'a> {
         ctx: &mut FlowCtx,
         statements: &[Stmt],
         policy: &BTreeMap<PolicySubject, PolicyRuleInfo>,
+        tail: Tail,
     ) {
-        for statement in statements {
-            self.check_statement(ctx, statement, policy);
+        for (index, statement) in statements.iter().enumerate() {
+            let last = index + 1 == statements.len();
+            let yields = last && tail == Tail::IsTheValue;
+            self.check_statement(ctx, statement, policy, yields);
         }
     }
 
@@ -1398,6 +1418,8 @@ impl<'a> Checker<'a> {
         ctx: &mut FlowCtx,
         statement: &Stmt,
         policy: &BTreeMap<PolicySubject, PolicyRuleInfo>,
+        // Whether this statement's value is the enclosing block's.
+        yields: bool,
     ) {
         match statement {
             Stmt::Bind { name, value, .. } => {
@@ -1450,8 +1472,13 @@ impl<'a> Checker<'a> {
             }
             Stmt::Expr { value, .. } => {
                 let ty = self.check_expr(ctx, value, policy);
+                // A `call` is performed for its effect, so a bare one is
+                // ordinary. Anything else standing alone is computed and thrown
+                // away -- unless it is the last statement of a `parallel map`
+                // body, where it is the iteration's value and the most used
+                // expression in the agent.
                 let is_call = matches!(value, Expr::Call { .. });
-                if !is_call && !ty.is_unknown() {
+                if !is_call && !yields && !ty.is_unknown() {
                     self.diagnostics.push(
                         Diagnostic::warning(
                             codes::UNUSED_BINDING,
@@ -1537,11 +1564,11 @@ impl<'a> Checker<'a> {
                     );
                 }
                 ctx.push_scope(true);
-                self.check_block(ctx, then_branch, policy);
+                self.check_block(ctx, then_branch, policy, Tail::Discarded);
                 self.close_scope(ctx);
                 if let Some(else_branch) = else_branch {
                     ctx.push_scope(true);
-                    self.check_block(ctx, else_branch, policy);
+                    self.check_block(ctx, else_branch, policy, Tail::Discarded);
                     self.close_scope(ctx);
                 }
             }
@@ -1585,7 +1612,7 @@ impl<'a> Checker<'a> {
                     }
                 }
                 ctx.push_scope(true);
-                self.check_block(ctx, body, policy);
+                self.check_block(ctx, body, policy, Tail::Discarded);
                 self.close_scope(ctx);
             }
             Stmt::Checkpoint { label, span } => {
@@ -1873,7 +1900,7 @@ impl<'a> Checker<'a> {
                 ctx.parallel_depth += 1;
                 ctx.push_scope(true);
                 ctx.insert(binder.text.clone(), element, binder.span);
-                self.check_block(ctx, body, policy);
+                self.check_block(ctx, body, policy, Tail::IsTheValue);
 
                 let result = match body.last() {
                     Some(Stmt::Expr { value, .. }) => self
