@@ -1423,7 +1423,8 @@ fn anthropic(selection: &ProviderSelection) -> Result<Box<dyn ModelProvider>> {
             ingot_runtime::anthropic::AnthropicProvider::from_env()
                 .map_err(anyhow::Error::msg)?
                 .with_model(selection.model.clone())
-                .with_effort(selection.effort.clone()),
+                .with_effort(selection.effort.clone())
+                .with_catalogue(selection.models.clone()),
         ))
     }
     #[cfg(not(feature = "anthropic"))]
@@ -1444,7 +1445,8 @@ fn openai(selection: &ProviderSelection) -> Result<Box<dyn ModelProvider>> {
             ingot_runtime::openai::OpenAiProvider::from_env()
                 .map_err(anyhow::Error::msg)?
                 .with_model(selection.model.clone())
-                .with_effort(selection.effort.clone()),
+                .with_effort(selection.effort.clone())
+                .with_catalogue(selection.models.clone()),
         ))
     }
     #[cfg(not(feature = "openai"))]
@@ -1465,7 +1467,8 @@ fn google(selection: &ProviderSelection) -> Result<Box<dyn ModelProvider>> {
             ingot_runtime::google::GoogleProvider::from_env()
                 .map_err(anyhow::Error::msg)?
                 .with_model(selection.model.clone())
-                .with_effort(selection.effort.clone()),
+                .with_effort(selection.effort.clone())
+                .with_catalogue(selection.models.clone()),
         ))
     }
     #[cfg(not(feature = "google"))]

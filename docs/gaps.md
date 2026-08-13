@@ -50,6 +50,8 @@ to you*.
 | [GAP-035](#gap-035) | Two runs sharing one memory store are not made safe | Refused | a lock, or a per-field merge with a conflict model |
 | [GAP-036](#gap-036) | A generated Python program cannot be resumed | Refused | a node walker in the generated code, at the cost of its readability |
 | [GAP-037](#gap-037) | A remote tool server cannot be used under a boundary | Refused | a channel for a tool call out of a contained run |
+| [GAP-038](#gap-038) | No backend outside this repository has ever run the suite | Unproven | somebody else's backend, and what they hit |
+| [GAP-039](#gap-039) | No agent outside this repository is known to run | Unproven | a program somebody depends on, and its friction |
 
 ---
 
@@ -62,6 +64,10 @@ you to believe something the toolchain does not check.
 worth saying rather than deleting the heading — the class exists, this project
 has had entries in it, and an empty section is a claim that can be falsified
 next week.
+
+The **Unproven** section below was empty on the same terms until 2026-08-13, and
+is not any more. An empty class is a claim, and this one turned out to be
+false.
 
 ---
 
@@ -469,6 +475,62 @@ deliberately, which is the case this entry exists to warn.
 
 *Recorded in.* [RFC-0018 §5](../rfcs/0018-state-that-outlives-a-run.md),
 `crates/ingot-cli/src/memory.rs`.
+
+---
+
+## Unproven
+
+A claim the project makes that nothing yet demonstrates. Not a limitation — a
+limitation is something we know. These are the places where we do not, and where
+being wrong would be expensive.
+
+Every milestone is done, which is exactly why this section is no longer empty:
+the question stopped being *is it built* and became *does it survive contact
+with somebody who did not build it*. Two entries, and they are the same shape.
+
+### GAP-038
+
+**No backend outside this repository has ever run the conformance suite.**
+
+Both backends the suite tests were written by the people who wrote the suite,
+against the specifications they also wrote. The claim it exists to support —
+*somebody else can implement Agent IR from the specification, and find out where
+they are wrong* — has not been tested by anybody else.
+
+*Why it is not nothing.* The suite has already earned its keep. Its first run
+across the two shipped backends found the reference writing `response_type`
+where the specification and the second backend said `responseType`, and the four
+cases added for M8 found three more bugs. Two implementations catch what one
+cannot. But two implementations sharing a set of assumptions catch less than
+they look like they do, and nobody outside has stress-tested the assumptions.
+
+*What closing it needs.* One backend somebody else wrote, and an honest account
+of what they hit. The likely findings are not bugs in the cases — they are
+places the specification is silent, or clear only to somebody who already knew
+the answer.
+
+*Recorded in.* [`specs/conformance/README.md`](../specs/conformance/README.md),
+[the backend author's guide](guide/writing-a-backend.md).
+
+### GAP-039
+
+**No agent outside this repository is known to run.**
+
+Every `.ing` program here was written to exercise the compiler. They are
+examples, and they are honest ones — they compile, they run, their cassettes
+replay. None of them is a thing anybody depends on.
+
+*Why it matters more than it sounds.* The gap register records limitations the
+project *knows about*. A program written to exercise a compiler finds the
+limitations the compiler's author thought to look for. The friction that stops
+somebody using a language is usually not on this list, because nobody has hit
+it yet.
+
+*Why it is stated rather than fixed.* Writing a program and calling it a user is
+not evidence, and would be the least honest entry in this file. The only thing
+that closes this is somebody depending on one.
+
+*Recorded in.* [`examples/`](../examples/), [`docs/vision.md`](vision.md).
 
 ---
 

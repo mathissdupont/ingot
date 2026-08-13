@@ -63,7 +63,7 @@ pub fn build(source: Option<&Path>) -> Result<u8> {
 
 /// The digest an image reference pins, when it pins one.
 ///
-/// `ingot/run@sha256:…` names bytes; `ingot/run:0.4.0` names a tag, which is a
+/// `ingot/run@sha256:…` names bytes; `ingot/run:0.5.0` names a tag, which is a
 /// label somebody can move. Both are legitimate — this only says which one you
 /// wrote.
 pub fn pinned_digest(image: &str) -> Option<&str> {

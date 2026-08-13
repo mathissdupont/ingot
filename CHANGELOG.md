@@ -8,6 +8,39 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-08-13
+
+The release where a declaration outlives the run that made it, and where the
+suite that checks a backend became something you can install rather than
+something you can read.
+
+Since 0.4.0: a `verify` carries the check it names and a failed one ends the
+run; the Python backend streams, so both backends accept the same answer; there
+is a conformance suite, built into the binary, that has already found four real
+divergences between them; an agent can keep state between runs and be stopped at
+a checkpoint and continued; a tool server can be reached over a network without
+`network deny` ceasing to mean what it says; and what a model can do is
+configuration rather than a constant in this binary.
+
+**Every milestone is done.** M8 was the last, and the gap register's `Unproven`
+class is no longer empty as a result — see
+[GAP-038](docs/gaps.md#gap-038) and [GAP-039](docs/gaps.md#gap-039). The
+question stopped being whether it is built.
+
+**A catalogue the operator owns** (closes nothing; prevents a class of
+staleness)
+
+- `[[model.catalogue]]` declares what a model provides — its context window and
+  its capabilities — beside the prices and for the same reason: these facts are
+  provider- and time-dependent.
+- They used to be `const`s in one provider module, which meant a model growing a
+  larger window was a code change and a release, and that `model requires { … }`
+  worked for one vendor of three. OpenAI and Google refused it outright, saying
+  they had "no catalogue to match them against".
+- All three providers now resolve through one function, so they cannot answer
+  the same question differently. An unknown context window does not satisfy a
+  requirement, and a refusal names every candidate and what each was short of.
+
 **A conformance suite you can install** (closes M8)
 
 - The suite is **built into the `ingot` binary**. `ingot conform` works from any
@@ -1256,7 +1289,8 @@ Backends, packaging and the language server are not part of this release.
 - `Ingot` is a working name. Trademark, domain and registry clearance has not
   been carried out and requires legal review before any public release.
 
-[Unreleased]: https://github.com/mathissdupont/ingot/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/mathissdupont/ingot/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/mathissdupont/ingot/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/mathissdupont/ingot/compare/v0.4.0-rc.2...v0.4.0
 [0.4.0-rc.2]: https://github.com/mathissdupont/ingot/compare/v0.4.0-rc.1...v0.4.0-rc.2
 [0.4.0-rc.1]: https://github.com/mathissdupont/ingot/releases/tag/v0.4.0-rc.1
