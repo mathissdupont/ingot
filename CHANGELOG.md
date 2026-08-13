@@ -8,6 +8,39 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
 
 ## [Unreleased]
 
+**A conformance suite you can install** (closes M8)
+
+- The suite is **built into the `ingot` binary**. `ingot conform` works from any
+  directory against any backend command — no clone, and no version to keep in
+  step, because the cases test conformance to the specifications that binary was
+  built from.
+- `ingot conform --export <DIR>` writes the cases out to read or edit;
+  `--suite <DIR>` runs an edited copy. Inside a checkout the tree still wins, so
+  editing a case changes what runs, and a test compares the two on every build.
+- Four new cases: `loop-guard`, `parallel-map`, `checkpoint` and
+  `budget-exhausted`. Twelve in total, and both backends pass all of them.
+- The suite's README now says precisely what is *not* covered and why: a tool
+  call and a sub-agent, because the Python target implements neither; a
+  run-time policy denial, because exercising it needs a hand-written artifact
+  the compiler will not produce; and resumption, because the request shape
+  describes one run.
+
+**Three bugs the four new cases found**
+
+- `parallel map` collected `null` for every element, in both backends and in
+  both flagship examples. An iteration's value is read from the last body node's
+  binding, and the idiom — a bare expression — lowered to a node with none.
+  The interpreter now refuses such a node rather than collecting `null`.
+- A loop guard read its state once, before the loop, so a guard over working
+  memory never changed and only `max` ever stopped the loop.
+- The two backends numbered loop iterations differently.
+  [Runtime 0.1 §9.1](specs/runtime/v0.1.md) now says which: an *index* counts
+  from zero, an *iteration* from one.
+- And a false positive: the checker warned that the last expression of a
+  `parallel map` body was a discarded value. It is the iteration's value.
+
+The golden IR moves for both examples: a map body's last node gains its binding.
+
 **A tool server that is not a child process** (MCP binding 0.2; closes
 [GAP-007](docs/gaps.md#gap-007), opens [GAP-037](docs/gaps.md#gap-037),
 specified in

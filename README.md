@@ -367,13 +367,13 @@ Start here:
 | M5 | a second backend and the portability report | done |
 | M6 | OCI artifact, lockfile, reproducible digest | done |
 | M7 | language server and editor support | done |
-| M8 | conformance suite and backend author guide | planned |
+| M8 | conformance suite and backend author guide | done |
 | M9 | Ingot Containers — the policy block as an enforced boundary | done |
 | M10 | `ingot new` — authoring with a model, verified by the compiler | done |
 | M11 | integrated `.ing` product loop: templates, `dev`, trace, readiness and safe-run UX | done |
 
 A number is an identity, not a position in a queue; things get referenced by it,
-so they keep it. The remaining milestone is **M8**.
+so they keep it. Every milestone is now done.
 [RFC-0007](rfcs/0007-the-ingot-product-loop.md) explains why the
 usable language loop comes before generation and packaging.
 
