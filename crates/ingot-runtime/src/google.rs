@@ -31,6 +31,7 @@ use std::time::Duration;
 
 use serde_json::{json, Map, Value};
 
+use crate::catalogue::ModelConfig;
 use crate::http::{self, DEFAULT_MAX_RETRIES, DEFAULT_TIMEOUT};
 use crate::provider::{
     CompletionRequest, CompletionResponse, DeltaSink, ModelProvider, ModelSelection, ProviderError,
@@ -54,6 +55,14 @@ pub struct GoogleProvider {
     max_retries: u32,
     timeout: Duration,
     base_url: String,
+    /// What each model provides, so a capability requirement can be matched.
+    ///
+    /// Held by the provider rather than passed per call because it is
+    /// deployment configuration: it does not change between two calls of one
+    /// run, and threading it through every request would put it in the cassette
+    /// digest, where a manifest edit would invalidate a recording that has
+    /// nothing to do with it.
+    catalogue: ModelConfig,
 }
 
 impl GoogleProvider {
@@ -85,6 +94,7 @@ impl GoogleProvider {
         GoogleProvider {
             api_key: api_key.into(),
             model_override: None,
+            catalogue: ModelConfig::default(),
             effort: None,
             max_retries: DEFAULT_MAX_RETRIES,
             timeout: DEFAULT_TIMEOUT,
@@ -94,6 +104,16 @@ impl GoogleProvider {
 
     pub fn with_model(mut self, model: Option<String>) -> Self {
         self.model_override = model;
+        self
+    }
+
+    /// The models this deployment knows about.
+    ///
+    /// Without one, only the built-in entries apply — which is what a
+    /// test or an embedder that never reads a manifest gets, and it is
+    /// enough for a pinned model.
+    pub fn with_catalogue(mut self, catalogue: ModelConfig) -> Self {
+        self.catalogue = catalogue;
         self
     }
 
@@ -128,18 +148,13 @@ impl GoogleProvider {
                  pin one in the source with `model exact \"google/<model>\"`, or pass --model"
                     .to_string(),
             )),
-            ModelSelection::Capabilities { capabilities, .. } => {
-                Err(ProviderError::Configuration(format!(
-                    "this artifact requires capabilities ({}) rather than naming a model, and \
-                     this provider has no catalogue to match them against.\n  \
-                     pin one with `model exact \"google/<model>\"`, or pass --model",
-                    if capabilities.is_empty() {
-                        "none listed".to_string()
-                    } else {
-                        capabilities.join(", ")
-                    }
-                )))
-            }
+            ModelSelection::Capabilities {
+                capabilities,
+                min_context_tokens,
+            } => self
+                .catalogue
+                .resolve_capabilities(PROVIDER, capabilities, *min_context_tokens)
+                .map_err(ProviderError::Configuration),
         }
     }
 

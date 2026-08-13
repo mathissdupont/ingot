@@ -21,6 +21,7 @@ use std::time::Duration;
 
 use serde_json::{json, Map, Value};
 
+use crate::catalogue::ModelConfig;
 use crate::http::{self, DEFAULT_MAX_RETRIES, DEFAULT_TIMEOUT};
 use crate::provider::{
     CompletionRequest, CompletionResponse, DeltaSink, ModelProvider, ModelSelection, ProviderError,
@@ -38,19 +39,6 @@ pub const PROVIDER: &str = "anthropic";
 /// artifact pins one.
 pub const DEFAULT_MODEL: &str = "claude-opus-5";
 
-/// Context window of [`DEFAULT_MODEL`], for checking `context >= N` requirements.
-const DEFAULT_MODEL_CONTEXT_TOKENS: i64 = 1_000_000;
-
-/// Capabilities [`DEFAULT_MODEL`] provides, for checking `model requires { ... }`.
-const DEFAULT_MODEL_CAPABILITIES: &[&str] = &[
-    "tool_calling",
-    "structured_output",
-    "streaming",
-    "vision",
-    "reasoning",
-    "parallel_tool_calls",
-];
-
 pub struct AnthropicProvider {
     api_key: String,
     /// Overrides whatever the artifact asks for. Set from `--model`.
@@ -60,6 +48,14 @@ pub struct AnthropicProvider {
     max_retries: u32,
     timeout: Duration,
     base_url: String,
+    /// What each model provides, so a capability requirement can be matched.
+    ///
+    /// Held by the provider rather than passed per call because it is
+    /// deployment configuration: it does not change between two calls of one
+    /// run, and threading it through every request would put it in the cassette
+    /// digest, where a manifest edit would invalidate a recording that has
+    /// nothing to do with it.
+    catalogue: ModelConfig,
 }
 
 impl AnthropicProvider {
@@ -79,6 +75,7 @@ impl AnthropicProvider {
         AnthropicProvider {
             api_key: api_key.into(),
             model_override: None,
+            catalogue: ModelConfig::default(),
             effort: None,
             max_retries: DEFAULT_MAX_RETRIES,
             timeout: DEFAULT_TIMEOUT,
@@ -88,6 +85,16 @@ impl AnthropicProvider {
 
     pub fn with_model(mut self, model: Option<String>) -> Self {
         self.model_override = model;
+        self
+    }
+
+    /// The models this deployment knows about.
+    ///
+    /// Without one, only the built-in entries apply — which is what a
+    /// test or an embedder that never reads a manifest gets, and it is
+    /// enough for a pinned model.
+    pub fn with_catalogue(mut self, catalogue: ModelConfig) -> Self {
+        self.catalogue = catalogue;
         self
     }
 
@@ -117,25 +124,10 @@ impl AnthropicProvider {
             ModelSelection::Capabilities {
                 capabilities,
                 min_context_tokens,
-            } => {
-                for capability in capabilities {
-                    if !DEFAULT_MODEL_CAPABILITIES.contains(&capability.as_str()) {
-                        return Err(ProviderError::Configuration(format!(
-                            "the artifact requires the `{capability}` capability, which \
-                             {DEFAULT_MODEL} does not advertise; pin a model with `--model`"
-                        )));
-                    }
-                }
-                if let Some(required) = min_context_tokens {
-                    if *required > DEFAULT_MODEL_CONTEXT_TOKENS {
-                        return Err(ProviderError::Configuration(format!(
-                            "the artifact requires a {required}-token context window, but \
-                             {DEFAULT_MODEL} provides {DEFAULT_MODEL_CONTEXT_TOKENS}"
-                        )));
-                    }
-                }
-                Ok(DEFAULT_MODEL.to_string())
-            }
+            } => self
+                .catalogue
+                .resolve_capabilities(PROVIDER, capabilities, *min_context_tokens)
+                .map_err(ProviderError::Configuration),
         }
     }
 
@@ -598,14 +590,41 @@ mod tests {
     }
 
     #[test]
-    fn a_context_requirement_beyond_the_model_is_refused() {
+    fn a_context_requirement_beyond_every_known_model_is_refused() {
+        // The number is the operator's now, not a constant in this file, so the
+        // test asks for more than anything in the catalogue rather than more
+        // than one hardcoded window.
         let error = provider()
             .resolve_model(&ModelSelection::Capabilities {
                 capabilities: vec![],
-                min_context_tokens: Some(DEFAULT_MODEL_CONTEXT_TOKENS + 1),
+                min_context_tokens: Some(i64::MAX),
             })
             .unwrap_err();
-        assert!(error.to_string().contains("context window"), "{error}");
+        let text = error.to_string();
+        assert!(text.contains("context"), "{text}");
+        assert!(text.contains("[[model.catalogue]]"), "{text}");
+    }
+
+    #[test]
+    fn a_declared_model_satisfies_what_no_built_in_one_does() {
+        // The point of moving these facts out of this file: a window growing is
+        // a line in a manifest, not a release of Ingot.
+        let catalogue = ModelConfig {
+            catalogue: vec![crate::catalogue::ModelEntry {
+                model: "anthropic/claude-vast".to_string(),
+                context: Some(2_000_000),
+                capabilities: vec!["structured_output".to_string()],
+            }],
+            ..ModelConfig::default()
+        };
+        let chosen = provider()
+            .with_catalogue(catalogue)
+            .resolve_model(&ModelSelection::Capabilities {
+                capabilities: vec!["structured_output".to_string()],
+                min_context_tokens: Some(2_000_000),
+            })
+            .expect("the declared model satisfies it");
+        assert_eq!(chosen, "claude-vast");
     }
 
     #[test]

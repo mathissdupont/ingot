@@ -298,6 +298,44 @@ editing a single agent.
 | `anthropic` | Anthropic, and gateways fronting it | the full endpoint |
 | `google` | Gemini | the API base — this protocol puts the model and the method in the path |
 
+### Asking for a capability instead of a model
+
+An agent can state what it needs rather than which model provides it:
+
+```ingot
+model requires {
+  structured_output
+  context >= 128k
+}
+```
+
+That has to be matched against something, and what it is matched against is the
+**catalogue** — the same manifest, beside the prices:
+
+```toml
+[[model.catalogue]]
+model = "openai/gpt-5.1"          # `vendor/model`, as `model exact` spells it
+context = 400000                  # tokens; absent means unknown
+capabilities = ["tool_calling", "structured_output", "streaming", "vision"]
+```
+
+The first entry of that vendor which satisfies the requirement answers, so
+declaration order is preference order and it is yours. Ingot carries a small
+built-in catalogue so `model requires` works out of the box; a declared entry
+for the same model **replaces** it rather than merging, because a
+half-overridden model is a set of facts from two places that matches neither.
+
+A model's context window and capabilities change on the vendor's schedule, not
+on this project's. Keeping them here is what stops a model growing a larger
+window from being a code change and a release — and it is why an artifact
+asking for `context >= 2m` is a line in your manifest away from working rather
+than a version of Ingot away.
+
+An **unknown** window does not satisfy a requirement. Guessing would turn a
+refusal you can fix into a provider error at the first long prompt, a long way
+from its cause. When nothing matches, the refusal names every candidate and
+what each one was short of.
+
 A third protocol exists for one reason: Gemini is the vendor that cannot be
 reached by pretending to be something else. Anything already speaking one of the
 first two needs no code here, only a `base-url`.

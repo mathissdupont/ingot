@@ -34,6 +34,26 @@
 //! reached by pretending to be something else. Anything that already speaks one
 //! of the first two needs no code, only a `base-url`.
 //!
+//! # What a model can do, as opposed to where it is
+//!
+//! `model requires { structured_output, context >= 128k }` has to be matched
+//! against something. That something is also here:
+//!
+//! ```toml
+//! [[model.catalogue]]
+//! model = "openai/gpt-5.1"
+//! context = 400000
+//! capabilities = ["tool_calling", "structured_output", "streaming"]
+//! ```
+//!
+//! These facts used to be `const`s in a provider module, which had two costs. A
+//! model growing a larger context window was a code change and a release. And
+//! only one of the three providers had them at all — the other two refused a
+//! capability requirement outright, saying they had "no catalogue to match them
+//! against". This is that catalogue, and all three now consult it through
+//! [`ModelConfig::resolve_capabilities`], so they cannot answer the same
+//! question differently.
+//!
 //! `base-url` is a complete endpoint for `openai` and `anthropic`. For `google`
 //! it is the API base, because that protocol puts the model and the method in
 //! the path — see [`ProviderKind::base_url_is_an_endpoint`].
@@ -134,11 +154,204 @@ pub struct ModelConfig {
     /// an artifact carrying one would be stale the moment it was published.
     #[serde(default, rename = "price", skip_serializing_if = "Vec::is_empty")]
     pub prices: Vec<crate::price::ModelPrice>,
+    /// What each model can do, so `model requires { ... }` can be matched
+    /// against something.
+    ///
+    /// Deployment configuration for the same reason a price is: a model's
+    /// context window and capabilities change on the vendor's schedule, not on
+    /// this project's release schedule. They used to be `const`s in a provider
+    /// module, which meant a model growing a larger window was a code change
+    /// and a release -- and that two of the three providers refused capability
+    /// requirements outright, because neither had "a catalogue to match them
+    /// against". This is that catalogue.
+    #[serde(default, rename = "catalogue", skip_serializing_if = "Vec::is_empty")]
+    pub catalogue: Vec<ModelEntry>,
 }
+
+/// What one model provides.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct ModelEntry {
+    /// `vendor/model`, the same form `model exact` uses.
+    ///
+    /// Qualified because a bare model name would make two vendors' catalogues
+    /// collide, and because matching a requirement means first knowing which
+    /// vendor is answering.
+    pub model: String,
+    /// Context window in tokens, for `context >= N`.
+    ///
+    /// Absent means unknown, and an unknown window **does not satisfy** a
+    /// requirement. Guessing would turn a refusal an operator can fix into a
+    /// provider error at the first long prompt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<i64>,
+    /// Capability names, as `model requires { ... }` spells them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub capabilities: Vec<String>,
+}
+
+impl ModelEntry {
+    /// The vendor half of `model`.
+    pub fn vendor(&self) -> &str {
+        self.model.split_once('/').map(|(v, _)| v).unwrap_or("")
+    }
+
+    /// The model half, which is what a provider puts on the wire.
+    pub fn name(&self) -> &str {
+        self.model
+            .split_once('/')
+            .map(|(_, name)| name)
+            .unwrap_or(&self.model)
+    }
+
+    /// Whether this model satisfies a requirement.
+    pub fn satisfies(&self, capabilities: &[String], min_context: Option<i64>) -> bool {
+        if let Some(required) = min_context {
+            match self.context {
+                Some(window) if window >= required => {}
+                // Unknown is not "big enough". See `context`.
+                _ => return false,
+            }
+        }
+        capabilities
+            .iter()
+            .all(|wanted| self.capabilities.iter().any(|has| has == wanted))
+    }
+
+    /// Why it does not, in words an operator can act on.
+    pub fn shortfall(&self, capabilities: &[String], min_context: Option<i64>) -> String {
+        let mut reasons = Vec::new();
+        if let Some(required) = min_context {
+            match self.context {
+                Some(window) if window < required => {
+                    reasons.push(format!("provides {window} context tokens, not {required}"))
+                }
+                None => reasons.push("declares no context window".to_string()),
+                _ => {}
+            }
+        }
+        let missing: Vec<&str> = capabilities
+            .iter()
+            .filter(|wanted| !self.capabilities.iter().any(|has| &has == wanted))
+            .map(String::as_str)
+            .collect();
+        if !missing.is_empty() {
+            reasons.push(format!("lacks {}", missing.join(", ")));
+        }
+        format!("{}: {}", self.model, reasons.join("; "))
+    }
+}
+
+/// The models Ingot knows about without being told.
+///
+/// A short list, and deliberately not a directory of everything on the market:
+/// a built-in catalogue is stale the moment it ships, and the operator's
+/// entries come first so a stale one is always overridable. What is here is
+/// what makes `model requires { … }` work out of the box for the one provider
+/// that has a sensible default at all.
+pub const BUILT_IN_CATALOGUE: &[(&str, i64, &[&str])] = &[(
+    "anthropic/claude-opus-5",
+    1_000_000,
+    &[
+        "tool_calling",
+        "structured_output",
+        "streaming",
+        "vision",
+        "reasoning",
+        "parallel_tool_calls",
+    ],
+)];
 
 impl ModelConfig {
     pub fn is_empty(&self) -> bool {
-        self.providers.is_empty() && self.default.is_none() && self.prices.is_empty()
+        self.providers.is_empty()
+            && self.default.is_none()
+            && self.prices.is_empty()
+            && self.catalogue.is_empty()
+    }
+
+    /// Every model this deployment knows about, the operator's first.
+    ///
+    /// Order is preference order and it is the operator's: their entries are
+    /// tried before the built-in ones, so overriding a built-in means declaring
+    /// it, not editing this binary. Within each group, declaration order.
+    pub fn known_models(&self) -> Vec<ModelEntry> {
+        let mut models = self.catalogue.clone();
+        for (model, context, capabilities) in BUILT_IN_CATALOGUE {
+            // A declared entry for the same model wins outright, rather than
+            // merging: a half-overridden model is a set of facts that came from
+            // two places and matches neither.
+            if models.iter().any(|entry| entry.model == *model) {
+                continue;
+            }
+            models.push(ModelEntry {
+                model: (*model).to_string(),
+                context: Some(*context),
+                capabilities: capabilities
+                    .iter()
+                    .map(|name| (*name).to_string())
+                    .collect(),
+            });
+        }
+        models
+    }
+
+    /// The first model of `vendor` that satisfies a requirement, or why none
+    /// does.
+    ///
+    /// The one place capability matching happens, so the three providers cannot
+    /// answer the same question differently -- which is what they did before
+    /// this existed: one had a hardcoded default and two refused outright.
+    pub fn resolve_capabilities(
+        &self,
+        vendor: &str,
+        capabilities: &[String],
+        min_context: Option<i64>,
+    ) -> Result<String, String> {
+        let known: Vec<ModelEntry> = self
+            .known_models()
+            .into_iter()
+            .filter(|entry| entry.vendor() == vendor)
+            .collect();
+
+        if let Some(entry) = known
+            .iter()
+            .find(|entry| entry.satisfies(capabilities, min_context))
+        {
+            return Ok(entry.name().to_string());
+        }
+
+        let wanted = {
+            let mut parts = Vec::new();
+            if let Some(context) = min_context {
+                parts.push(format!("context >= {context}"));
+            }
+            parts.extend(capabilities.iter().cloned());
+            if parts.is_empty() {
+                "no requirements".to_string()
+            } else {
+                parts.join(", ")
+            }
+        };
+
+        if known.is_empty() {
+            return Err(format!(
+                "this artifact requires {wanted} rather than naming a model, and no model of \
+                 `{vendor}` is in the catalogue\n  \
+                 declare one with `[[model.catalogue]]` in ingot.toml, or pin a model with \
+                 `model exact {vendor}/<model>` or --model"
+            ));
+        }
+        Err(format!(
+            "this artifact requires {wanted}, and no `{vendor}` model in the catalogue \
+             provides it\n  {}\n  \
+             add or correct an entry with `[[model.catalogue]]`, or pin a model with --model",
+            known
+                .iter()
+                .map(|entry| entry.shortfall(capabilities, min_context))
+                .collect::<Vec<_>>()
+                .join("\n  ")
+        ))
     }
 
     /// The prices a run is given, as the interpreter wants them.
@@ -327,6 +540,7 @@ mod tests {
         // The common case for Ollama, llama.cpp or LM Studio: no auth at all.
         let config = ModelConfig {
             prices: Vec::new(),
+            catalogue: Vec::new(),
             providers: vec![provider("local")],
             ..ModelConfig::default()
         };
@@ -338,6 +552,7 @@ mod tests {
     fn duplicate_names_are_refused() {
         let config = ModelConfig {
             prices: Vec::new(),
+            catalogue: Vec::new(),
             providers: vec![provider("local"), provider("local")],
             ..ModelConfig::default()
         };
@@ -349,6 +564,7 @@ mod tests {
     fn a_name_containing_a_slash_is_refused_because_that_is_the_separator() {
         let config = ModelConfig {
             prices: Vec::new(),
+            catalogue: Vec::new(),
             providers: vec![provider("my/llm")],
             ..ModelConfig::default()
         };
@@ -362,6 +578,7 @@ mod tests {
         bare.base_url = "  ".to_string();
         let config = ModelConfig {
             prices: Vec::new(),
+            catalogue: Vec::new(),
             providers: vec![bare],
             ..ModelConfig::default()
         };
@@ -375,6 +592,7 @@ mod tests {
         confused.api_key_env = Some(String::new());
         let config = ModelConfig {
             prices: Vec::new(),
+            catalogue: Vec::new(),
             providers: vec![confused],
             ..ModelConfig::default()
         };
@@ -382,10 +600,122 @@ mod tests {
         assert!(error.contains("omit it entirely"), "{error}");
     }
 
+    fn entry(model: &str, context: Option<i64>, capabilities: &[&str]) -> ModelEntry {
+        ModelEntry {
+            model: model.to_string(),
+            context,
+            capabilities: capabilities.iter().map(|c| c.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn a_model_with_a_wide_enough_window_and_the_right_capabilities_satisfies() {
+        let model = entry("openai/gpt-x", Some(400_000), &["tool_calling", "vision"]);
+        assert!(model.satisfies(&["vision".to_string()], Some(128_000)));
+        assert!(model.satisfies(&[], None));
+    }
+
+    #[test]
+    fn an_unknown_context_window_does_not_satisfy_a_requirement() {
+        // Guessing would turn a refusal the operator can fix into a provider
+        // error at the first long prompt, a long way from the cause.
+        let model = entry("openai/gpt-x", None, &["vision"]);
+        assert!(!model.satisfies(&[], Some(1)));
+        assert!(model.satisfies(&["vision".to_string()], None));
+        assert!(model
+            .shortfall(&[], Some(1))
+            .contains("declares no context window"));
+    }
+
+    #[test]
+    fn a_shortfall_names_both_halves_of_what_is_missing() {
+        let model = entry("openai/gpt-x", Some(8_000), &["tool_calling"]);
+        let text = model.shortfall(&["vision".to_string()], Some(128_000));
+        assert!(text.contains("8000"), "{text}");
+        assert!(text.contains("128000"), "{text}");
+        assert!(text.contains("vision"), "{text}");
+    }
+
+    #[test]
+    fn an_operators_entry_replaces_a_built_in_of_the_same_name() {
+        // Overriding a built-in means declaring it, not editing the binary --
+        // and it replaces rather than merges, because a half-overridden model
+        // is a set of facts from two places that matches neither.
+        let config = ModelConfig {
+            catalogue: vec![entry(
+                "anthropic/claude-opus-5",
+                Some(2_000_000),
+                &["vision"],
+            )],
+            ..ModelConfig::default()
+        };
+        let known = config.known_models();
+        let found: Vec<&ModelEntry> = known
+            .iter()
+            .filter(|e| e.model == "anthropic/claude-opus-5")
+            .collect();
+        assert_eq!(found.len(), 1, "one entry per model");
+        assert_eq!(found[0].context, Some(2_000_000));
+        assert_eq!(found[0].capabilities, vec!["vision".to_string()]);
+    }
+
+    #[test]
+    fn the_operators_models_are_preferred_to_the_built_in_ones() {
+        let config = ModelConfig {
+            catalogue: vec![entry(
+                "anthropic/mine",
+                Some(1_000_000),
+                &["structured_output"],
+            )],
+            ..ModelConfig::default()
+        };
+        let chosen = config
+            .resolve_capabilities("anthropic", &["structured_output".to_string()], None)
+            .expect("mine satisfies it");
+        assert_eq!(chosen, "mine");
+    }
+
+    #[test]
+    fn a_vendor_with_nothing_in_the_catalogue_says_what_to_declare() {
+        // What OpenAI and Google used to say unconditionally, now said only
+        // when it is true.
+        let error = ModelConfig::default()
+            .resolve_capabilities("openai", &["vision".to_string()], None)
+            .unwrap_err();
+        assert!(error.contains("openai"), "{error}");
+        assert!(error.contains("[[model.catalogue]]"), "{error}");
+    }
+
+    #[test]
+    fn a_vendor_whose_models_all_fall_short_says_how_each_one_does() {
+        let config = ModelConfig {
+            catalogue: vec![
+                entry("openai/small", Some(8_000), &["vision"]),
+                entry("openai/blind", Some(400_000), &["tool_calling"]),
+            ],
+            ..ModelConfig::default()
+        };
+        let error = config
+            .resolve_capabilities("openai", &["vision".to_string()], Some(128_000))
+            .unwrap_err();
+        assert!(error.contains("openai/small"), "{error}");
+        assert!(error.contains("openai/blind"), "{error}");
+        assert!(error.contains("8000"), "{error}");
+        assert!(error.contains("vision"), "{error}");
+    }
+
+    #[test]
+    fn a_model_is_named_without_its_vendor_on_the_wire() {
+        let model = entry("anthropic/claude-opus-5", None, &[]);
+        assert_eq!(model.vendor(), "anthropic");
+        assert_eq!(model.name(), "claude-opus-5");
+    }
+
     #[test]
     fn a_default_may_name_a_built_in_without_redeclaring_it() {
         let config = ModelConfig {
             prices: Vec::new(),
+            catalogue: Vec::new(),
             default: Some("anthropic".to_string()),
             providers: Vec::new(),
         };
@@ -396,6 +726,7 @@ mod tests {
     fn a_default_naming_nothing_lists_what_there_is() {
         let config = ModelConfig {
             prices: Vec::new(),
+            catalogue: Vec::new(),
             default: Some("mistral".to_string()),
             providers: vec![provider("local")],
         };
