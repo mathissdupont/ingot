@@ -303,9 +303,20 @@ editing a single agent.
 An agent can state what it needs rather than which model provides it:
 
 ```ingot
-model requires {
-  structured_output
-  context >= 128k
+language 0.1
+
+agent Brief(topic: string) -> brief<markdown> {
+  model requires {
+    structured_output
+    context >= 128k
+  }
+
+  budget { steps <= 2 }
+  policy { network deny }
+
+  flow {
+    emit brief = ask<markdown>("A brief about ${topic}.")
+  }
 }
 ```
 
