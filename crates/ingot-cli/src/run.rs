@@ -55,6 +55,9 @@ pub enum EventFormat {
     Quiet,
 }
 
+/// Where snapshots live inside a project's build directory.
+pub const SNAPSHOTS_DIR: &str = "snapshots";
+
 pub struct RunConfig {
     pub inputs: Vec<String>,
     pub provider: ProviderChoice,
@@ -75,6 +78,23 @@ pub struct RunConfig {
     /// results are doing.
     pub history: Option<PathBuf>,
     pub events: EventFormat,
+    /// The project's build directory, where a default memory store lives.
+    ///
+    /// Deliberately not `history`, which is `None` under `--no-history`. Where
+    /// an agent keeps what it remembers and whether this run is written down
+    /// are different questions, and tying them together made `--no-history`
+    /// silently mean `--no-memory` too.
+    pub build_dir: Option<PathBuf>,
+    /// Stop at the checkpoint with this label and write a snapshot.
+    pub stop_at: Option<String>,
+    /// Continue the run this snapshot describes.
+    pub resume: Option<PathBuf>,
+    /// Where the snapshot goes, when the operator named a place.
+    pub snapshot: Option<PathBuf>,
+    /// Where the agent's persistent memory store lives, when the operator named
+    /// a place. Absent means the default under `build_dir`.
+    pub memory: Option<PathBuf>,
+    pub memory_mode: crate::memory::MemoryMode,
     pub yes: bool,
     pub max_steps: u32,
     /// The project directory; tool servers start here.
@@ -129,6 +149,7 @@ impl RunConfig {
             model: self.model.clone(),
             effort: self.effort.clone(),
             models: self.models.clone(),
+            replay_from: 0,
             strict_replay: true,
         }
     }
@@ -147,6 +168,12 @@ pub struct ProviderSelection {
     #[cfg_attr(not(feature = "providers"), allow(dead_code))]
     pub effort: Option<String>,
     pub models: ModelConfig,
+    /// How many recorded interactions the run this continues already played.
+    ///
+    /// A cassette is matched by position, so the second half of an interrupted
+    /// run has to start where the first stopped. Zero for a run that is not a
+    /// resumption, and ignored by every provider that is not a replay.
+    pub replay_from: usize,
     /// Whether a replayed interaction must match the request that recorded it.
     ///
     /// A run replays strictly: an edited prompt must fail loudly rather than be
@@ -219,7 +246,7 @@ pub fn build_model_provider(selection: &ProviderSelection) -> Result<Box<dyn Mod
                 );
             };
             let cassette = Cassette::load(path).map_err(anyhow::Error::msg)?;
-            let provider = ReplayProvider::new(cassette);
+            let provider = ReplayProvider::new(cassette).skipping(selection.replay_from);
             Ok(Box::new(if selection.strict_replay {
                 provider
             } else {
@@ -343,7 +370,10 @@ pub fn execute(compilation: &Compilation, config: &RunConfig) -> Result<u8> {
         // a say: a program that cannot be contained must say so whether or not a
         // key happens to be exported.
         let command = crate::contained::prepare(compilation, config, mode, &ir)?;
-        let mut provider = build_provider(config, &ir.agent, &inputs)?;
+        // No resumption inside a box: the supervisor channel reports a finished
+        // run or a failed one, so a contained run never stops and never has a
+        // snapshot to continue from.
+        let mut provider = build_provider(config, &ir.agent, &inputs, 0)?;
         return crate::contained::execute(
             command,
             compilation,
@@ -359,10 +389,43 @@ pub fn execute(compilation: &Compilation, config: &RunConfig) -> Result<u8> {
     // exactly the tools an unrecorded one would.
     let mut tools = Tools::new(tool_host(compilation, config)?, config.record.is_some());
 
-    let mut provider = build_provider(config, &ir.agent, &inputs)?;
+    // Loaded before the provider, because a replay has to start where the first
+    // half stopped: a cassette is matched by position.
+    //
+    // Checked against the artifact here as well as in the interpreter, so every
+    // problem with a `--resume` file is reported the same way -- before the run,
+    // as an operational failure -- rather than one before and one during
+    // depending on which check happens to fire.
+    let resume = match &config.resume {
+        Some(path) => {
+            let snapshot = ingot_runtime::Resumption::load(path).map_err(anyhow::Error::msg)?;
+            snapshot.check(&ir).map_err(anyhow::Error::msg)?;
+            Some(snapshot)
+        }
+        None => None,
+    };
+    let replay_from = resume
+        .as_ref()
+        .map(|snapshot| snapshot.model_calls as usize)
+        .unwrap_or(0);
+
+    let mut provider = build_provider(config, &ir.agent, &inputs, replay_from)?;
     let mut sink = RunSink {
         printer: printer_for(config, compilation, false),
     };
+
+    let store = crate::memory::open(
+        &ir,
+        config.memory.as_deref(),
+        config.build_dir.as_deref(),
+        config.memory_mode.clone(),
+    )?;
+    if !store.note.is_empty() && config.events != EventFormat::Quiet {
+        eprintln!("{}", store.note);
+    }
+    if let Some(dropped) = &store.dropped {
+        eprintln!("{dropped}");
+    }
 
     let result = run_agent(
         &ir,
@@ -374,6 +437,9 @@ pub fn execute(compilation: &Compilation, config: &RunConfig) -> Result<u8> {
             inputs,
             approval,
             max_steps: config.max_steps,
+            memory: store.fields,
+            stop_at: config.stop_at.clone(),
+            resume,
             pricing: config.models.pricing(),
         },
     );
@@ -404,6 +470,30 @@ pub fn execute(compilation: &Compilation, config: &RunConfig) -> Result<u8> {
         }
     };
 
+    // Written before the artifacts, so a failure to write the store cannot be
+    // mistaken for a run that did not reach the end.
+    if let Some(path) = &store.path {
+        crate::memory::save(path, &ir, &report.memory)?;
+    }
+
+    if let Some(snapshot) = &report.stopped {
+        let path = snapshot_path(config, &ir.agent, &snapshot.label);
+        snapshot.save(&path).map_err(anyhow::Error::msg)?;
+        sink.printer.finish_record(crate::runs::Outcome::Finished {
+            steps: report.steps,
+            usage: report.usage,
+            cost: report.spend.rendered(),
+        });
+        // Not on stdout: a stopped run produced no artifact, and the path is
+        // the one thing the operator needs next.
+        eprintln!(
+            "stopped at \"{}\"\n  resume with: ingot run --resume {}",
+            snapshot.label,
+            path.display()
+        );
+        return Ok(super::EXIT_OK);
+    }
+
     sink.printer.finish_record(crate::runs::Outcome::Finished {
         steps: report.steps,
         usage: report.usage,
@@ -412,6 +502,34 @@ pub fn execute(compilation: &Compilation, config: &RunConfig) -> Result<u8> {
     report_cost(&report);
     write_outputs(&report, config)?;
     Ok(super::EXIT_OK)
+}
+
+/// Where a stopped run's snapshot goes.
+///
+/// Beside the run records and the memory stores, under the build directory,
+/// because it is output: disposable, already ignored by version control, and
+/// expected to be lost with the build directory.
+fn snapshot_path(config: &RunConfig, agent: &str, label: &str) -> PathBuf {
+    if let Some(path) = &config.snapshot {
+        return path.clone();
+    }
+    let safe = |text: &str| -> String {
+        text.chars()
+            .map(|ch| {
+                if ch.is_ascii_alphanumeric() || ch == '.' || ch == '-' || ch == '_' {
+                    ch
+                } else {
+                    '_'
+                }
+            })
+            .collect()
+    };
+    let base = config
+        .build_dir
+        .clone()
+        .unwrap_or_else(|| PathBuf::from("."));
+    base.join(SNAPSHOTS_DIR)
+        .join(format!("{}-{}.json", safe(agent), safe(label)))
 }
 
 /// A printer for this run, keeping a record when the command asked for one.
@@ -741,6 +859,46 @@ impl ApprovalHandler for TerminalApprovals {
     }
 }
 
+/// Refuse a remote server under a boundary that cannot cover it.
+///
+/// `--sandbox` starts a server inside a boundary derived from the agent's
+/// policy, and there is no process to put in one. `--contained` puts the
+/// interpreter inside a box whose network is denied, and the supervisor channel
+/// carries a model call and an approval gate -- not a tool call.
+///
+/// Connecting anyway and reporting a boundary that covers nothing would be
+/// worse than not offering the flag. See
+/// [RFC-0019](../../../rfcs/0019-a-tool-server-that-is-not-a-child-process.md).
+fn refuse_remote_under_a_boundary(config: &RunConfig) -> Result<()> {
+    let named = |flag: &str| -> Result<()> {
+        let server = config
+            .mcp
+            .servers
+            .iter()
+            .find(|server| server.is_remote())
+            .map(|server| server.name.clone())
+            .unwrap_or_default();
+        bail!(
+            "MCP server `{server}` is reached over a network, which `{flag}` cannot cover\n  \
+             {}\n  \
+             help: run it locally with a `command`, or drop `{flag}`",
+            if flag == "--sandbox" {
+                "a boundary bounds a process this machine starts, and there is none here"
+            } else {
+                "the supervisor channel carries a model call and an approval gate; \
+                 there is no channel for a tool call out of the box"
+            }
+        )
+    };
+    if config.sandbox {
+        return named("--sandbox");
+    }
+    if config.contained {
+        return named("--contained");
+    }
+    Ok(())
+}
+
 /// Every MCP tool the program declares, across all its agents.
 ///
 /// A superset of what one run needs: which sub-agents a flow reaches is decided
@@ -756,7 +914,10 @@ pub(crate) fn required_tools(compilation: &Compilation) -> BTreeSet<String> {
         .collect()
 }
 
-/// The same, split by agent, for a host that gives each its own boundary.
+/// The same, split by agent, with each agent's `network` grant attached.
+///
+/// Needed by two callers for two reasons: a boundary is derived per agent, and
+/// a remote server is authorised per agent. Both want the same list.
 fn tools_per_agent(compilation: &Compilation) -> Vec<AgentTools> {
     compilation
         .agents
@@ -771,8 +932,27 @@ fn tools_per_agent(compilation: &Compilation) -> Vec<AgentTools> {
                     .map(|tool| tool.name.clone())
                     .collect(),
             )
+            .with_network(network_grant(agent))
         })
         .collect()
+}
+
+/// What an agent's policy says under `network`, in the form the tool host needs.
+///
+/// Default-deny, like every other subject: a policy with no `network` rule
+/// grants nothing, which is why an absent entry becomes a denial rather than an
+/// unscoped allow.
+fn network_grant(agent: &ingot_ir::AgentIr) -> ingot_mcp::NetworkGrant {
+    match agent.policy.get("network") {
+        Some(rule) => ingot_mcp::NetworkGrant {
+            allowed: matches!(
+                rule.decision,
+                ingot_ir::Decision::Allow | ingot_ir::Decision::RequireApproval
+            ),
+            hosts: rule.values.iter().cloned().collect(),
+        },
+        None => ingot_mcp::NetworkGrant::default(),
+    }
 }
 
 /// A name for this run's network and proxy.
@@ -898,12 +1078,46 @@ fn tool_host(compilation: &Compilation, config: &RunConfig) -> Result<Box<dyn To
         return Ok(Box::new(DenyAllTools));
     }
 
+    // A remote server is authorised against the calling agent's own `network`
+    // grant, which means the host has to know which agent it is starting for.
+    // The one-unnamed-agent shortcut has no agent and so cannot check, so a
+    // manifest with any remote server takes the per-agent path -- at the cost
+    // of one session per agent, which is the correct cost: two agents in a
+    // program legitimately differ, and one being allowed to reach a hosted
+    // server does not admit the other.
+    let remote = config.mcp.servers.iter().any(|server| server.is_remote());
+    if remote {
+        refuse_remote_under_a_boundary(config)?;
+    }
+
     let host = if config.sandbox {
         contained_host(compilation, config)?
+    } else if remote {
+        McpToolHost::connect_agents(
+            &config.mcp,
+            &config.root,
+            &tools_per_agent(compilation),
+            &ingot_mcp::DirectLauncher,
+        )
+        .map_err(|error| anyhow::anyhow!("{error}"))?
     } else {
         McpToolHost::connect(&config.mcp, &config.root, &required)
             .map_err(|error| anyhow::anyhow!("{error}"))?
     };
+
+    for server in &config.mcp.servers {
+        if server.is_remote()
+            && !server.url.as_deref().unwrap_or("").starts_with("https://")
+            && !server.is_loopback()
+        {
+            eprintln!(
+                "warning: MCP server `{}` is reached over plain HTTP at {}\n         \
+                 tool arguments and results cross the network unencrypted",
+                server.name,
+                server.url.as_deref().unwrap_or("")
+            );
+        }
+    }
 
     // Say what got wired to what, and whether a boundary is in force. Whether
     // the policy is enforced or merely checked must never be something an
@@ -994,8 +1208,12 @@ fn build_provider(
     config: &RunConfig,
     agent: &str,
     inputs: &BTreeMap<String, Value>,
+    replay_from: usize,
 ) -> Result<Provider> {
-    let inner = build_model_provider(&config.selection())?;
+    let inner = build_model_provider(&ProviderSelection {
+        replay_from,
+        ..config.selection()
+    })?;
 
     Ok(if config.record.is_some() {
         Provider::Recording(RecordingProvider::new(inner, agent).with_inputs(inputs.clone()))
@@ -1384,6 +1602,13 @@ pub fn test(compilation: &Compilation, config: &TestConfig) -> Result<u8> {
                 inputs,
                 approval: ApprovalMode::Deny,
                 max_steps: 1_000,
+                // No store. A test is offline and repeatable, and a run that
+                // started from whatever a previous run happened to leave on
+                // disk would be neither. A test runs to the end, so it never
+                // stops at a checkpoint either.
+                memory: std::collections::BTreeMap::new(),
+                stop_at: None,
+                resume: None,
                 // The same prices a live run uses, so `cost <= 5 usd` is a
                 // property `ingot test` can hold the agent to rather than a
                 // line nothing checks.

@@ -26,6 +26,7 @@ mod doctor;
 mod image;
 mod launch;
 mod manifest;
+mod memory;
 mod package;
 mod run;
 mod runs;
@@ -426,6 +427,45 @@ struct RunArgs {
     /// be replayed; this only decides whether what happened is written down.
     #[arg(long)]
     no_history: bool,
+
+    /// Where the agent's persistent memory lives.
+    ///
+    /// Only used by an agent that declares a `memory { persistent { … } }`
+    /// block. Defaults to `<out-dir>/memory/<agent>.json`.
+    #[arg(long, value_name = "FILE", conflicts_with = "no_memory")]
+    memory: Option<PathBuf>,
+
+    /// Start from the declared initial values and discard what is written.
+    #[arg(long, conflicts_with = "migrate_memory")]
+    no_memory: bool,
+
+    /// Accept a store written under a different declaration.
+    ///
+    /// Keeps every field whose name and type still match, drops the rest, and
+    /// says what it dropped.
+    #[arg(long)]
+    migrate_memory: bool,
+
+    /// Stop when the run reaches the checkpoint with this label.
+    ///
+    /// Only a checkpoint at the top level of a flow can be stopped at; one
+    /// inside a branch or a loop is refused, naming why. The run writes a
+    /// snapshot and reports where it went.
+    #[arg(long, value_name = "LABEL", conflicts_with = "resume")]
+    stop_at: Option<String>,
+
+    /// Where a stopped run's snapshot goes.
+    ///
+    /// Defaults to `<out-dir>/snapshots/<agent>-<label>.json`.
+    #[arg(long, value_name = "FILE", requires = "stop_at")]
+    snapshot: Option<PathBuf>,
+
+    /// Continue the run this snapshot describes.
+    ///
+    /// The inputs come from the snapshot, so `--input` is neither needed nor
+    /// accepted. An artifact that has changed since the run stopped is refused.
+    #[arg(long, value_name = "FILE")]
+    resume: Option<PathBuf>,
 
     /// Override the model the artifact asks for.
     #[arg(long, value_name = "MODEL")]
@@ -1040,6 +1080,8 @@ fn author_with_model(
     tools: &authoring::ToolContext,
 ) -> Result<AuthoringSession> {
     let selection = run::ProviderSelection {
+        // Authoring never resumes a run.
+        replay_from: 0,
         choice: args.provider.expect("checked by the caller"),
         cassette: args.cassette.clone(),
         model: args.model.clone(),
@@ -1998,6 +2040,16 @@ fn run_run(args: &RunArgs, color: RenderColor) -> Result<u8> {
             out_dir: args.out_dir.clone(),
             history: (!args.no_history).then(|| target.out_dir.clone()),
             events: args.events,
+            build_dir: Some(target.out_dir.clone()),
+            stop_at: args.stop_at.clone(),
+            resume: args.resume.clone(),
+            snapshot: args.snapshot.clone(),
+            memory: args.memory.clone(),
+            memory_mode: match (args.no_memory, args.migrate_memory) {
+                (true, _) => memory::MemoryMode::Disabled,
+                (_, true) => memory::MemoryMode::Migrate,
+                _ => memory::MemoryMode::Open,
+            },
             yes: args.yes,
             max_steps: args.max_steps,
             mcp: target.mcp(),

@@ -430,7 +430,8 @@ cargo install --path crates/ingot-mcp
 ingot tools examples/repo-digest
 ```
 
-Details: [MCP binding 0.1](../../specs/tools/mcp-v0.1.md).
+Details: [MCP binding 0.1](../../specs/tools/mcp-v0.1.md), and
+[0.2](../../specs/tools/mcp-v0.2.md) for a server reached over a network.
 
 ## The policy block as a boundary
 

@@ -353,6 +353,7 @@ mod tests {
             },
             tools: Vec::new(),
             state: BTreeMap::new(),
+            persistent: BTreeMap::new(),
             budget: Budget::default(),
             policy: BTreeMap::new(),
             effects: Vec::new(),

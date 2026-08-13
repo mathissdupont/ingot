@@ -47,6 +47,7 @@ pub mod price;
 pub mod provider;
 pub mod router;
 pub mod schema;
+pub mod snapshot;
 pub mod tools;
 
 /// Shared by every network provider, so there is one retry rule rather than one
@@ -78,6 +79,7 @@ pub use provider::{
     CompletionRequest, CompletionResponse, ModelProvider, ModelSelection, ProviderError, Usage,
 };
 pub use router::RoutingProvider;
+pub use snapshot::{artifact_digest, Resumption, SnapshotError};
 pub use tools::{
     ApprovalHandler, ApprovalMode, ApprovalRequest, DenyAllTools, ScriptedApprovals,
     StaticToolHost, ToolError, ToolHost, ToolInvocation,
@@ -88,6 +90,18 @@ pub use tools::{
 pub struct RunReport {
     pub agent: String,
     pub outputs: BTreeMap<String, Artifact>,
+    /// Present when the run stopped at a checkpoint instead of finishing.
+    ///
+    /// The caller writes it down; the interpreter does not touch a filesystem.
+    /// A report with this set has not produced the artifact's declared outputs
+    /// and is not expected to have.
+    pub stopped: Option<snapshot::Resumption>,
+    /// Persistent memory as the run left it, for the caller to write back.
+    ///
+    /// The interpreter does not touch the filesystem, so it hands the store's
+    /// new contents up rather than saving them. Empty when the artifact
+    /// declares no `persistent` block.
+    pub memory: BTreeMap<String, serde_json::Value>,
     pub usage: Usage,
     pub steps: u32,
     /// What the run cost, and every model it could not price.
@@ -158,6 +172,24 @@ pub enum RunError {
     },
     /// The flow finished without producing a declared output.
     OutputNotProduced { name: String },
+    /// A stored persistent value did not match its declared type.
+    InvalidMemory { field: String, reason: String },
+    /// A snapshot could not be used to continue this artifact.
+    Snapshot(snapshot::SnapshotError),
+    /// Inputs were supplied alongside a resumption that already carries them.
+    InputsAfterResume,
+    /// `stop_at` named a checkpoint the run could not stop at.
+    NotResumable {
+        label: String,
+        /// True when the label exists but sits inside a branch arm or a loop.
+        nested: bool,
+        available: Vec<String>,
+    },
+    /// The store carries a field this artifact does not declare.
+    UnknownMemoryField {
+        field: String,
+        expected: Vec<String>,
+    },
     /// The artifact's IR major version is not implemented.
     UnsupportedIrVersion { found: String, supported: String },
     /// The artifact is internally inconsistent.
@@ -222,6 +254,38 @@ impl fmt::Display for RunError {
             RunError::OutputNotProduced { name } => {
                 write!(f, "the run finished without producing the declared output `{name}`")
             }
+            RunError::InvalidMemory { field, reason } => write!(
+                f,
+                "the stored value for `memory.{field}` does not match its declared type: {reason}"
+            ),
+            RunError::Snapshot(error) => write!(f, "{error}"),
+            RunError::InputsAfterResume => f.write_str(
+                "a resumption already carries the inputs the run started with
+                   supplying different ones would let the two halves of one run disagree                  about what it was given",
+            ),
+            RunError::NotResumable { label, nested, available } => {
+                let why = if *nested {
+                    format!(
+                        "the checkpoint \"{label}\" is inside a branch or a loop, so a run                          cannot stop at it
+  resuming into one would mean serialising a                          continuation, which is not a file anybody could read"
+                    )
+                } else {
+                    format!("no checkpoint is labelled \"{label}\"")
+                };
+                let offered = if available.is_empty() {
+                    "this agent has no resumable checkpoint".to_string()
+                } else {
+                    format!("resumable checkpoints: {}", available.join(", "))
+                };
+                write!(f, "{why}
+  {offered}")
+            }
+            RunError::UnknownMemoryField { field, expected } => write!(
+                f,
+                "the store carries `{field}`, which this agent does not declare
+                   it declares: {}",
+                if expected.is_empty() { "nothing".to_string() } else { expected.join(", ") }
+            ),
             RunError::UnsupportedIrVersion { found, supported } => write!(
                 f,
                 "this artifact declares IR version `{found}`; this runtime implements `{supported}`. \

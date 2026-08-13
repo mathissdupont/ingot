@@ -1,0 +1,194 @@
+{
+  "irVersion": "0.2",
+  "language": "0.2",
+  "agent": "conformance.recall.Recall",
+  "doc": "Persistent memory, read and written inside one run.\n\nA conformance request carries an artifact, a cassette and inputs — never a\nstore — so every backend starts this case from the declared initial values.\nThat is the property being pinned: a first run is answerable without one.",
+  "inputs": {
+    "topic": "string"
+  },
+  "outputs": {
+    "report": "artifact<markdown>"
+  },
+  "requirements": {
+    "model": {
+      "mode": "capabilities",
+      "capabilities": [
+        "structured_output"
+      ]
+    }
+  },
+  "persistent": {
+    "depth": {
+      "type": "int",
+      "initial": 0
+    },
+    "seen": {
+      "type": "string[]",
+      "initial": []
+    }
+  },
+  "budget": {
+    "steps": 2
+  },
+  "policy": {
+    "network": {
+      "decision": "deny"
+    }
+  },
+  "effects": [
+    "model_access"
+  ],
+  "entry": "n0",
+  "nodes": [
+    {
+      "id": "n0",
+      "kind": "state.read",
+      "sourceSpan": {
+        "source": "main.ing",
+        "start": 581,
+        "end": 593
+      },
+      "binding": "$memory.depth",
+      "field": "depth",
+      "scope": "memory",
+      "next": "n1"
+    },
+    {
+      "id": "n1",
+      "kind": "state.write",
+      "sourceSpan": {
+        "source": "main.ing",
+        "start": 566,
+        "end": 597
+      },
+      "field": "depth",
+      "scope": "memory",
+      "value": {
+        "kind": "binary",
+        "op": "+",
+        "lhs": {
+          "kind": "ref",
+          "scope": "binding",
+          "path": [
+            "$memory.depth"
+          ]
+        },
+        "rhs": {
+          "kind": "literal",
+          "type": "int",
+          "value": 1
+        }
+      },
+      "next": "n2"
+    },
+    {
+      "id": "n2",
+      "kind": "state.write",
+      "sourceSpan": {
+        "source": "main.ing",
+        "start": 602,
+        "end": 623
+      },
+      "field": "seen",
+      "scope": "memory",
+      "value": {
+        "kind": "list",
+        "items": [
+          {
+            "kind": "ref",
+            "scope": "input",
+            "path": [
+              "topic"
+            ]
+          }
+        ]
+      },
+      "next": "n3"
+    },
+    {
+      "id": "n3",
+      "kind": "state.read",
+      "sourceSpan": {
+        "source": "main.ing",
+        "start": 688,
+        "end": 703
+      },
+      "binding": "$memory.depth",
+      "field": "depth",
+      "scope": "memory",
+      "next": "n4"
+    },
+    {
+      "id": "n4",
+      "kind": "llm.call",
+      "sourceSpan": {
+        "source": "main.ing",
+        "start": 637,
+        "end": 706
+      },
+      "binding": "answer",
+      "prompt": {
+        "kind": "template",
+        "parts": [
+          {
+            "kind": "text",
+            "value": "Write about "
+          },
+          {
+            "kind": "value",
+            "value": {
+              "kind": "ref",
+              "scope": "input",
+              "path": [
+                "topic"
+              ]
+            },
+            "type": "string"
+          },
+          {
+            "kind": "text",
+            "value": ". This is visit "
+          },
+          {
+            "kind": "value",
+            "value": {
+              "kind": "ref",
+              "scope": "binding",
+              "path": [
+                "$memory.depth"
+              ]
+            },
+            "type": "int"
+          },
+          {
+            "kind": "text",
+            "value": "."
+          }
+        ]
+      },
+      "responseType": "markdown",
+      "effects": [
+        "model_access"
+      ],
+      "next": "n5"
+    },
+    {
+      "id": "n5",
+      "kind": "artifact.emit",
+      "sourceSpan": {
+        "source": "main.ing",
+        "start": 711,
+        "end": 731
+      },
+      "value": {
+        "kind": "ref",
+        "scope": "binding",
+        "path": [
+          "answer"
+        ]
+      },
+      "output": "report",
+      "next": null
+    }
+  ]
+}

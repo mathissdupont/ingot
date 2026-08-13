@@ -36,13 +36,10 @@ to you*.
 
 | ID | Gap | Class | Closes with |
 |----|-----|-------|-------------|
-| [GAP-007](#gap-007) | MCP over stdio only | Refused | a transport, now that GAP-013 is closed |
-| [GAP-008](#gap-008) | `checkpoint` cannot be resumed from | Refused | a resumption model (RFC) |
 | [GAP-009](#gap-009) | MCP prompts, resources and sampling unsupported | Refused | language support for each |
 | [GAP-010](#gap-010) | `parallel` executes sequentially | Degraded | a scheduler in the interpreter |
 | [GAP-011](#gap-011) | No package semantics beyond project-local imports | Absent | a package model (RFC) |
 | [GAP-012](#gap-012) | No generics | Absent | evidence, then an RFC |
-| [GAP-014](#gap-014) | No persistent memory or state migration | Absent | a memory model (RFC) |
 | [GAP-020](#gap-020) | The boundary needs Linux containers | Refused | a second expression of the boundary |
 | [GAP-023](#gap-023) | A contained run cannot cross a boundary to a sub-agent | Refused | a box per agent, over the supervisor |
 | [GAP-028](#gap-028) | A model-authored project has no offline test until one run is recorded | Degraded | cassette synthesis, or nothing |
@@ -50,6 +47,9 @@ to you*.
 | [GAP-031](#gap-031) | A contained run does not stream, and keeps the 16k ceiling | Refused | a delta notification on the supervisor channel |
 | [GAP-033](#gap-033) | `--effort` cannot be honoured by the Gemini protocol | Refused | one thinking control that holds across model generations |
 | [GAP-034](#gap-034) | A verifier can only inspect the shape of a value | Absent | a verifier kind with effects |
+| [GAP-035](#gap-035) | Two runs sharing one memory store are not made safe | Refused | a lock, or a per-field merge with a conflict model |
+| [GAP-036](#gap-036) | A generated Python program cannot be resumed | Refused | a node walker in the generated code, at the cost of its readability |
+| [GAP-037](#gap-037) | A remote tool server cannot be used under a boundary | Refused | a channel for a tool call out of a contained run |
 
 ---
 
@@ -69,41 +69,6 @@ next week.
 
 These stop the run and say what they could not do. They limit what you can
 build; they do not mislead you about what you built.
-
-### GAP-007
-
-**MCP over stdio only.**
-
-A tool server is a local child process. Remote servers — including hosted ones
-an organisation may already run — cannot be used. The workaround is a local
-proxy process, which is a real cost.
-
-*Why not yet.* Reaching a server over a network is itself a `network` effect,
-and until [GAP-013] the language could not scope that to an endpoint. The honest
-alternatives were to make every HTTP tool call require blanket `network allow`,
-which makes the effect useless, or to design the scoping properly first.
-
-*Unblocked 2026-08-10.* GAP-013 is closed: a tool can now declare the host it
-reaches and the compiler checks it against the grant. What remains here is the
-transport itself, and one decision it forces — whether the endpoint a remote
-server lives at is part of the `[[mcp.server]]` declaration, the tool's reach,
-or both.
-
-*Recorded in.* [ADR-0005](adr/0005-mcp-over-stdio-only.md),
-[MCP binding 0.1 §1](../specs/tools/mcp-v0.1.md).
-
-### GAP-008
-
-**`checkpoint` cannot be resumed from.**
-
-`checkpoint "sources-collected"` lowers to a node that emits an event. There is
-no way to stop at one and continue later.
-
-*What closing it needs.* A serialised interpreter state, which means deciding
-what is in it — bindings, working memory, usage so far — and what happens when
-the artifact changes between the stop and the resume.
-
-*Recorded in.* [Runtime 0.1 §5](../specs/runtime/v0.1.md).
 
 ### GAP-009
 
@@ -436,14 +401,74 @@ the eventual design is likely to keep.
 *Recorded in.* [Runtime 0.4](../specs/runtime/v0.4.md),
 [Language 0.2 §10.1](../specs/language/v0.2.md).
 
-### GAP-014
+### GAP-036
 
-**No persistent memory or state migration.**
+**A generated Python program cannot be resumed.**
 
-`memory { working ephemeral { … } }` is the only form. State lives for one run.
-There is no `persistent`, and therefore no question yet of migrating it.
+The reference interpreter stops at a resumable `checkpoint` and continues from a
+snapshot. `ingot build --target python` does not, and its portability report
+says so on every build that contains a checkpoint.
 
-*Recorded in.* [Language 0.1 §9](../specs/language/v0.1.md).
+*Why not.* The backend emits a **straight-line program**: an agent's flow becomes
+statements in a function, and a top-level node becomes a line. There is no node
+walker to hand a `resumeAt` to. Re-entering the middle would mean emitting a
+dispatch table over every top-level node — which is a node walker, written in
+Python — or generators, which cannot be serialised. The first gives up the
+readability that is the generated backend's entire reason to exist.
+
+*What you get instead.* The checkpoint's event, in the right place in the
+stream. `--stop-at` is not a flag a generated program has, so nothing is
+silently ignored.
+
+*Recorded in.* [RFC-0018](../rfcs/0018-state-that-outlives-a-run.md),
+`crates/ingot-backend-python/src/report.rs`.
+
+### GAP-037
+
+**A remote tool server cannot be used under a boundary.**
+
+`--sandbox` and `--contained` both refuse a `[[mcp.server]]` that carries a
+`url`, naming the server.
+
+*Why.* `--sandbox` bounds a process this machine starts, and a remote server is
+not one — there is nothing to put inside a boundary. `--contained` puts the
+interpreter in a box whose network is denied, and the supervisor channel carries
+a model call and an approval gate; there is no channel for a tool call to cross.
+
+*Why refused rather than degraded.* Connecting anyway would report a boundary
+that covers nothing, which is the one outcome worse than not offering the flag.
+
+*What closing it needs.* For `--contained`, a tool call on the supervisor
+channel — which is the same shape as [GAP-023](#gap-023) but not the same
+problem: that one is about a boundary that could exist and does not, this one is
+about a hop with no channel. For `--sandbox` there may be nothing to close: the
+server is somebody else's machine, and bounding it is not this toolchain's to
+do.
+
+*Recorded in.* [MCP binding 0.2 §5](../specs/tools/mcp-v0.2.md),
+[RFC-0019](../rfcs/0019-a-tool-server-that-is-not-a-child-process.md).
+
+### GAP-035
+
+**Two runs sharing one memory store are not made safe.**
+
+Each run writes the whole document when it ends, so two runs against the same
+store interleave and the second to finish wins outright. There is no lock and
+no detection.
+
+*Why not yet.* The fix is not small. A lock file brings every staleness
+question with it — what happens when a run is killed, how long a stale lock is
+honoured, whether a reader blocks — and per-field merge needs a conflict model
+the language does not have. Neither is worth designing before anybody has hit
+the problem.
+
+*Why it is survivable.* The default store path is per-agent and under the build
+directory, so reaching the collision takes two runs of the same agent, at the
+same time, in the same project. `--memory <FILE>` makes it reachable
+deliberately, which is the case this entry exists to warn.
+
+*Recorded in.* [RFC-0018 §5](../rfcs/0018-state-that-outlives-a-run.md),
+`crates/ingot-cli/src/memory.rs`.
 
 ---
 
@@ -452,6 +477,149 @@ There is no `persistent`, and therefore no question yet of migrating it.
 When a gap closes it moves here with the release that closed it, and its section
 stays where a link can find it. Identifiers are never reused: a link to GAP-007
 must keep meaning what it meant.
+
+### GAP-007
+
+**MCP over stdio only.**
+*Closed 2026-08-12.*
+
+Every tool server had to be a program on the same machine. An organisation
+running a hosted MCP server could not point Ingot at it, and the workaround was
+a local proxy process somebody had to write, deploy and keep alive beside every
+runner.
+
+*What closed it.* A `[[mcp.server]]` may carry a `url` instead of a `command`,
+spoken to over Streamable HTTP.
+
+*The question that had to be answered first.* This gap was a decision, not an
+omission. [ADR-0005](adr/0005-mcp-over-stdio-only.md) refused the transport
+because reaching a remote server is network access the language could not
+express, and ruled out the easy fix in advance: an artifact carrying
+`network deny` that nonetheless ships every tool argument to a vendor over TLS
+is an artifact whose policy is a lie, and the operator having chosen the vendor
+does not make the agent's declaration true.
+
+So the endpoint stays in the manifest — the artifact must keep naming no
+server — and the server's **host** is checked against the calling agent's own
+`network` grant before anything connects. `network deny` means no remote server
+at all. No new effect, no new policy subject: `PolicySubject` maps one-to-one
+onto `Effect`, and a `tool_endpoint` subject would have had no effect to pair
+with, because no tool would ever declare one.
+
+*The cost, which is real and is the design telling the truth.* The same artifact
+needs a wider policy to be served remotely than locally. An agent whose only
+tool reads files needs `network allow ["mcp.example.com"]` in its source to use
+a hosted server — because serving that tool remotely does put its arguments on
+the network.
+
+*What did not change.* Nothing above the transport. `McpClient` still writes a
+line and reads a line; the handshake, the routing and the result conversion are
+the code that already existed. That is why `Transport` was a trait from the
+first commit, and it is the same discipline the streaming work settled on: one
+parser, two transports.
+
+*What it deliberately does not do.* No retry on `tools/call` — it is not
+idempotent, so a server that sent mail and failed to answer must not be asked
+twice. No deprecated HTTP+SSE transport. No use under `--sandbox` or
+`--contained`, which is [GAP-037](#gap-037). The `http` support is behind the
+CLI's `remote-tools` feature, so a build that hosts only local servers carries
+no TLS stack for it.
+
+*Recorded in.* [RFC-0019](../rfcs/0019-a-tool-server-that-is-not-a-child-process.md),
+[MCP binding 0.2](../specs/tools/mcp-v0.2.md),
+[ADR-0005's amendment](adr/0005-mcp-over-stdio-only.md),
+`crates/ingot-mcp/src/http.rs`.
+
+### GAP-008
+
+**`checkpoint` cannot be resumed from.**
+*Closed 2026-08-12.*
+
+`checkpoint "sources-collected"` lowered to a node that emitted an event and
+nothing else. [Runtime 0.1 §5](../specs/runtime/v0.1.md) said so outright —
+*"Emit an event. Resumption is not defined in 0.1"* — so the keyword was named
+for something it did not do.
+
+*What closed it.* `--stop-at <LABEL>` writes a snapshot and `--resume <FILE>`
+continues from it. The snapshot is a JSON document holding the inputs, the
+bindings, working memory, the outputs so far and the counters.
+
+*The decision that shaped it.* **Only a checkpoint at the top level of a flow is
+resumable.** One inside a branch arm or a loop body is reached with a partially
+unwound interpreter, and resuming into it would mean serialising a continuation
+— which is not a file a person can read, and readability is the property the
+rest of the design rests on. The compiler marks each checkpoint `resumable`, and
+`--stop-at` on a nested one is refused with the reason rather than running to
+completion and quietly never stopping.
+
+This is a restriction, not a staging post. Lifting it means choosing a
+continuation format, which is a different design that should argue for itself.
+
+*The test that makes it real.* The events of the two halves, with the framing
+events removed, concatenate to exactly the events of one uninterrupted run —
+byte for byte, since events carry no clock. It is
+[Runtime 0.5 §2.5](../specs/runtime/v0.5.md) and it is an executable assertion
+in `crates/ingot-cli/tests/resume.rs`.
+
+*Two refusals with no override.* An artifact that changed since the run stopped
+is refused: continuing against a modified program produces a result that is
+neither program's. Supplying different inputs alongside a resumption is refused
+for the same reason.
+
+*What it does not do.* The generated Python backend cannot resume — see
+[GAP-036](#gap-036). A contained run cannot stop, because the supervisor channel
+reports a finished run or a failed one and stopping is not one of its outcomes.
+
+*Recorded in.* [RFC-0018](../rfcs/0018-state-that-outlives-a-run.md),
+[Agent IR 0.2 §7.3](../specs/ir/v0.2.md),
+[Runtime 0.5 §2](../specs/runtime/v0.5.md),
+`crates/ingot-runtime/src/snapshot.rs`.
+
+### GAP-014
+
+**No persistent memory or state migration.**
+*Closed 2026-08-12.*
+
+`memory { working ephemeral { … } }` was the only form, and state lived for one
+run. An agent that read a page today could not know tomorrow that it already
+had.
+
+*What closed it.* A `persistent { … }` block, addressed by `memory.`, and a
+store on disk that carries the declaration it was written under.
+
+Three decisions did the work, and each is the answer to a question the register
+did not ask:
+
+* **A second root, not a lifetime flag.** `state.x` and `memory.x` are told
+  apart at every use site, because a write that outlives the run is a different
+  act from a write to a scratchpad.
+* **Every persistent field declares a literal initial value.** That removes
+  "read before written" from persistent memory entirely, rather than making
+  every author guard against the first run at every read site.
+* **The store carries the full declaration, not a digest.** A digest can only
+  say no. A changed declaration is refused with a per-field diff — added,
+  removed, retyped — and `--migrate-memory` keeps what still matches, drops the
+  rest, and says what it dropped even under `--events quiet`.
+
+*Migration, which the gap's title also asked for.* A store written under a
+different declaration is refused by default. `--migrate-memory` is the way
+through, and it loses data loudly rather than reinterpreting a stored value as a
+new type.
+
+*Both backends.* The reference interpreter and the generated Python program read
+and write the same format, so a store written by one is readable by the other.
+The `memory-initial` conformance case holds them to the same seeding behaviour.
+
+*What it deliberately is not.* Not a database, not a shared key-value store, and
+not safe against concurrent writers — see [GAP-035](#gap-035). A store over
+4 MiB is refused on open, because a store that large is an agent accumulating
+without bound into a document rewritten in full every run.
+
+*Recorded in.* [RFC-0018](../rfcs/0018-state-that-outlives-a-run.md),
+[Language 0.2 §11](../specs/language/v0.2.md),
+[Agent IR 0.2 §7](../specs/ir/v0.2.md),
+[Runtime 0.5 §3](../specs/runtime/v0.5.md),
+`crates/ingot-cli/src/memory.rs`.
 
 ### GAP-017
 

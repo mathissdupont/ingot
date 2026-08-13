@@ -959,6 +959,9 @@ class Runtime:
 
         self.inputs = {}
         self.state = {}
+        # Seeded before the first node from the declared initial values, so a
+        # persistent read can never find a field missing.
+        self.memory = {}
         self.outputs = {}
         self.steps = 0
         self.usage = _usage()
@@ -1089,6 +1092,18 @@ class Runtime:
         self.state[field] = value
         self.events.emit(event="stateWritten", node=node, field=field)
 
+    def memory_read(self, node, field):
+        if field not in self.memory:
+            _fail("node `%s` reads `memory.%s`, which is not declared" % (node, field))
+        return self.memory[field]
+
+    def memory_write(self, node, field, value):
+        self.memory[field] = value
+        # The same event as an ephemeral write. Which store a field lives in is
+        # a property of the artifact, not of this run, and a reader who wants
+        # to know looks it up there.
+        self.events.emit(event="stateWritten", node=node, field=field)
+
     def emit(self, node, output, content_type, value):
         validate(value, content_type, self.types, "output `%s`" % output)
         self.outputs[output] = {
@@ -1191,6 +1206,9 @@ def parse_inputs(argv, declared):
         "events": "text",
         "out_dir": None,
         "yes": False,
+        "memory": None,
+        "no_memory": False,
+        "migrate_memory": False,
     }
     while index < len(argv):
         argument = argv[index]
@@ -1228,6 +1246,13 @@ def parse_inputs(argv, declared):
             index += 1
         elif argument == "--yes":
             options["yes"] = True
+        elif argument == "--memory":
+            options["memory"] = argv[index]
+            index += 1
+        elif argument == "--no-memory":
+            options["no_memory"] = True
+        elif argument == "--migrate-memory":
+            options["migrate_memory"] = True
         elif argument in ("-h", "--help"):
             _usage_text()
             raise SystemExit(0)
@@ -1257,6 +1282,9 @@ def _usage_text():
         "  --events FORM        text, json or quiet\n"
         "  --out-dir DIR        write artifacts here instead of to stdout\n"
         "  --yes                approve every gate without asking\n"
+        "  --memory FILE        the persistent memory store; default beside the driver\n"
+        "  --no-memory          start from the declared values, discard what is written\n"
+        "  --migrate-memory     accept a store written under a different declaration\n"
     )
 
 
@@ -1294,6 +1322,128 @@ def build_provider(options):
     )
 
 
+# --- persistent memory -------------------------------------------------------
+#
+# One JSON document per agent, holding the values and the declaration they were
+# written under. Keeping the declaration is what lets a changed artifact be
+# reported by field rather than merely refused. Same format and same rules as
+# the reference interpreter, because a store written by one has to be readable
+# by the other.
+#
+# Nothing here is locked. One run owns a store for its duration; two runs
+# sharing one interleave and the second to finish wins.
+
+_MEMORY_SNAPSHOT = "0.1"
+_MEMORY_KIND = "memory"
+_MEMORY_MAX_BYTES = 4 * 1024 * 1024
+
+
+def _memory_path(options, agent):
+    if options["memory"]:
+        return options["memory"]
+    # Beside the driver, under the same `memory/` directory name the reference
+    # toolchain uses inside its build directory.
+    safe = "".join(
+        ch if (ch.isalnum() or ch in "._-") else "_" for ch in agent
+    )
+    here = os.path.dirname(os.path.abspath(sys.argv[0]))
+    return os.path.join(here, "memory", "%s.json" % safe)
+
+
+def _memory_shape(declared_persistent):
+    return dict((name, field["type"]) for name, field in declared_persistent.items())
+
+
+def _memory_differences(stored_shape, declared_shape):
+    out = []
+    for field in sorted(declared_shape):
+        if field not in stored_shape:
+            out.append("  added:    %s: %s (starts from the declared value)"
+                       % (field, declared_shape[field]))
+        elif stored_shape[field] != declared_shape[field]:
+            out.append("  retyped:  %s: %s (stored as %s)"
+                       % (field, declared_shape[field], stored_shape[field]))
+    for field in sorted(stored_shape):
+        if field not in declared_shape:
+            out.append("  removed:  %s: %s (stored and would be dropped)"
+                       % (field, stored_shape[field]))
+    return out
+
+
+def open_memory(options, agent, declared_persistent):
+    """The values a run starts from, and where to write them back.
+
+    Returns `(path, fields)`. A `path` of None means writes are discarded.
+    """
+    if not declared_persistent:
+        return None, {}
+    if options["no_memory"]:
+        return None, {}
+
+    path = _memory_path(options, agent)
+    if not os.path.exists(path):
+        return path, {}
+
+    size = os.path.getsize(path)
+    if size > _MEMORY_MAX_BYTES:
+        _fail(
+            "the memory store at %s is %d bytes, over the %d-byte ceiling"
+            % (path, size, _MEMORY_MAX_BYTES),
+            operator=True,
+        )
+    with open(path, "r", encoding="utf-8") as handle:
+        stored = json.load(handle)
+
+    if stored.get("kind") != _MEMORY_KIND:
+        _fail("%s is a `%s` snapshot, not a `%s` one"
+              % (path, stored.get("kind"), _MEMORY_KIND), operator=True)
+    if stored.get("ingotSnapshot") != _MEMORY_SNAPSHOT:
+        _fail("%s declares snapshot version `%s`; this program writes `%s`"
+              % (path, stored.get("ingotSnapshot"), _MEMORY_SNAPSHOT), operator=True)
+
+    stored_shape = stored.get("shape", {})
+    declared_shape = _memory_shape(declared_persistent)
+    differences = _memory_differences(stored_shape, declared_shape)
+    if not differences:
+        return path, stored.get("fields", {})
+
+    if not options["migrate_memory"]:
+        _fail(
+            "the memory store was written for a different declaration\n  --> %s\n%s\n"
+            "  help: `--migrate-memory` keeps what still matches and drops the rest\n"
+            "  help: `--no-memory` ignores the store for this run without changing it"
+            % (path, "\n".join(differences)),
+            operator=True,
+        )
+
+    # Keep only fields whose name and type both still match.
+    kept = dict(
+        (name, value)
+        for name, value in stored.get("fields", {}).items()
+        if stored_shape.get(name) == declared_shape.get(name)
+    )
+    sys.stderr.write("memory: %s (migrated; %d field(s) kept)\n" % (path, len(kept)))
+    return path, kept
+
+
+def save_memory(path, agent, declared_persistent, fields):
+    directory = os.path.dirname(path)
+    if directory and not os.path.isdir(directory):
+        os.makedirs(directory)
+    store = {
+        "ingotSnapshot": _MEMORY_SNAPSHOT,
+        "kind": _MEMORY_KIND,
+        "agent": agent,
+        "shape": _memory_shape(declared_persistent),
+        "fields": fields,
+    }
+    # Sorted keys and a trailing newline, so two identical runs produce the
+    # same bytes and the file can be diffed.
+    with open(path, "w", encoding="utf-8", newline="") as handle:
+        handle.write(json.dumps(store, indent=2, sort_keys=True))
+        handle.write("\n")
+
+
 def terminal_approval(node, effects, reason):
     """Ask, and deny when there is nobody to ask.
 
@@ -1311,8 +1461,8 @@ def terminal_approval(node, effects, reason):
     return answer in ("y", "yes")
 
 
-def main(agent, ir_version, declared_inputs, declared_outputs, types, policy, budget,
-         model_reference, flow):
+def main(agent, ir_version, declared_inputs, declared_outputs, declared_persistent,
+         types, policy, budget, model_reference, flow):
     if ir_version.split(".", 1)[0] != "0":
         sys.stderr.write(
             "error: this program was generated from IR version %s, which it does "
@@ -1340,12 +1490,32 @@ def main(agent, ir_version, declared_inputs, declared_outputs, types, policy, bu
         )
         runtime.inputs = supplied
 
+        # Persistent memory is seeded before the first node: a stored value
+        # wins, a field the store does not carry starts from the artifact, and
+        # a stored value of the wrong type stops the run before it spends
+        # anything.
+        memory_path, stored = open_memory(options, agent, declared_persistent)
+        for name in sorted(stored):
+            if name not in declared_persistent:
+                _fail(
+                    "the store carries `%s`, which this agent does not declare" % name,
+                    operator=True,
+                )
+        for name in sorted(declared_persistent):
+            field = declared_persistent[name]
+            value = stored[name] if name in stored else field["initial"]
+            validate(value, field["type"], types, "memory.%s" % name)
+            runtime.memory[name] = value
+
         events.emit(event="runStarted", agent=agent, provider=provider.name)
         flow(runtime)
 
         for name in sorted(declared_outputs):
             if name not in runtime.outputs:
                 _fail("the run finished without producing the declared output `%s`" % name)
+
+        if memory_path is not None:
+            save_memory(memory_path, agent, declared_persistent, runtime.memory)
 
         events.emit(event="runFinished", steps=runtime.steps, usage=runtime.usage)
         write_outputs(runtime.outputs, options["out_dir"])

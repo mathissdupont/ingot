@@ -67,6 +67,21 @@
       "description": "Working-memory field name to Ingot type.",
       "additionalProperties": { "type": "string" }
     },
+    "persistent": {
+      "type": "object",
+      "description": "Persistent-memory field name to its declared type and the value it starts from. Omitted when the agent declares none.",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["type", "initial"],
+        "additionalProperties": false,
+        "properties": {
+          "type": { "type": "string" },
+          "initial": {
+            "description": "Canonical JSON of the declared type, resolved by the compiler from a literal."
+          }
+        }
+      }
+    },
     "budget": { "$ref": "#/$defs/budget" },
     "policy": {
       "type": "object",
@@ -254,9 +269,18 @@
         "maxIterations": { "type": "integer", "minimum": 1 },
         "guard": { "$ref": "#/$defs/value" },
         "field": { "type": "string" },
+        "scope": {
+          "description": "Which store `field` lives in, for `state.read` and `state.write`. Absent means working memory.",
+          "type": "string",
+          "enum": ["memory"]
+        },
         "value": { "$ref": "#/$defs/value" },
         "output": { "type": "string" },
         "label": { "type": "string" },
+        "resumable": {
+          "description": "Whether a run may be stopped at this `checkpoint` and continued later. True only at the top level of a flow; omitted when false.",
+          "type": "boolean"
+        },
         "effects": { "type": "array", "items": { "$ref": "#/$defs/effect" } },
         "next": { "type": ["string", "null"] }
       }
@@ -292,7 +316,7 @@
         "value": { "$ref": "#/$defs/value" }
       }
     },
-    "refScope": { "type": "string", "enum": ["input", "binding", "state"] },
+    "refScope": { "type": "string", "enum": ["input", "binding", "state", "memory"] },
     "value": {
       "type": "object",
       "required": ["kind"],

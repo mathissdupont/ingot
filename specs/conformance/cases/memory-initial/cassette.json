@@ -1,0 +1,21 @@
+{
+  "cassetteVersion": "0.2",
+  "agent": "conformance.recall.Recall",
+  "inputs": {
+    "topic": "persistence"
+  },
+  "interactions": [
+    {
+      "index": 0,
+      "node": "n4",
+      "requestDigest": "f2d90c4af8c8bb7d9b0ec4b5a58dc21e2031ae252b28cbcb34810bd7194f585a",
+      "responseType": "markdown",
+      "value": "# Recall\n\nVisited once.\n",
+      "usage": {
+        "inputTokens": 100,
+        "outputTokens": 50
+      },
+      "model": "stub-1"
+    }
+  ]
+}

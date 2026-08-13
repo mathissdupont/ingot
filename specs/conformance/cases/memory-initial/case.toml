@@ -1,0 +1,8 @@
+what = "Persistent memory with no store: every field starts from the value the artifact declares."
+outcome = "finished"
+pins = [
+  "Language 0.2 §11 — a persistent field declares the value it starts from, and the value is a literal",
+  "Agent IR 0.2 §3 — `persistent` carries each field's type and initial value",
+  "Agent IR 0.2 §4.4 — a store read and write name their store with `scope`",
+  "Runtime 0.5 §3 — a run with no store seeds persistent memory from the artifact before the first node",
+]

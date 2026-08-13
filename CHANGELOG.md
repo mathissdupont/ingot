@@ -8,6 +8,90 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
 
 ## [Unreleased]
 
+**A tool server that is not a child process** (MCP binding 0.2; closes
+[GAP-007](docs/gaps.md#gap-007), opens [GAP-037](docs/gaps.md#gap-037),
+specified in
+[RFC-0019](rfcs/0019-a-tool-server-that-is-not-a-child-process.md))
+
+- A `[[mcp.server]]` may carry a `url` instead of a `command`, spoken to over
+  Streamable HTTP. `auth-env` names the environment variable holding a bearer
+  token — a name, never a value.
+- **The server's host is checked against the calling agent's own `network`
+  grant, before anything connects.** `network deny` permits no remote server at
+  all; there is no "except through tools". This is the check
+  [ADR-0005](docs/adr/0005-mcp-over-stdio-only.md) said had to exist before the
+  transport could, and the ADR now carries an amendment saying what changed and
+  what did not.
+- No new effect and no new policy subject. The endpoint stays in the manifest,
+  so the same artifact still runs against a different deployment without a
+  recompile.
+- The cost, stated rather than hidden: an artifact needs a wider policy to be
+  served remotely than locally, because serving a tool remotely does put its
+  arguments on the network.
+- `args`, `cwd`, `pass-env` and `image` are **refused** beside a `url` rather
+  than ignored, so nobody can believe a credential reached a server that never
+  saw it.
+- `tools/call` is not retried. It is not idempotent, and a server that sent mail
+  and then failed to answer must not be asked twice.
+- `--sandbox` and `--contained` refuse a remote server, naming it. See
+  [GAP-037](docs/gaps.md#gap-037).
+- Plain `http` to anything but a loopback address warns on every run.
+- Behind the CLI's `remote-tools` feature (on by default) and `ingot-mcp`'s
+  `http`, so a build that hosts only local servers carries no TLS stack for it.
+
+**A checkpoint you can stop at** (Agent IR 0.2, Runtime 0.5; closes
+[GAP-008](docs/gaps.md#gap-008), opens [GAP-036](docs/gaps.md#gap-036),
+specified in [RFC-0018](rfcs/0018-state-that-outlives-a-run.md))
+
+- `ingot run --stop-at "<label>"` stops at a checkpoint and writes a snapshot;
+  `ingot run --resume <FILE>` continues from it.
+- **Only a checkpoint at the top level of a flow is resumable.** One inside a
+  branch or a loop would need a serialised continuation, which is not a file
+  anybody could read. The compiler marks each checkpoint, and `--stop-at` on a
+  nested one is refused with the reason rather than silently never firing.
+- A new `runStopped` event ends a stopped run. It is the only thing that
+  suppresses the "every declared output was emitted" check, and it is in the
+  record so a reader can see the check was suppressed.
+- The events of the two halves, framing removed, concatenate to exactly the
+  events of one uninterrupted run — byte for byte. That is
+  [Runtime 0.5 §2.5](specs/runtime/v0.5.md) and an executable test.
+- The counters carry across a stop, so stopping is not a way to spend twice what
+  the artifact permits. So does the cassette position, so a replayed second half
+  picks up where the first stopped.
+- An artifact that changed since the run stopped is refused, with no override.
+  So are inputs that differ from the ones the snapshot carries.
+- A top-level `checkpoint` node gains `"resumable": true`, so an artifact that
+  has one **does** change bytes. It is the only such change here, and the golden
+  IR for the research example records it.
+- The generated Python backend does not resume, and its portability report says
+  why: a straight-line program has no node walker to re-enter. See
+  [GAP-036](docs/gaps.md#gap-036).
+
+**Persistent memory** (language 0.2, Agent IR 0.2, Runtime 0.5; closes
+[GAP-014](docs/gaps.md#gap-014), opens [GAP-035](docs/gaps.md#gap-035),
+specified in [RFC-0018](rfcs/0018-state-that-outlives-a-run.md))
+
+- An agent may declare state that outlives the run:
+  `memory { persistent { seen: string[] = [], visits: int = 0 } }`.
+- Persistent fields are addressed by `memory.`, ephemeral ones stay on `state.`.
+  Two roots rather than one, so a write that outlives the run does not look like
+  a write to a scratchpad.
+- Every persistent field declares a **literal** initial value. That removes
+  "read before written" from persistent memory rather than making every author
+  guard against the first run at every read site.
+- The store is `<out-dir>/memory/<agent>.json`, relocated with `--memory FILE`
+  and skipped with `--no-memory`. Every run that opens one says so.
+- A store records the declaration it was written under, **in full**. A changed
+  declaration is refused with a per-field diff; `--migrate-memory` keeps what
+  still matches, drops the rest, and reports the loss even under
+  `--events quiet`.
+- Both backends read and write the same format, and the `memory-initial`
+  conformance case holds them to the same seeding behaviour.
+- Two runs sharing one store are **not** made safe. Stated in
+  [GAP-035](docs/gaps.md#gap-035) rather than implied away.
+- `--no-history` no longer suppresses the store. Where an agent keeps what it
+  remembers and whether this run is written down are different questions.
+
 **A `verify` that runs** (language 0.2, Agent IR 0.2, Runtime 0.4; closes
 [GAP-030](docs/gaps.md#gap-030), opens [GAP-034](docs/gaps.md#gap-034),
 specified in [RFC-0017](rfcs/0017-a-verifier-that-runs.md))

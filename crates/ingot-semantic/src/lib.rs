@@ -158,6 +158,10 @@ pub struct AgentInfo {
     pub model: ModelInfo,
     pub grants: Vec<GrantInfo>,
     pub state: Vec<Param>,
+    /// Persistent memory fields, in declaration order. The value each starts
+    /// from lives in the syntax tree, which lowering reaches through
+    /// `decl_index`.
+    pub persistent: Vec<Param>,
     pub budget: BudgetInfo,
     pub policy: BTreeMap<PolicySubject, PolicyRuleInfo>,
     /// Union of the effects every reachable call in the flow can trigger.

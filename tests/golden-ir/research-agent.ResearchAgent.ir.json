@@ -203,6 +203,7 @@
         "end": 1279
       },
       "label": "sources-collected",
+      "resumable": true,
       "next": "n5"
     },
     {

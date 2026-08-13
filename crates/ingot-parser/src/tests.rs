@@ -499,3 +499,133 @@ fn never_loops_forever_on_truncated_input() {
         );
     }
 }
+
+// --- persistent memory ------------------------------------------------------
+
+const PERSISTENT_AGENT: &str = r#"
+language 0.2
+package heptapus.recall
+
+agent Remembers(note: text) -> log<text> {
+  memory {
+    working ephemeral { scratch: text }
+    persistent { seen: text[] = [], depth: int = 0 }
+  }
+
+  flow {
+    state.scratch = note
+    memory.seen = [state.scratch]
+    memory.depth = memory.depth + 1
+    emit log = state.scratch
+  }
+}
+"#;
+
+#[test]
+fn a_persistent_block_parses_beside_working_memory() {
+    let parsed = parse_text(PERSISTENT_AGENT);
+    assert!(
+        !parsed.diagnostics.has_errors(),
+        "{:?}",
+        parsed
+            .diagnostics
+            .iter()
+            .map(|d| &d.message)
+            .collect::<Vec<_>>()
+    );
+    let memory = parsed.program.agents[0]
+        .memory
+        .as_ref()
+        .expect("the agent declares memory");
+    assert!(memory.working.is_some());
+    let persistent = memory.persistent.as_ref().expect("and persistent memory");
+    assert_eq!(persistent.fields.len(), 2);
+    assert_eq!(persistent.fields[0].name.text, "seen");
+    assert!(persistent.fields[0].initial.is_some());
+}
+
+#[test]
+fn a_memory_write_carries_its_scope() {
+    let parsed = parse_text(PERSISTENT_AGENT);
+    let flow = parsed.program.agents[0]
+        .flow
+        .as_ref()
+        .expect("the agent has a flow");
+    let scopes: Vec<StateScope> = flow
+        .statements
+        .iter()
+        .filter_map(|statement| match statement {
+            Stmt::StateWrite { scope, .. } => Some(*scope),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        scopes,
+        vec![
+            StateScope::Ephemeral,
+            StateScope::Persistent,
+            StateScope::Persistent
+        ]
+    );
+}
+
+#[test]
+fn persistent_memory_needs_language_0_2() {
+    // Gated the same way a verifier body is: the feature parses, and the header
+    // decides whether it is available.
+    let parsed = parse_text(&PERSISTENT_AGENT.replacen("language 0.2", "language 0.1", 1));
+    let codes: Vec<&str> = parsed.diagnostics.iter().map(|d| d.code).collect();
+    assert!(
+        codes.contains(&codes::UNSUPPORTED_LANGUAGE_VERSION),
+        "{codes:?}"
+    );
+}
+
+#[test]
+fn the_formatter_round_trips_a_persistent_block() {
+    let parsed = parse_text(PERSISTENT_AGENT);
+    let printed = print_program(&parsed.program);
+    assert!(printed.contains("persistent {"), "{printed}");
+    assert!(printed.contains("seen: text[] = []"), "{printed}");
+    assert!(printed.contains("memory.depth = "), "{printed}");
+    // Printing it again has to produce the same text, which is what makes the
+    // formatter safe to run twice.
+    let reparsed = parse_text(&printed);
+    assert!(
+        !reparsed.diagnostics.has_errors(),
+        "{:?}",
+        reparsed
+            .diagnostics
+            .iter()
+            .map(|d| &d.message)
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(print_program(&reparsed.program), printed);
+}
+
+#[test]
+fn memory_interpolates_in_a_prompt_like_state_does() {
+    let parsed = parse_text(
+        r#"
+language 0.2
+package heptapus.recall
+
+agent Prompts() -> log<text> {
+  memory { persistent { topic: string = "x" } }
+  flow {
+    answer = ask<text>("write about ${memory.topic}")
+    emit log = answer
+  }
+}
+"#,
+    );
+    assert!(
+        !parsed.diagnostics.has_errors(),
+        "{:?}",
+        parsed
+            .diagnostics
+            .iter()
+            .map(|d| &d.message)
+            .collect::<Vec<_>>()
+    );
+}

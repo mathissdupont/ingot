@@ -325,6 +325,8 @@ pub struct ToolGrant {
 #[derive(Debug, Clone)]
 pub struct MemoryBlock {
     pub working: Option<WorkingMemory>,
+    /// `persistent { seen: string[] = [] }`. Requires language 0.2.
+    pub persistent: Option<PersistentMemory>,
     pub span: Span,
 }
 
@@ -333,6 +335,33 @@ pub struct MemoryBlock {
 pub struct WorkingMemory {
     pub lifetime: Ident,
     pub fields: Vec<FieldDecl>,
+    pub span: Span,
+}
+
+/// `persistent { seen: string[] = [] }`
+///
+/// A sibling of [`WorkingMemory`] rather than a second lifetime after
+/// `working`: a block that outlives the run is not working memory however it is
+/// spelled.
+#[derive(Debug, Clone)]
+pub struct PersistentMemory {
+    pub fields: Vec<PersistentFieldDecl>,
+    pub span: Span,
+}
+
+/// One persistent field, with the value it starts from.
+///
+/// The initial value is not optional. Persistent memory has no coherent "not
+/// yet written" state — the first run has nothing and every later run has
+/// something — so declaring the starting point once, in the type, is what
+/// removes a read-before-written guard from every use site.
+#[derive(Debug, Clone)]
+pub struct PersistentFieldDecl {
+    pub name: Ident,
+    pub ty: TypeExpr,
+    /// Required, and required to be a literal. `None` only when the source was
+    /// malformed and the parser recovered.
+    pub initial: Option<Expr>,
     pub span: Span,
 }
 
@@ -437,8 +466,10 @@ pub enum Stmt {
         value: Expr,
         span: Span,
     },
-    /// `state.notes = queries`
+    /// `state.notes = queries`, or `memory.seen = ...` when `scope` is
+    /// [`StateScope::Persistent`].
     StateWrite {
+        scope: StateScope,
         field: Ident,
         value: Expr,
         span: Span,
@@ -591,7 +622,7 @@ impl Expr {
     }
 }
 
-/// A name with optional field accesses. `state` is a reserved root.
+/// A name with optional field accesses. `state` and `memory` are reserved roots.
 #[derive(Debug, Clone)]
 pub struct PathExpr {
     pub root: PathRoot,
@@ -605,13 +636,58 @@ pub enum PathRoot {
     Binding(Ident),
     /// The `state` keyword, addressing working memory.
     State { span: Span },
+    /// The `memory` keyword, addressing persistent memory. Requires
+    /// language 0.2.
+    Memory { span: Span },
 }
 
 impl PathRoot {
     pub fn span(&self) -> Span {
         match self {
             PathRoot::Binding(ident) => ident.span,
-            PathRoot::State { span } => *span,
+            PathRoot::State { span } | PathRoot::Memory { span } => *span,
+        }
+    }
+
+    /// The store this root addresses, if it addresses one at all.
+    pub fn scope(&self) -> Option<StateScope> {
+        match self {
+            PathRoot::Binding(_) => None,
+            PathRoot::State { .. } => Some(StateScope::Ephemeral),
+            PathRoot::Memory { .. } => Some(StateScope::Persistent),
+        }
+    }
+}
+
+/// Which of an agent's two stores a read or a write addresses.
+///
+/// Kept distinct at every use site rather than resolved to one map, because a
+/// write that outlives the run is a different act from a write to a scratchpad
+/// and the reader of a flow should not have to scroll to the declaration to
+/// tell which one they are looking at. See
+/// [RFC-0018](../../../rfcs/0018-state-that-outlives-a-run.md) §2.1.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StateScope {
+    /// `state.x` — working memory, discarded when the run ends.
+    Ephemeral,
+    /// `memory.x` — persistent memory, written back to the agent's store.
+    Persistent,
+}
+
+impl StateScope {
+    /// The keyword that addresses this store.
+    pub fn root(self) -> &'static str {
+        match self {
+            StateScope::Ephemeral => "state",
+            StateScope::Persistent => "memory",
+        }
+    }
+
+    /// What a field of this store is called, in a diagnostic.
+    pub fn noun(self) -> &'static str {
+        match self {
+            StateScope::Ephemeral => "state field",
+            StateScope::Persistent => "persistent memory field",
         }
     }
 }
@@ -685,6 +761,7 @@ impl InterpolationPath {
         let mut out = match &self.root {
             PathRoot::Binding(ident) => ident.text.clone(),
             PathRoot::State { .. } => "state".to_string(),
+            PathRoot::Memory { .. } => "memory".to_string(),
         };
         for segment in &self.segments {
             out.push('.');

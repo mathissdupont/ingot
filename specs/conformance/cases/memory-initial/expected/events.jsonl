@@ -1,0 +1,12 @@
+{"event":"runStarted","agent":"conformance.recall.Recall","provider":"replay"}
+{"event":"nodeStarted","node":"n0","kind":"state.read"}
+{"event":"nodeStarted","node":"n1","kind":"state.write"}
+{"event":"stateWritten","node":"n1","field":"depth"}
+{"event":"nodeStarted","node":"n2","kind":"state.write"}
+{"event":"stateWritten","node":"n2","field":"seen"}
+{"event":"nodeStarted","node":"n3","kind":"state.read"}
+{"event":"nodeStarted","node":"n4","kind":"llm.call"}
+{"event":"modelCall","node":"n4","model":"stub-1","responseType":"markdown","usage":{"inputTokens":100,"outputTokens":50}}
+{"event":"nodeStarted","node":"n5","kind":"artifact.emit"}
+{"event":"emitted","node":"n5","output":"report"}
+{"event":"runFinished","steps":1,"usage":{"inputTokens":100,"outputTokens":50}}

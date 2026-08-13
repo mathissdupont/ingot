@@ -21,6 +21,7 @@ use crate::events::{Artifact, EventSink, RunEvent, VerifyOutcome};
 use crate::price::{parse_micros, Pricing, Spend};
 use crate::provider::{CompletionRequest, ModelProvider, ModelSelection, ProviderError, Usage};
 use crate::schema;
+use crate::snapshot::{self, Resumption};
 use crate::tools::{ApprovalMode, ApprovalRequest, ToolError, ToolHost, ToolInvocation};
 use crate::{RunError, RunReport};
 
@@ -47,6 +48,21 @@ pub struct RunOptions {
     /// Stop after this many steps even if the artifact allows more. A backstop
     /// for artifacts with no `steps` budget.
     pub max_steps: u32,
+    /// Persistent memory this run starts from, usually loaded from the agent's
+    /// store. Fields absent here start from the artifact's declared value, so
+    /// an empty map is a correct first run rather than a missing one.
+    pub memory: BTreeMap<String, Value>,
+    /// Stop at the resumable checkpoint with this label, and report a snapshot.
+    ///
+    /// A label that names no checkpoint, or one that is not resumable, fails
+    /// before the run starts. Running to completion without stopping would
+    /// leave a caller unable to tell that from a run with no checkpoint.
+    pub stop_at: Option<String>,
+    /// Continue an interrupted run instead of starting one.
+    ///
+    /// The snapshot's inputs, bindings, state, outputs and counters replace
+    /// this run's, and execution begins at the node it names.
+    pub resume: Option<Resumption>,
     /// What each model costs, so `budget.cost` can be charged.
     ///
     /// Empty by default. A run with no prices charges nothing and reports every
@@ -62,6 +78,9 @@ impl Default for RunOptions {
             inputs: BTreeMap::new(),
             approval: ApprovalMode::Deny,
             max_steps: 1_000,
+            memory: BTreeMap::new(),
+            stop_at: None,
+            resume: None,
             pricing: Pricing::default(),
         }
     }
@@ -80,6 +99,9 @@ struct Interp<'a> {
 
     bindings: BTreeMap<String, Value>,
     state: BTreeMap<String, Value>,
+    /// Persistent memory, seeded before the first node and handed back in the
+    /// report so the caller can write it to the agent's store.
+    memory: BTreeMap<String, Value>,
     outputs: BTreeMap<String, Artifact>,
 
     steps: u32,
@@ -87,6 +109,20 @@ struct Interp<'a> {
     usage: Usage,
     pricing: Pricing,
     spend: Spend,
+
+    /// The checkpoint label this run stops at, if any.
+    stop_at: Option<String>,
+    /// The checkpoint it stopped at, as `(node, label)`.
+    ///
+    /// Once set, every enclosing region unwinds without running another node.
+    /// It is only ever set at the top level -- a nested checkpoint is not
+    /// resumable -- so the unwinding never abandons a partly finished loop.
+    stopped: Option<(String, String)>,
+    /// The inputs this run was given, kept so a snapshot can carry them.
+    run_inputs: BTreeMap<String, Value>,
+    /// Model and tool calls made, so a snapshot can say where a cassette got to.
+    model_calls: u32,
+    tool_calls: u32,
 }
 
 /// Execute an agent.
@@ -102,6 +138,9 @@ pub fn run(
         inputs,
         mut approval,
         max_steps,
+        memory,
+        stop_at,
+        resume,
         pricing,
     } = options;
     run_nested(
@@ -113,6 +152,8 @@ pub fn run(
         inputs,
         &mut approval,
         max_steps,
+        memory,
+        Interruption { stop_at, resume },
         &pricing,
     )
 }
@@ -134,11 +175,32 @@ fn run_nested(
     inputs: BTreeMap<String, Value>,
     approval: &mut ApprovalMode,
     step_ceiling: u32,
+    // Whatever the caller loaded from the agent's store. A sub-agent gets none
+    // of its caller's: persistent memory belongs to an agent, and a sub-agent
+    // is a fresh run against its own artifact.
+    stored: BTreeMap<String, Value>,
+    // Where this run stops, and where it starts. A sub-agent gets neither: a
+    // stop is a property of the run an operator asked for.
+    interruption: Interruption,
     // Prices are a property of the deployment, not of an agent, so a sub-agent
     // is charged with the same ones its caller was.
     pricing: &Pricing,
 ) -> Result<RunReport, RunError> {
     check_ir_version(ir)?;
+
+    // A resumption carries the inputs the first half ran with. Supplying them
+    // again would let the two halves disagree about what the run was given, so
+    // the snapshot's win outright and a caller that passed different ones is
+    // told rather than quietly overridden.
+    let inputs = match &interruption.resume {
+        Some(snapshot) => {
+            if !inputs.is_empty() && inputs != snapshot.inputs {
+                return Err(RunError::InputsAfterResume);
+            }
+            snapshot.inputs.clone()
+        }
+        None => inputs,
+    };
 
     let mut bindings = BTreeMap::new();
     for (name, declared_type) in &ir.inputs {
@@ -165,6 +227,56 @@ fn run_nested(
         }
     }
 
+    // Seed persistent memory before anything runs, so every declared field has
+    // a value and a read can never find one missing. A stored value wins over
+    // the declared one; a field the store does not carry starts from the
+    // artifact. Validating here rather than at the first read means a store
+    // holding the wrong shape stops the run before it spends anything.
+    let mut memory = BTreeMap::new();
+    for (name, field) in &ir.persistent {
+        let value = stored
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| field.initial.clone());
+        schema::validate(&value, &field.ty, &ir.types).map_err(|reason| {
+            RunError::InvalidMemory {
+                field: name.clone(),
+                reason,
+            }
+        })?;
+        memory.insert(name.clone(), value);
+    }
+    for name in stored.keys() {
+        if !ir.persistent.contains_key(name) {
+            return Err(RunError::UnknownMemoryField {
+                field: name.clone(),
+                expected: ir.persistent.keys().cloned().collect(),
+            });
+        }
+    }
+
+    // Both halves of an interruption are settled before the run starts. A
+    // `--stop-at` that silently never fires, or a resumption checked at the
+    // node it lands on, would both spend tokens before saying no.
+    let Interruption { stop_at, resume } = interruption;
+    if let Some(label) = &stop_at {
+        check_stop_label(ir, label)?;
+    }
+    if let Some(snapshot) = &resume {
+        snapshot.check(ir).map_err(RunError::Snapshot)?;
+    }
+
+    // A resumption replaces what the first half established. Its inputs are the
+    // ones that half ran with, so `inputs` above only validated a caller's
+    // duplicate of them.
+    let entry = match &resume {
+        Some(snapshot) => {
+            bindings = snapshot.bindings.clone();
+            Some(snapshot.resume_at.clone())
+        }
+        None => ir.entry.clone(),
+    };
+
     sink.emit(RunEvent::RunStarted {
         agent: ir.agent.clone(),
         provider: provider.name().to_string(),
@@ -183,26 +295,70 @@ fn run_nested(
         sink,
         approval,
         bindings,
-        state: BTreeMap::new(),
-        outputs: BTreeMap::new(),
-        steps: 0,
+        // The counters carry across a stop: a budget bounds a run, and a run
+        // that stopped and continued is one run. Resetting them here would make
+        // `--stop-at` a way to spend twice what the artifact permits.
+        state: resume
+            .as_ref()
+            .map(|snapshot| snapshot.state.clone())
+            .unwrap_or_default(),
+        memory,
+        outputs: resume
+            .as_ref()
+            .map(|snapshot| snapshot.outputs.clone())
+            .unwrap_or_default(),
+        steps: resume.as_ref().map(|snapshot| snapshot.steps).unwrap_or(0),
         max_steps,
-        usage: Usage::default(),
+        usage: resume
+            .as_ref()
+            .map(|snapshot| snapshot.usage)
+            .unwrap_or_default(),
         pricing: pricing.clone(),
-        spend: Spend::default(),
+        spend: resume
+            .as_ref()
+            .map(|snapshot| snapshot.spend.clone())
+            .unwrap_or_default(),
+        stop_at,
+        stopped: None,
+        run_inputs: match &resume {
+            Some(snapshot) => snapshot.inputs.clone(),
+            None => inputs,
+        },
+        model_calls: resume
+            .as_ref()
+            .map(|snapshot| snapshot.model_calls)
+            .unwrap_or(0),
+        tool_calls: resume
+            .as_ref()
+            .map(|snapshot| snapshot.tool_calls)
+            .unwrap_or(0),
     };
 
-    let result = interp.run_region(ir.entry.as_deref());
+    let result = interp.run_region(entry.as_deref());
 
     match result {
         Ok(()) => {
+            let stopped = interp.take_snapshot();
             let report = RunReport {
                 agent: ir.agent.clone(),
                 outputs: interp.outputs,
+                memory: interp.memory,
+                stopped,
                 usage: interp.usage,
                 steps: interp.steps,
                 spend: interp.spend.clone(),
             };
+            if let Some(snapshot) = &report.stopped {
+                sink.emit(RunEvent::RunStopped {
+                    node: snapshot.stopped_at.clone(),
+                    label: snapshot.label.clone(),
+                });
+                // No output check. A stopped run has not reached the artifact's
+                // outputs and is not expected to have; `runStopped` is in the
+                // record so a reader can see the check was suppressed rather
+                // than having to infer it.
+                return Ok(report);
+            }
             sink.emit(RunEvent::RunFinished {
                 steps: report.steps,
                 usage: report.usage,
@@ -223,6 +379,32 @@ fn run_nested(
     }
 }
 
+/// Where a run stops and where it starts, kept together so a sub-agent can be
+/// handed neither in one word.
+#[derive(Default)]
+struct Interruption {
+    stop_at: Option<String>,
+    resume: Option<Resumption>,
+}
+
+/// Refuse a `--stop-at` that would never fire.
+///
+/// Two different mistakes with two different answers: a label nobody wrote, and
+/// a label on a checkpoint inside a branch arm or a loop body.
+fn check_stop_label(ir: &AgentIr, label: &str) -> Result<(), RunError> {
+    if snapshot::resumable_labels(ir).iter().any(|it| it == label) {
+        return Ok(());
+    }
+    let nested = snapshot::all_checkpoint_labels(ir)
+        .iter()
+        .any(|it| it == label);
+    Err(RunError::NotResumable {
+        label: label.to_string(),
+        nested,
+        available: snapshot::resumable_labels(ir),
+    })
+}
+
 fn check_ir_version(ir: &AgentIr) -> Result<(), RunError> {
     let major = ir.ir_version.split('.').next().unwrap_or_default();
     if major != "0" {
@@ -241,10 +423,40 @@ impl Interp<'_> {
             .ok_or_else(|| RunError::MalformedIr(format!("node `{id}` does not exist")))
     }
 
+    /// The snapshot this run stopped at, if it stopped.
+    fn take_snapshot(&self) -> Option<Resumption> {
+        let (node, label) = self.stopped.clone()?;
+        // The node *after* the checkpoint, so a resumed run does not re-emit
+        // the checkpoint's event. A checkpoint with no successor stopped at the
+        // end of the flow, and there is nothing to continue into.
+        let resume_at = self.ir.node(&node).and_then(|node| node.next.clone())?;
+        Some(Resumption {
+            ingot_snapshot: snapshot::SNAPSHOT_VERSION.to_string(),
+            kind: snapshot::KIND.to_string(),
+            agent: self.ir.agent.clone(),
+            artifact: snapshot::artifact_digest(self.ir),
+            label,
+            stopped_at: node,
+            resume_at,
+            inputs: self.run_inputs.clone(),
+            bindings: self.bindings.clone(),
+            state: self.state.clone(),
+            outputs: self.outputs.clone(),
+            steps: self.steps,
+            usage: self.usage,
+            spend: self.spend.clone(),
+            model_calls: self.model_calls,
+            tool_calls: self.tool_calls,
+        })
+    }
+
     /// Walk a region from `entry` until a node has no successor.
     fn run_region(&mut self, entry: Option<&str>) -> Result<(), RunError> {
         let mut current = entry.map(str::to_string);
         while let Some(id) = current {
+            if self.stopped.is_some() {
+                return Ok(());
+            }
             let node = self.node(&id)?.clone();
             self.sink.emit(RunEvent::NodeStarted {
                 node: node.id.clone(),
@@ -270,10 +482,17 @@ impl Interp<'_> {
             NodeKind::StateWrite => self.run_state_write(node),
             NodeKind::ArtifactEmit => self.run_emit(node),
             NodeKind::Checkpoint => {
+                let label = node.label.clone().unwrap_or_default();
                 self.sink.emit(RunEvent::Checkpoint {
                     node: node.id.clone(),
-                    label: node.label.clone().unwrap_or_default(),
+                    label: label.clone(),
                 });
+                // After the event, so the checkpoint is in the first half's
+                // record exactly where an uninterrupted run puts it. That is
+                // what makes the two halves concatenate.
+                if node.resumable && self.stop_at.as_deref() == Some(label.as_str()) {
+                    self.stopped = Some((node.id.clone(), label));
+                }
                 Ok(())
             }
         }
@@ -376,6 +595,10 @@ impl Interp<'_> {
 
     fn run_llm_call(&mut self, node: &Node) -> Result<(), RunError> {
         self.charge_step(node)?;
+        // Counted before the call rather than after it. A cassette advances its
+        // position on the attempt, so a run that stopped after a failed call
+        // still has to resume past that interaction.
+        self.model_calls += 1;
 
         let response_type = node
             .response_type
@@ -478,6 +701,7 @@ impl Interp<'_> {
     }
 
     fn run_tool_call(&mut self, node: &Node) -> Result<(), RunError> {
+        self.tool_calls += 1;
         let reference = node
             .tool
             .clone()
@@ -587,6 +811,14 @@ impl Interp<'_> {
             inputs,
             &mut *self.approval,
             self.max_steps.saturating_sub(self.steps).max(1),
+            // No store. A sub-agent's persistent memory is its own, and the
+            // interpreter cannot open one anyway — a caller that wants a
+            // sub-agent to keep memory runs it as an agent.
+            BTreeMap::new(),
+            // A sub-agent is never stopped at. A stop is a property of the run
+            // an operator asked for, and half a sub-agent is not something the
+            // caller could hold or continue.
+            Interruption::default(),
             &self.pricing,
         )
         .map_err(|error| RunError::SubAgent {
@@ -669,6 +901,9 @@ impl Interp<'_> {
             });
             self.bindings.insert(binder.clone(), item);
             self.run_region(node.body.as_deref())?;
+            if self.stopped.is_some() {
+                break;
+            }
 
             // The value of an iteration is the result of the last node in the
             // body — the rule the IR specification states.
@@ -714,6 +949,12 @@ impl Interp<'_> {
                 iteration: iteration + 1,
             });
             self.run_region(node.body.as_deref())?;
+            // Unreachable today -- a checkpoint inside a loop is not resumable,
+            // so nothing in a body can set this -- and here so that the day one
+            // can, the loop does not run its remaining iterations first.
+            if self.stopped.is_some() {
+                break;
+            }
         }
         Ok(())
     }
@@ -810,14 +1051,22 @@ impl Interp<'_> {
             .field
             .clone()
             .ok_or_else(|| RunError::MalformedIr(format!("`{}` names no state field", node.id)))?;
-        let value = self
-            .state
-            .get(&field)
-            .cloned()
-            .ok_or_else(|| RunError::StateNotSet {
-                node: node.id.clone(),
-                field: field.clone(),
-            })?;
+        let value = match node.scope {
+            Some(RefScope::Memory) => self.memory.get(&field).cloned().ok_or_else(|| {
+                RunError::MalformedIr(format!(
+                    "`{}` reads `memory.{field}`, which is not declared",
+                    node.id
+                ))
+            })?,
+            _ => self
+                .state
+                .get(&field)
+                .cloned()
+                .ok_or_else(|| RunError::StateNotSet {
+                    node: node.id.clone(),
+                    field: field.clone(),
+                })?,
+        };
         self.bind(node, value);
         Ok(())
     }
@@ -832,16 +1081,27 @@ impl Interp<'_> {
             .as_ref()
             .ok_or_else(|| RunError::MalformedIr(format!("`{}` has no value", node.id)))?;
         let value = self.eval(value)?;
-        if let Some(declared) = self.ir.state.get(&field) {
-            schema::validate(&value, declared, &self.ir.types).map_err(|reason| {
+        let persistent = matches!(node.scope, Some(RefScope::Memory));
+        let declared = if persistent {
+            self.ir.persistent.get(&field).map(|field| field.ty.clone())
+        } else {
+            self.ir.state.get(&field).cloned()
+        };
+        if let Some(declared) = declared {
+            let root = if persistent { "memory" } else { "state" };
+            schema::validate(&value, &declared, &self.ir.types).map_err(|reason| {
                 RunError::TypeMismatch {
                     node: node.id.clone(),
-                    what: format!("state.{field}"),
+                    what: format!("{root}.{field}"),
                     reason,
                 }
             })?;
         }
-        self.state.insert(field.clone(), value);
+        if persistent {
+            self.memory.insert(field.clone(), value);
+        } else {
+            self.state.insert(field.clone(), value);
+        }
         self.sink.emit(RunEvent::StateWritten {
             node: node.id.clone(),
             field,
@@ -1051,6 +1311,12 @@ impl Interp<'_> {
                         field: root.clone(),
                     })?
             }
+            // Never absent: every persistent field is seeded from its declared
+            // initial value before the first node runs, which is the whole
+            // reason that value is required.
+            RefScope::Memory => self.memory.get(root).cloned().ok_or_else(|| {
+                RunError::MalformedIr(format!("`memory.{root}` is not a declared field"))
+            })?,
         };
         for field in fields {
             current = current

@@ -297,6 +297,8 @@ mod tests {
         ServerConfig {
             name: name.to_string(),
             command: "unused".to_string(),
+            url: None,
+            auth_env: None,
             args: Vec::new(),
             image: None,
             cwd: None,

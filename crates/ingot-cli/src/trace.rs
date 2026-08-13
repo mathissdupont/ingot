@@ -223,6 +223,12 @@ impl HumanTrace {
                 self.frames.pop();
                 headline
             }
+            RunEvent::RunStopped { node, label } => {
+                let agent = self.current_agent().to_string();
+                let headline = format!("run.stopped  {agent}:{node}  \"{label}\"");
+                self.frames.pop();
+                headline
+            }
         };
 
         let mut output = format!("trace[{:04}] {headline}", self.sequence);
@@ -401,6 +407,7 @@ fn provenance(value: &Value) -> String {
                 RefScope::Input => "input",
                 RefScope::Binding => "binding",
                 RefScope::State => "state",
+                RefScope::Memory => "memory",
             },
             path.join(".")
         ),
@@ -434,6 +441,7 @@ mod tests {
             },
             tools: Vec::new(),
             state: BTreeMap::new(),
+            persistent: BTreeMap::new(),
             budget: Budget {
                 steps: Some(4),
                 tokens: Some(1000),

@@ -134,6 +134,17 @@ pub enum RunEvent {
     RunFailed {
         reason: String,
     },
+    /// The run stopped at a resumable checkpoint and can be continued.
+    ///
+    /// Distinct from `runFinished` because without it a stopped run and a run
+    /// that finished having produced nothing look identical in a record, and
+    /// the check that every declared output was emitted would have to be
+    /// skipped on a guess. This is that guess made explicit: it is the only
+    /// thing that suppresses the check, and a reader can see it was suppressed.
+    RunStopped {
+        node: String,
+        label: String,
+    },
 }
 
 impl RunEvent {
@@ -186,6 +197,9 @@ impl RunEvent {
                 format!("done: {steps} step(s), {} token(s)", usage.total())
             }
             RunEvent::RunFailed { reason } => format!("failed: {reason}"),
+            RunEvent::RunStopped { label, .. } => {
+                format!("stopped at \"{label}\"; resume to continue")
+            }
         }
     }
 

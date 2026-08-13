@@ -215,8 +215,13 @@ fn verdict(kind: NodeKind) -> (Support, &'static str) {
         NodeKind::Loop => (Support::Supported, ""),
         NodeKind::Checkpoint => (
             Support::Degraded,
-            "emitted as an event; a run cannot be resumed from one, the same \
-             limitation the reference interpreter has (GAP-008)",
+            "emitted as an event; a generated run cannot be stopped at one and \
+             continued. A flow becomes straight-line Python, so there is no node \
+             walker to hand a resumption to, and re-entering the middle would \
+             mean emitting a dispatch table over every top-level node -- which \
+             is a node walker written in Python, and gives up the readability \
+             this backend exists for. The reference interpreter does resume \
+             (GAP-036)",
         ),
         NodeKind::Parallel => (
             Support::Degraded,
