@@ -8,6 +8,15 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
 
 ## [Unreleased]
 
+**A model call's timeout is fixed at 180 seconds** — recorded as
+[GAP-040](docs/gaps.md#gap-040), not fixed. `DEFAULT_TIMEOUT` is a `const` with
+no manifest field, environment variable or flag behind it. Generous for a hosted
+API, short for a model on your own machine — which is the deployment 0.5.2 had
+just unblocked. The entry says where it should live and names the one decision
+that has to be made first: whether an artifact may state a wall-clock ceiling at
+all, when the same artifact would then finish on one machine and fail on
+another.
+
 ## [0.5.2] — 2026-08-14
 
 **`model requires { … }` could not work with a provider you declared** (runtime)

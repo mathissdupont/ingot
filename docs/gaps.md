@@ -50,6 +50,7 @@ to you*.
 | [GAP-035](#gap-035) | Two runs sharing one memory store are not made safe | Refused | a lock, or a per-field merge with a conflict model |
 | [GAP-036](#gap-036) | A generated Python program cannot be resumed | Refused | a node walker in the generated code, at the cost of its readability |
 | [GAP-037](#gap-037) | A remote tool server cannot be used under a boundary | Refused | a channel for a tool call out of a contained run |
+| [GAP-040](#gap-040) | A model call's timeout is fixed at 180 seconds | Absent | a place to say otherwise, and a decision about where it belongs |
 | [GAP-038](#gap-038) | No backend outside this repository has ever run the suite | Unproven | somebody else's backend, and what they hit |
 | [GAP-039](#gap-039) | No agent outside this repository is known to run | Unproven | a program somebody depends on, and its friction |
 
@@ -477,6 +478,43 @@ deliberately, which is the case this entry exists to warn.
 `crates/ingot-cli/src/memory.rs`.
 
 ---
+
+
+### GAP-040
+
+**A model call's timeout is fixed at 180 seconds, and an operator cannot say
+otherwise.**
+
+[`DEFAULT_TIMEOUT`](../crates/ingot-runtime/src/http.rs) is a `const`, shared by
+all three protocols. There is no manifest field, no environment variable and no
+flag. `[mcp] timeout-seconds` governs tool servers and `run.timeout-seconds`
+governs a contained run; neither touches the model call.
+
+*Nothing here misleads.* A call that runs long fails with `provider transport
+failed: timeout: global`, which is accurate and names the thing that happened.
+This is Absent rather than Degraded because the capability does not exist, not
+because it exists and falls short.
+
+*Who it is wrong for.* 180 seconds is generous for a hosted API and short for a
+model on your own machine. An 8B model answering from a CPU-resident KV cache
+takes minutes for one call, and a larger one on modest hardware always will —
+which is the deployment [`[[model.provider]]`](../crates/ingot-runtime/src/catalogue.rs)
+exists to serve, and the one the 0.5.2 catalogue fix had just unblocked. Found
+by hitting it: the second run of a report-writing agent against a local Ollama
+server timed out at the first `llm.call` with a longer prompt than the first
+run had used.
+
+*What closing it needs.* Not much code, and one decision. The natural home is
+`[[model.provider]]`, beside `base-url` — a timeout is a fact about an endpoint
+in the same way a URL is, and the three built-in providers can keep the constant
+as their default. What has to be decided is whether the artifact may state one
+too: a `budget` bounds what a run may spend, and a wall-clock ceiling is
+arguably the same kind of statement. The argument against is that it is not
+reproducible — the same artifact would finish on one machine and fail on
+another, which is the divergence this project refuses everywhere else. That
+argument looks right, and it is why this is an entry rather than a patch.
+
+*Recorded in.* [`crates/ingot-runtime/src/http.rs`](../crates/ingot-runtime/src/http.rs).
 
 ## Unproven
 
