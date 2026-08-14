@@ -330,6 +330,12 @@ context = 400000                  # tokens; absent means unknown
 capabilities = ["tool_calling", "structured_output", "streaming", "vision"]
 ```
 
+The vendor half is the name the provider goes by here: one of the three built-in
+protocols, or whatever you called a `[[model.provider]]`. It is the same name
+`model exact "<vendor>/<model>"` uses, because one provider answering to two
+names in one manifest is a way of having half your configuration silently not
+apply.
+
 The first entry of that vendor which satisfies the requirement answers, so
 declaration order is preference order and it is yours. Ingot carries a small
 built-in catalogue so `model requires` works out of the box; a declared entry

@@ -8,6 +8,39 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
 
 ## [Unreleased]
 
+## [0.5.2] — 2026-08-14
+
+**`model requires { … }` could not work with a provider you declared** (runtime)
+
+`[[model.provider]]` builds through `catalogue::build`, which called
+`with_base_url`, `with_model` and `with_effort` — and not `with_catalogue`. The
+three built-in providers were given one; a declared one was not. So an
+operator's `[[model.catalogue]]` entries were invisible to the endpoint they
+were most likely written for: their own.
+
+The second half is the name. Resolution went through the protocol's `PROVIDER`
+constant, so a provider declared as `name = "local"` looked its models up under
+`openai`. `model exact "local/…"` already resolves against the declared name, so
+one provider answered to two names in one manifest and only the pinned half
+worked — and the refusal told you to write `model exact openai/<model>` for a
+provider you had called something else.
+
+Together these made a capability requirement unusable with every self-hosted
+server and every gateway. The catalogue landed in 0.5.0 to move model facts out
+of this binary and into the operator's hands; it did not reach the one place the
+operator owns outright.
+
+- A declared provider is built with the manifest's catalogue, and resolves
+  against the name the operator gave it.
+- The refusal now names that provider rather than its protocol.
+
+*Found by running an agent against a local Ollama server.* Reading the code
+raised the suspicion; the run is what turned it into a fact. That is the third
+bug in two days whose shape is *what does somebody outside this repository
+actually get*, after the conformance suite that would not have survived being
+installed and the crate name that was already taken. See
+[GAP-038](docs/gaps.md#gap-038).
+
 ## [0.5.1] — 2026-08-14
 
 The release that can be installed. 0.5.0 could be downloaded and built from a
@@ -1353,7 +1386,8 @@ Backends, packaging and the language server are not part of this release.
 - `Ingot` is a working name. Trademark, domain and registry clearance has not
   been carried out and requires legal review before any public release.
 
-[Unreleased]: https://github.com/mathissdupont/ingot/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/mathissdupont/ingot/compare/v0.5.2...HEAD
+[0.5.2]: https://github.com/mathissdupont/ingot/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/mathissdupont/ingot/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/mathissdupont/ingot/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/mathissdupont/ingot/compare/v0.4.0-rc.2...v0.4.0
