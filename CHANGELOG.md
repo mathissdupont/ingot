@@ -8,6 +8,17 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
 
 ## [Unreleased]
 
+## [0.5.1] — 2026-08-14
+
+The release that can be installed. 0.5.0 could be downloaded and built from a
+checkout; it could not be *published*, and finding out why took asking one
+question on behalf of somebody who does not have this repository.
+
+A patch release rather than a re-cut of 0.5.0: that tag exists, its archives are
+published, and two different trees under one version number is exactly the
+confusion a version number is for preventing. Nothing here changes the language,
+the Agent IR or the artifact format.
+
 **The conformance suite would not have survived being installed** (CLI)
 
 `ingot-cli`'s build script embedded the suite by reaching two directories
@@ -1342,7 +1353,8 @@ Backends, packaging and the language server are not part of this release.
 - `Ingot` is a working name. Trademark, domain and registry clearance has not
   been carried out and requires legal review before any public release.
 
-[Unreleased]: https://github.com/mathissdupont/ingot/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/mathissdupont/ingot/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/mathissdupont/ingot/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/mathissdupont/ingot/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/mathissdupont/ingot/compare/v0.4.0-rc.2...v0.4.0
 [0.4.0-rc.2]: https://github.com/mathissdupont/ingot/compare/v0.4.0-rc.1...v0.4.0-rc.2
