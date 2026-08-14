@@ -1349,6 +1349,7 @@ fn available(selection: &ProviderSelection) -> Result<Vec<(String, Box<dyn Model
     for declaration in &selection.models.providers {
         let provider = ingot_runtime::catalogue::build(
             declaration,
+            &selection.models,
             selection.model.clone(),
             selection.effort.clone(),
         )
