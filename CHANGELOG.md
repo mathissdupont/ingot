@@ -17,6 +17,17 @@ that has to be made first: whether an artifact may state a wall-clock ceiling at
 all, when the same artifact would then finish on one machine and fail on
 another.
 
+**There is nowhere to answer an agent** — [GAP-041](docs/gaps.md#gap-041) and
+[GAP-042](docs/gaps.md#gap-042), recorded together because they share one
+design. An approval is answered at a terminal or not at all, so an artifact with
+a gate in it cannot be run from the studio — the one surface built for people.
+RFC-0015 decided that deliberately and explained why; its consequence had never
+been written down. Above the channel there is no vocabulary at all: an agent
+cannot put a question to a person and read the answer, which rules out
+everything conversational and is a second program model rather than a missing
+feature. The hard part is not the socket, it is what a replay does with an
+answer a person typed.
+
 ## [0.5.2] — 2026-08-14
 
 **`model requires { … }` could not work with a provider you declared** (runtime)

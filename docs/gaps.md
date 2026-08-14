@@ -50,9 +50,11 @@ to you*.
 | [GAP-035](#gap-035) | Two runs sharing one memory store are not made safe | Refused | a lock, or a per-field merge with a conflict model |
 | [GAP-036](#gap-036) | A generated Python program cannot be resumed | Refused | a node walker in the generated code, at the cost of its readability |
 | [GAP-037](#gap-037) | A remote tool server cannot be used under a boundary | Refused | a channel for a tool call out of a contained run |
-| [GAP-040](#gap-040) | A model call's timeout is fixed at 180 seconds | Absent | a place to say otherwise, and a decision about where it belongs |
 | [GAP-038](#gap-038) | No backend outside this repository has ever run the suite | Unproven | somebody else's backend, and what they hit |
 | [GAP-039](#gap-039) | No agent outside this repository is known to run | Unproven | a program somebody depends on, and its friction |
+| [GAP-040](#gap-040) | A model call's timeout is fixed at 180 seconds | Absent | a place to say otherwise, and a decision about where it belongs |
+| [GAP-041](#gap-041) | An approval can only be answered at a terminal | Refused | a channel from a running agent to a person |
+| [GAP-042](#gap-042) | An agent cannot put a question to a person | Absent | a construct for it, and a decision about what it does to a replay |
 
 ---
 
@@ -516,6 +518,73 @@ argument looks right, and it is why this is an entry rather than a patch.
 
 *Recorded in.* [`crates/ingot-runtime/src/http.rs`](../crates/ingot-runtime/src/http.rs).
 
+
+### GAP-041
+
+**An approval can only be answered at a terminal.**
+
+`filesystem_write require approval` inserts an approval node, and at a terminal
+that node asks. Anywhere else it does not: `ingot run` selects
+`ApprovalMode::Deny` when standard input is not a terminal, so a run started by
+the studio, by cron, or by CI is refused at the gate rather than asked.
+
+*This is a decision, not an oversight.* [RFC-0015 §"Two things the page cannot
+ask for"](../rfcs/0015-ingot-studio.md) refused to put `--yes` in the argv the
+studio builds, on the grounds that a button in the same flow as building gets
+clicked the way a notification prompt gets clicked. That reasoning still holds.
+What was never recorded is its consequence, which is this entry: **an agent that
+needs a person cannot be run from the one surface built for people.** The studio
+can start a run, watch it, and show what it produced — and any artifact with an
+approval gate in it stops at that gate.
+
+*How it shows up.* `approval.ask` followed by a refusal in the event stream,
+with no way to answer. `--yes` at a terminal is the only path, and it answers
+every gate in the run rather than the one in front of you.
+
+*What closing it needs.* A channel from a running agent back to whoever started
+it, and a surface that renders one gate at a time. The supervisor channel
+([RFC-0005](../rfcs/0005-the-contained-run.md)) already carries an approval
+request out of a contained run, so the shape exists; what is missing is the same
+thing for an ordinary run and a page that can hold the answer. It should be
+designed together with [GAP-042](#gap-042) — a yes/no on an effect and a
+question put to a person want the same channel, and building it twice would give
+two.
+
+*Recorded in.* [RFC-0015](../rfcs/0015-ingot-studio.md),
+[`crates/ingot-runtime/src/interp.rs`](../crates/ingot-runtime/src/interp.rs).
+
+### GAP-042
+
+**An agent cannot put a question to a person and use the answer.**
+
+There is one interaction point between a run and a human, and it is not one the
+program writes: the compiler inserts an approval node in front of an effect the
+policy gates. It carries the effect and the tool, it answers yes or no, and its
+answer is not a value the flow can read. An agent that wants to ask *which of
+these three framings should the report take* has nowhere to put the question.
+
+*What this rules out.* Everything conversational. An Ingot agent is
+`Agent(inputs) -> outputs`: the inputs are fixed before the first node runs and
+nothing arrives after. A chat is a different shape, and calling it a missing
+feature understates it — it is a second program model beside the one the
+language has.
+
+*Why it is not simply added.* A run is reproducible because everything that
+enters it is either an input, a cassette or a declared store, and a replay
+reproduces the event sequence byte for byte. An answer typed by a person
+mid-run is none of those. It would have to be recorded like a completion and
+replayed like one, which is probably right and is exactly the design work: what
+a `--record` writes, what a replay does when the recorded answer no longer
+matches the question, and whether a run that stopped for a person is a
+[resumption](../rfcs/0018-state-that-outlives-a-run.md) rather than a pause.
+
+*The smaller half first.* [GAP-041](#gap-041) is a channel with no vocabulary
+above it. This is the vocabulary. They share a design and should not be built
+separately, but the channel is useful on its own and this is not useful without
+it.
+
+*Recorded in.* [Language 0.2](../specs/language/v0.2.md),
+[RFC-0015](../rfcs/0015-ingot-studio.md).
 ## Unproven
 
 A claim the project makes that nothing yet demonstrates. Not a limitation — a
