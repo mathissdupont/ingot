@@ -6,7 +6,7 @@ Nothing here needs an API key until the section that says it does.
 ## Install
 
 ```bash
-cargo install --git https://github.com/mathissdupont/ingot ingot-cli
+cargo install ingot-cli
 ```
 
 Or download an archive for your platform from

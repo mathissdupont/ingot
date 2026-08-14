@@ -1,4 +1,4 @@
-//! Embed the conformance suite in the binary.
+//! Embed the conformance suite in the crate that carries it.
 //!
 //! `ingot conform` used to need a checkout: it searched upward for
 //! `specs/conformance` and refused if it found none. That makes the suite
@@ -11,26 +11,42 @@
 //! specifications, so binding it to the binary's version is not a compromise;
 //! it is the correct coupling.
 //!
-//! The same technique the Python backend already uses for its prelude, one
-//! directory wider.
+//! The cases sit under this crate's own root rather than under `specs/`, and
+//! that is the whole reason this crate exists. `cargo package` carries a
+//! package's own directory and nothing above it, so a suite one level outside
+//! is a suite that is present in a checkout and absent in a release — and
+//! reading a directory that is not there is not an error you notice, it is an
+//! empty list. Hence the refusal below: an empty suite is a build failure,
+//! because an empty suite passes every backend it is pointed at.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 fn main() {
-    let root = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").expect("cargo sets this"))
-        .parent()
-        .and_then(Path::parent)
-        .expect("the crate lives two levels below the repository root")
-        .join("specs")
-        .join("conformance");
+    let root = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").expect("cargo sets this"));
+    let cases = root.join("cases");
 
     let mut files = BTreeSet::new();
-    collect(&root, &root, &mut files);
+    collect(&root, &cases, &mut files);
+
+    assert!(
+        !files.is_empty(),
+        "no conformance cases under {} — the suite must ship inside this package, \
+         and an empty one would report success for every backend",
+        cases.display()
+    );
+
+    // Named rather than swept up: the crate root also holds `Cargo.toml`,
+    // `src/`, this file and `tools/`, and a skip-list of those would quietly
+    // gain a hole the next time one is added. The contract document travels
+    // with the cases because an author who exports the suite is reading both.
+    if root.join("README.md").is_file() {
+        files.insert("README.md".to_string());
+    }
 
     // Rerun on any change under the suite, including a file appearing or going
     // away — a directory's own mtime moves when its entries do.
-    println!("cargo:rerun-if-changed={}", root.display());
+    println!("cargo:rerun-if-changed={}", cases.display());
     for relative in &files {
         println!("cargo:rerun-if-changed={}", root.join(relative).display());
     }
@@ -65,15 +81,9 @@ fn collect(base: &Path, dir: &Path, out: &mut BTreeSet<String>) {
             collect(base, &path, out);
             continue;
         }
-        // `tools/` is a worked example an author reads in the repository, not
-        // something a run needs. Embedding it would put a Python script in
-        // every binary for nobody's benefit.
         let Ok(relative) = path.strip_prefix(base) else {
             continue;
         };
-        if relative.starts_with("tools") {
-            continue;
-        }
         out.insert(relative.display().to_string());
     }
 }

@@ -25,7 +25,7 @@ Crate boundaries are enforced, not decorative:
 | `ingot-lexer` | tokens | the AST |
 | `ingot-syntax` | the AST, printing | types, targets |
 | `ingot-parser` | syntax to AST | types, targets |
-| `ingot-types` | types, effects, policy | syntax, targets |
+| `ingot-lang-types` | types, effects, policy | syntax, targets |
 | `ingot-semantic` | resolution and checking | any specific runtime |
 | `ingot-ir` | the IR model and encoding | providers, syntax |
 | `ingot-compiler` | driving and lowering | provider SDKs |

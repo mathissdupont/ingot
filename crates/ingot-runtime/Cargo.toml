@@ -23,7 +23,7 @@ google = ["http"]
 
 [dependencies]
 ingot-ir.workspace = true
-ingot-types.workspace = true
+ingot-lang-types.workspace = true
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = "0.10"

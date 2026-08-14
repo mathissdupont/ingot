@@ -6,7 +6,11 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
 authors.workspace = true
+readme = "README.md"
+keywords = ["ingot", "agent", "llm", "compiler", "deterministic"]
+categories = ["command-line-utilities", "compilers", "development-tools"]
 
 [[bin]]
 name = "ingot"
@@ -35,6 +39,10 @@ ingot-sandbox.workspace = true
 ingot-egress.workspace = true
 ingot-studio.workspace = true
 ingot-supervisor.workspace = true
+# The conformance cases, as bytes. A separate package because `cargo package`
+# carries a crate's own directory and nothing above it, so a suite that lives
+# outside one is a suite that is absent from every release.
+ingot-conformance.workspace = true
 # `ingot studio` shows the diagnostics an editor shows, by asking the same
 # service for them rather than by formatting the compiler's output a second way.
 ingot-language-service.workspace = true

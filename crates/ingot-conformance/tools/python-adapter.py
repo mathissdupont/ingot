@@ -6,7 +6,7 @@ request, run the artifact, exit non-zero if the run failed. It is also a
 worked example — a backend in another language writes the same forty lines
 against its own runner.
 
-    ingot conform --backend "python specs/conformance/tools/python-adapter.py"
+    ingot conform --backend "python crates/ingot-conformance/tools/python-adapter.py"
 
 The Python target compiles an artifact to a standalone program, so this adapter
 does that first and then runs it. A backend that interprets Agent IR directly

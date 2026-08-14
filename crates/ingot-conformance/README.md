@@ -66,7 +66,7 @@ events into it would break any pipeline reading them.
 | The reason a failing case failed | The failure must name the fragment in `failure-names` |
 
 **A line with no `event` key is not an event.** It is the live channel, which
-[Runtime 0.3 §2.1](../runtime/v0.3.md) forbids a conformance test from
+[Runtime 0.3 §2.1](../../specs/runtime/v0.3.md) forbids a conformance test from
 asserting on: a run against a service that sent forty fragments, replayed with
 none, would differ by forty lines. Dropping those lines here is that rule made
 executable rather than merely written down. It is also why the discrimination
@@ -85,7 +85,7 @@ written for.
 | `runFailed` | `reason` | A failure's prose. No specification standardises the wording of an error, and one that did would make every improvement to an error message a conformance break. What a case requires is that the run failed *and named the thing that failed* — `failure-names` is what checks that. |
 
 Everything else is compared exactly, including `model`, `usage`, node ids and
-order. [Runtime 0.1 §9](../runtime/v0.1.md) forbids timestamps and durations in
+order. [Runtime 0.1 §9](../../specs/runtime/v0.1.md) forbids timestamps and durations in
 events for precisely this reason: the sequence is comparable across
 implementations.
 
@@ -151,7 +151,7 @@ been in a shipped release:
 * A loop guard read its state once, before the loop, so a guard over working
   memory never changed and only `max` ever stopped the loop.
 * The two backends numbered loop iterations differently, because nothing said
-  which. [Runtime 0.1 §9.1](../runtime/v0.1.md) now does.
+  which. [Runtime 0.1 §9.1](../../specs/runtime/v0.1.md) now does.
 * The checker warned that the last expression of a `parallel map` body was a
   discarded value. It is the iteration's value.
 
@@ -164,7 +164,7 @@ for an end-to-end suite over a fixture, in one sentence.
 **A tool call and a sub-agent.** The Python target implements neither, so a case
 for either would test one backend and call it a contract.
 
-**A policy denial at run time.** [Runtime 0.1 §7](../runtime/v0.1.md) requires a
+**A policy denial at run time.** [Runtime 0.1 §7](../../specs/runtime/v0.1.md) requires a
 backend to re-check every effect against the artifact's own policy, because
 whoever runs an artifact is often not whoever built it. Exercising it needs an
 artifact whose policy denies an effect one of its nodes carries — and the
@@ -175,7 +175,7 @@ other case rests on. Left uncovered rather than covered dishonestly.
 **Resumption.** A request carries an artifact, a cassette and inputs, and
 describes one run. Stopping at a checkpoint and continuing is a property of a
 *sequence* of runs, which this contract shape cannot express — see
-[Runtime 0.5 §4](../runtime/v0.5.md). The end-to-end test for it lives in
+[Runtime 0.5 §4](../../specs/runtime/v0.5.md). The end-to-end test for it lives in
 `crates/ingot-cli/tests/resume.rs`.
 
 Saying all this is the point. A suite that implied coverage it does not have
@@ -194,7 +194,7 @@ $ ingot conform --export ./suite          # write the cases out to read or edit
 $ ingot conform --suite ./suite           # run an edited copy
 ```
 
-Inside a checkout, `specs/conformance` wins over the built-in copy, so editing a
+Inside a checkout, `crates/ingot-conformance` wins over the built-in copy, so editing a
 case changes what runs. A test compares the two on every build, because a
 built-in copy that quietly drifted from the tree would be worse than none.
 
@@ -212,8 +212,8 @@ A case is authored as three files a human wrote — `main.ing`, `case.toml` and
 
 ```sh
 cargo build -p ingot-cli
-python specs/conformance/tools/bless.py            # every case
-python specs/conformance/tools/bless.py prose      # one
+python crates/ingot-conformance/tools/bless.py            # every case
+python crates/ingot-conformance/tools/bless.py prose      # one
 ```
 
 Deriving the expectation is what keeps a case honest: it is what the reference

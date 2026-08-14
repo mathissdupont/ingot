@@ -162,7 +162,7 @@ cassette as your only source of completions. Write the event stream to standard
 error as JSON Lines, the artifacts into `outDir`, and exit non-zero if the run
 failed.
 
-[`specs/conformance/tools/python-adapter.py`](../../specs/conformance/tools/python-adapter.py)
+[`crates/ingot-conformance/tools/python-adapter.py`](../../crates/ingot-conformance/tools/python-adapter.py)
 is a worked example, and it is forty lines. Then:
 
 ```sh

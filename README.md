@@ -33,7 +33,7 @@ reaches nothing, rather than reaching everything.
 ## Thirty seconds, and no API key
 
 ```bash
-cargo install --git https://github.com/mathissdupont/ingot ingot-cli
+cargo install ingot-cli
 # or download a binary: https://github.com/mathissdupont/ingot/releases
 
 ingot init hello && cd hello
@@ -203,9 +203,20 @@ Four complete examples live in [`examples/`](examples/).
 
 ### With cargo
 
-Requires a stable Rust toolchain (MSRV 1.85). This builds and installs `ingot`
-alone; the reference tool server and language server are separate binaries in
-the same workspace.
+Requires a stable Rust toolchain (MSRV 1.85).
+
+```bash
+cargo install ingot-cli          # the `ingot` binary
+cargo install ingot-mcp          # `ingot-mcp-fs`, the reference tool server
+cargo install ingot-lsp          # the language server
+```
+
+Three crates rather than one because they are three permissions to grant a
+machine: a compiler, a process that reads your filesystem on an agent's behalf,
+and something an editor starts. Installing the first does not install the
+others.
+
+To track `main` instead of a release:
 
 ```bash
 cargo install --git https://github.com/mathissdupont/ingot ingot-cli
@@ -285,7 +296,7 @@ are safe to pipe.
    lexer → parser → AST                        ingot-lexer, ingot-parser, ingot-syntax
            │
            ▼
-   name resolution → types → effects/policy    ingot-semantic, ingot-types
+   name resolution → types → effects/policy    ingot-semantic, ingot-lang-types
            │
            ▼
        lowering                                ingot-compiler
@@ -315,7 +326,7 @@ With `--sandbox` the MCP servers move inside a policy-derived boundary
 | `ingot-lexer` | tokens; never fails, always resynchronises |
 | `ingot-syntax` | AST and the canonical printer behind `ingot fmt` |
 | `ingot-parser` | recursive descent with error recovery |
-| `ingot-types` | types, effects, policy subjects and decisions |
+| `ingot-lang-types` | types, effects, policy subjects and decisions |
 | `ingot-semantic` | resolution, type checking, effect and policy analysis |
 | `ingot-ir` | the Agent IR model and its canonical encoding |
 | `ingot-compiler` | the driver and lowering |

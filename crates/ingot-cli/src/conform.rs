@@ -4,14 +4,14 @@
 //! case, runs the command with that file as its only argument, and compares
 //! what came back against what the case says must come back. Nothing here knows
 //! anything about the backend's language, its flags, or how it reaches a model —
-//! only the contract in [`specs/conformance/README.md`].
+//! only the contract in [`crates/ingot-conformance/README.md`].
 //!
 //! The reference interpreter is not privileged. It reaches the suite through
 //! the same adapter a third party writes (`ingot conform --adapter`), so
 //! "the reference passes" is a claim the suite can actually check rather than
 //! an assumption baked into the runner.
 //!
-//! [`specs/conformance/README.md`]: https://github.com/mathissdupont/ingot/blob/main/specs/conformance/README.md
+//! [`crates/ingot-conformance/README.md`]: https://github.com/mathissdupont/ingot/blob/main/crates/ingot-conformance/README.md
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -159,15 +159,6 @@ impl Report {
     }
 }
 
-/// Every case in a suite directory, in a stable order.
-/// The suite as it was when this binary was compiled.
-///
-/// Embedded so `ingot conform` works from any directory, against any backend,
-/// with no checkout. See `build.rs`.
-mod embedded {
-    include!(concat!(env!("OUT_DIR"), "/conformance_suite.rs"));
-}
-
 /// Write the embedded suite into `dir` and answer where its root is.
 ///
 /// Used both to run without a checkout and by `--export`, which is how an
@@ -175,7 +166,7 @@ mod embedded {
 /// out of the binary, which is what lets a test compare what ships against the
 /// tree rather than against another copy of itself.
 pub fn materialise(dir: &Path) -> Result<PathBuf> {
-    for (relative, bytes) in embedded::FILES {
+    for (relative, bytes) in ingot_conformance::FILES {
         let path = dir.join(relative);
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
@@ -186,6 +177,7 @@ pub fn materialise(dir: &Path) -> Result<PathBuf> {
     Ok(dir.to_path_buf())
 }
 
+/// Every case in a suite directory, in a stable order.
 pub fn cases(suite: &Path) -> Result<Vec<(String, PathBuf)>> {
     let dir = suite.join("cases");
     let mut found: Vec<(String, PathBuf)> = std::fs::read_dir(&dir)

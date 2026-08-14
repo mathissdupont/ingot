@@ -2233,19 +2233,19 @@ fn run_conform(args: &ConformArgs) -> Result<u8> {
     })
 }
 
-/// `specs/conformance`, searched for upward from the working directory.
-///
-/// A released binary is usually not standing in the repository, so the failure
-/// says what to pass rather than only that nothing was found.
 /// The suite in the surrounding checkout, if the working directory is in one.
 ///
 /// Absent is the ordinary case for a downloaded binary, and it is not an error:
 /// the caller falls back to the copy compiled into this one.
+///
+/// The path is `crates/ingot-conformance` rather than `specs/conformance`
+/// because a package carries its own directory and nothing above it, so the
+/// cases have to live inside the crate that ships them.
 fn find_checkout() -> Option<PathBuf> {
     let start = std::env::current_dir().ok()?;
     let mut here = start.as_path();
     loop {
-        let candidate = here.join("specs").join("conformance");
+        let candidate = here.join("crates").join("ingot-conformance");
         if candidate.join("cases").is_dir() {
             return Some(candidate);
         }

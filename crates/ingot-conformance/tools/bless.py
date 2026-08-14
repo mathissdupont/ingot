@@ -12,8 +12,8 @@ Nothing here touches a network. Completions come from a local stub that speaks
 the OpenAI-compatible shape, so a cassette is recorded with real request digests
 and a replay of it is a real replay.
 
-    python specs/conformance/tools/bless.py            # every case
-    python specs/conformance/tools/bless.py prose      # just one
+    python crates/ingot-conformance/tools/bless.py            # every case
+    python crates/ingot-conformance/tools/bless.py prose      # just one
 
 Run it from the repository root, with `ingot` already built
 (`cargo build -p ingot-cli`).

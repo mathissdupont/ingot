@@ -14,10 +14,10 @@ ingot-diagnostics.workspace = true
 ingot-syntax.workspace = true
 ingot-parser.workspace = true
 ingot-semantic.workspace = true
-ingot-types.workspace = true
+ingot-lang-types.workspace = true
 ingot-ir.workspace = true
 serde_json = { workspace = true }
 
 [dev-dependencies]
 ingot-ir.workspace = true
-ingot-types.workspace = true
+ingot-lang-types.workspace = true
