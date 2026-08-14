@@ -25,7 +25,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.5.0"
+version = "0.5.1"
 edition = "2021"
 rust-version = "1.85"
 license = "Apache-2.0"
@@ -34,26 +34,26 @@ homepage = "https://github.com/mathissdupont/ingot"
 authors = ["Heptapus Group"]
 
 [workspace.dependencies]
-ingot-source = { path = "crates/ingot-source", version = "0.5.0" }
-ingot-diagnostics = { path = "crates/ingot-diagnostics", version = "0.5.0" }
-ingot-lexer = { path = "crates/ingot-lexer", version = "0.5.0" }
-ingot-syntax = { path = "crates/ingot-syntax", version = "0.5.0" }
-ingot-parser = { path = "crates/ingot-parser", version = "0.5.0" }
-ingot-lang-types = { path = "crates/ingot-lang-types", version = "0.5.0" }
-ingot-semantic = { path = "crates/ingot-semantic", version = "0.5.0" }
-ingot-ir = { path = "crates/ingot-ir", version = "0.5.0" }
-ingot-package = { path = "crates/ingot-package", version = "0.5.0" }
-ingot-compiler = { path = "crates/ingot-compiler", version = "0.5.0" }
-ingot-runtime = { path = "crates/ingot-runtime", version = "0.5.0" }
-ingot-mcp = { path = "crates/ingot-mcp", version = "0.5.0" }
-ingot-sandbox = { path = "crates/ingot-sandbox", version = "0.5.0" }
-ingot-egress = { path = "crates/ingot-egress", version = "0.5.0" }
-ingot-supervisor = { path = "crates/ingot-supervisor", version = "0.5.0" }
-ingot-backend-python = { path = "crates/ingot-backend-python", version = "0.5.0" }
-ingot-language-service = { path = "crates/ingot-language-service", version = "0.5.0" }
-ingot-lsp = { path = "crates/ingot-lsp", version = "0.5.0" }
-ingot-studio = { path = "crates/ingot-studio", version = "0.5.0" }
-ingot-conformance = { path = "crates/ingot-conformance", version = "0.5.0" }
+ingot-source = { path = "crates/ingot-source", version = "0.5.1" }
+ingot-diagnostics = { path = "crates/ingot-diagnostics", version = "0.5.1" }
+ingot-lexer = { path = "crates/ingot-lexer", version = "0.5.1" }
+ingot-syntax = { path = "crates/ingot-syntax", version = "0.5.1" }
+ingot-parser = { path = "crates/ingot-parser", version = "0.5.1" }
+ingot-lang-types = { path = "crates/ingot-lang-types", version = "0.5.1" }
+ingot-semantic = { path = "crates/ingot-semantic", version = "0.5.1" }
+ingot-ir = { path = "crates/ingot-ir", version = "0.5.1" }
+ingot-package = { path = "crates/ingot-package", version = "0.5.1" }
+ingot-compiler = { path = "crates/ingot-compiler", version = "0.5.1" }
+ingot-runtime = { path = "crates/ingot-runtime", version = "0.5.1" }
+ingot-mcp = { path = "crates/ingot-mcp", version = "0.5.1" }
+ingot-sandbox = { path = "crates/ingot-sandbox", version = "0.5.1" }
+ingot-egress = { path = "crates/ingot-egress", version = "0.5.1" }
+ingot-supervisor = { path = "crates/ingot-supervisor", version = "0.5.1" }
+ingot-backend-python = { path = "crates/ingot-backend-python", version = "0.5.1" }
+ingot-language-service = { path = "crates/ingot-language-service", version = "0.5.1" }
+ingot-lsp = { path = "crates/ingot-lsp", version = "0.5.1" }
+ingot-studio = { path = "crates/ingot-studio", version = "0.5.1" }
+ingot-conformance = { path = "crates/ingot-conformance", version = "0.5.1" }
 
 anyhow = "1.0"
 clap = { version = "4.5", features = ["derive"] }
