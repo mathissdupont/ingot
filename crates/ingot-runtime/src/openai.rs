@@ -70,6 +70,15 @@ pub struct OpenAiProvider {
     /// digest, where a manifest edit would invalidate a recording that has
     /// nothing to do with it.
     catalogue: ModelConfig,
+    /// The name this deployment gave this provider, when it declared one.
+    ///
+    /// A built-in provider is its protocol: `openai/…` reaches OpenAI. A
+    /// provider out of `[[model.provider]]` is whatever the operator called it,
+    /// and `model exact "local/…"` already resolves against that name. Matching
+    /// `model requires { … }` against the protocol instead would mean one
+    /// provider answering to two names in one manifest, with only the pinned
+    /// half working.
+    vendor: Option<String>,
 }
 
 impl OpenAiProvider {
@@ -98,6 +107,7 @@ impl OpenAiProvider {
             api_key: None,
             model_override: None,
             catalogue: ModelConfig::default(),
+            vendor: None,
             effort: None,
             max_retries: DEFAULT_MAX_RETRIES,
             timeout: DEFAULT_TIMEOUT,
@@ -118,6 +128,20 @@ impl OpenAiProvider {
     pub fn with_catalogue(mut self, catalogue: ModelConfig) -> Self {
         self.catalogue = catalogue;
         self
+    }
+
+    /// The vendor half of a model reference, for a declared provider.
+    ///
+    /// `None` leaves it as the protocol's own name, which is correct for the
+    /// built-in provider and for a test.
+    pub fn with_vendor(mut self, vendor: Option<String>) -> Self {
+        self.vendor = vendor;
+        self
+    }
+
+    /// The name a model reference must carry to reach this provider.
+    fn vendor(&self) -> &str {
+        self.vendor.as_deref().unwrap_or(PROVIDER)
     }
 
     pub fn with_effort(mut self, effort: Option<String>) -> Self {
@@ -152,7 +176,7 @@ impl OpenAiProvider {
                 min_context_tokens,
             } => self
                 .catalogue
-                .resolve_capabilities(PROVIDER, capabilities, *min_context_tokens)
+                .resolve_capabilities(self.vendor(), capabilities, *min_context_tokens)
                 .map_err(ProviderError::Configuration),
         }
     }
@@ -662,6 +686,42 @@ mod tests {
             .build_body(&request("markdown", selection))
             .unwrap_err();
         assert!(error.to_string().contains("structured_output"), "{error}");
+    }
+
+    #[test]
+    fn a_declared_provider_matches_a_requirement_against_its_own_name() {
+        // The bug this pins: `[[model.provider]] name = "local"` used to resolve
+        // `model requires { … }` against `openai`, the protocol's own name, so
+        // an operator's `local/…` entry was invisible and the refusal named a
+        // vendor they had not written. `model exact "local/…"` already uses the
+        // declared name, and one provider must not answer to two.
+        let catalogue = ModelConfig {
+            catalogue: vec![crate::catalogue::ModelEntry {
+                model: "local/qwen3".to_string(),
+                context: Some(32_768),
+                capabilities: vec!["structured_output".to_string()],
+            }],
+            ..ModelConfig::default()
+        };
+        let selection = ModelSelection::Capabilities {
+            capabilities: vec!["structured_output".to_string()],
+            min_context_tokens: Some(32_768),
+        };
+
+        let body = provider()
+            .with_catalogue(catalogue.clone())
+            .with_vendor(Some("local".to_string()))
+            .build_body(&request("markdown", selection.clone()))
+            .expect("the declared vendor's entry answers");
+        assert_eq!(body["model"], json!("qwen3"));
+
+        // And without the declared name the same catalogue does not apply, so
+        // the two halves are genuinely coupled rather than both being loose.
+        let error = provider()
+            .with_catalogue(catalogue)
+            .build_body(&request("markdown", selection))
+            .expect_err("`openai` has no such entry");
+        assert!(error.to_string().contains("openai"), "{error}");
     }
 
     #[test]

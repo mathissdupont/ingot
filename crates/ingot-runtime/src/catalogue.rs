@@ -424,10 +424,20 @@ impl ModelConfig {
 #[cfg(feature = "http")]
 pub fn build(
     config: &ProviderConfig,
+    models: &ModelConfig,
     model_override: Option<String>,
     effort: Option<String>,
 ) -> Result<Box<dyn crate::provider::ModelProvider>, crate::provider::ProviderError> {
     use crate::provider::ProviderError;
+
+    // The whole manifest, not just this declaration. A declared provider used
+    // to be built without one, which made `[[model.catalogue]]` invisible to
+    // the endpoint it was most likely written for: the operator's own. The
+    // vendor is the name they gave it, because that is the name
+    // `model exact "<name>/…"` already uses and a manifest should not spell one
+    // provider two ways.
+    let catalogue = models.clone();
+    let vendor = Some(config.name.clone());
 
     let key = match &config.api_key_env {
         Some(variable) => Some(crate::http::key_from_env(variable)?),
@@ -446,7 +456,9 @@ pub fn build(
                     provider
                         .with_base_url(config.base_url.clone())
                         .with_model(model_override)
-                        .with_effort(effort),
+                        .with_effort(effort)
+                        .with_catalogue(catalogue)
+                        .with_vendor(vendor),
                 ))
             }
             #[cfg(not(feature = "openai"))]
@@ -472,7 +484,9 @@ pub fn build(
                     crate::anthropic::AnthropicProvider::with_key(key)
                         .with_base_url(config.base_url.clone())
                         .with_model(model_override)
-                        .with_effort(effort),
+                        .with_effort(effort)
+                        .with_catalogue(catalogue)
+                        .with_vendor(vendor),
                 ))
             }
             #[cfg(not(feature = "anthropic"))]
@@ -498,7 +512,9 @@ pub fn build(
                     crate::google::GoogleProvider::with_key(key)
                         .with_base_url(config.base_url.clone())
                         .with_model(model_override)
-                        .with_effort(effort),
+                        .with_effort(effort)
+                        .with_catalogue(catalogue)
+                        .with_vendor(vendor),
                 ))
             }
             #[cfg(not(feature = "google"))]

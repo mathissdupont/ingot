@@ -56,6 +56,15 @@ pub struct AnthropicProvider {
     /// digest, where a manifest edit would invalidate a recording that has
     /// nothing to do with it.
     catalogue: ModelConfig,
+    /// The name this deployment gave this provider, when it declared one.
+    ///
+    /// A built-in provider is its protocol: `openai/…` reaches OpenAI. A
+    /// provider out of `[[model.provider]]` is whatever the operator called it,
+    /// and `model exact "local/…"` already resolves against that name. Matching
+    /// `model requires { … }` against the protocol instead would mean one
+    /// provider answering to two names in one manifest, with only the pinned
+    /// half working.
+    vendor: Option<String>,
 }
 
 impl AnthropicProvider {
@@ -76,6 +85,7 @@ impl AnthropicProvider {
             api_key: api_key.into(),
             model_override: None,
             catalogue: ModelConfig::default(),
+            vendor: None,
             effort: None,
             max_retries: DEFAULT_MAX_RETRIES,
             timeout: DEFAULT_TIMEOUT,
@@ -96,6 +106,20 @@ impl AnthropicProvider {
     pub fn with_catalogue(mut self, catalogue: ModelConfig) -> Self {
         self.catalogue = catalogue;
         self
+    }
+
+    /// The vendor half of a model reference, for a declared provider.
+    ///
+    /// `None` leaves it as the protocol's own name, which is correct for the
+    /// built-in provider and for a test.
+    pub fn with_vendor(mut self, vendor: Option<String>) -> Self {
+        self.vendor = vendor;
+        self
+    }
+
+    /// The name a model reference must carry to reach this provider.
+    fn vendor(&self) -> &str {
+        self.vendor.as_deref().unwrap_or(PROVIDER)
     }
 
     pub fn with_effort(mut self, effort: Option<String>) -> Self {
@@ -126,7 +150,7 @@ impl AnthropicProvider {
                 min_context_tokens,
             } => self
                 .catalogue
-                .resolve_capabilities(PROVIDER, capabilities, *min_context_tokens)
+                .resolve_capabilities(self.vendor(), capabilities, *min_context_tokens)
                 .map_err(ProviderError::Configuration),
         }
     }
