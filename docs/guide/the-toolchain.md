@@ -475,7 +475,7 @@ ships with the repository, so a fresh checkout can run a tool-using agent
 without installing anything else:
 
 ```bash
-cargo install --path crates/ingot-mcp
+cargo install ingot-mcp          # or `--path crates/ingot-mcp` in a checkout
 ingot tools examples/repo-digest
 ```
 

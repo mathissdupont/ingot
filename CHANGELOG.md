@@ -8,6 +8,43 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
 
 ## [Unreleased]
 
+**The conformance suite would not have survived being installed** (CLI)
+
+`ingot-cli`'s build script embedded the suite by reaching two directories
+upwards to `specs/conformance`. That works from a checkout and only from a
+checkout: `cargo package` carries a crate's own files and nothing above it, so
+the suite was not in the package — and the build script's `read_dir` failure was
+a silent one, so a published crate would have built *successfully* and installed
+a binary whose `ingot conform` had no cases.
+
+This is precisely the shape [GAP-038](docs/gaps.md#gap-038) describes. The entry
+was written on 2026-08-13 and says the friction that stops somebody else is
+usually not on the list because nobody has hit it yet. The first step towards
+somebody else installing this found a bug that only somebody else could have
+found.
+
+- The cases now live in **`ingot-conformance`**, a crate of their own, so
+  travelling with the code is a property of where they are rather than a
+  convention. `specs/conformance` is gone; [`specs/README.md`](specs/README.md)
+  says where it went.
+- An empty suite is a **build failure**, in the build script and again as a
+  `const` assertion on the table that reached the binary. An empty suite passes
+  every backend it is pointed at, which is worse than no suite.
+- The drift test now compares in both directions: a file in the tree but not in
+  the binary, and a file in the binary that is no longer in the tree.
+
+**Installable from crates.io** (CLI)
+
+`cargo install ingot-cli` — no `--git`, no clone. `ingot-mcp` and `ingot-lsp`
+install the reference tool server and the language server, separately, because
+they are three separate permissions to grant a machine.
+
+- Every crate now carries the metadata a registry needs; `ingot-cli` has its own
+  README and `ingot-language-service` and `ingot-lsp` had no `description`.
+- Verified the way it will actually be consumed: the binary built from the
+  packaged sources, run from a directory with no checkout above it, executes all
+  twelve cases.
+
 ## [0.5.0] — 2026-08-13
 
 The release where a declaration outlives the run that made it, and where the

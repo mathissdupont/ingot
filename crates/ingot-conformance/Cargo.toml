@@ -1,0 +1,21 @@
+[package]
+name = "ingot-conformance"
+description = "The Ingot conformance suite: the cases a backend must reproduce, embedded for a binary to carry."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+readme = "README.md"
+keywords = ["ingot", "conformance", "agent", "testing"]
+categories = ["development-tools::testing"]
+# A worked example somebody reads in the repository, not something a build or a
+# run touches. Two Python files in every download would be for nobody.
+exclude = ["tools/"]
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]

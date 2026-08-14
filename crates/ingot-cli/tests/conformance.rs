@@ -36,7 +36,10 @@ fn python() -> Option<String> {
 }
 
 fn suite() -> String {
-    repo_root().join("specs/conformance").display().to_string()
+    repo_root()
+        .join("crates/ingot-conformance")
+        .display()
+        .to_string()
 }
 
 #[test]
@@ -58,7 +61,7 @@ fn the_python_backend_conforms() {
     // regression test wearing a suit.
     let Some(python) = python() else { return };
     let adapter = repo_root()
-        .join("specs/conformance/tools/python-adapter.py")
+        .join("crates/ingot-conformance/tools/python-adapter.py")
         .display()
         .to_string();
     let backend = format!("{python} {adapter}");
@@ -176,10 +179,15 @@ fn the_built_in_suite_is_the_suite_in_the_tree() {
     );
     assert_eq!(code(&output), EXIT_OK, "{}", stderr(&output));
 
-    let tree = repo_root().join("specs").join("conformance");
+    // The crate root also holds `Cargo.toml`, `src/`, `build.rs` and `tools/`,
+    // none of which are the suite. What ships is `cases/` and the contract
+    // document, so that is what this walks -- the same two things `build.rs`
+    // names, and if the two lists ever disagree this test is what says so.
+    let tree = repo_root().join("crates").join("ingot-conformance");
     let mut differing = Vec::new();
     let mut missing = Vec::new();
-    let mut stack = vec![tree.clone()];
+    let mut stack = vec![tree.join("cases")];
+    let mut loose = vec![tree.join("README.md")];
     while let Some(here) = stack.pop() {
         for entry in std::fs::read_dir(&here)
             .expect("reading the suite")
@@ -190,26 +198,55 @@ fn the_built_in_suite_is_the_suite_in_the_tree() {
                 stack.push(path);
                 continue;
             }
-            let relative = path.strip_prefix(&tree).expect("under the suite");
-            // `tools/` is a worked example somebody reads in the repository,
-            // and is deliberately not carried in the binary.
-            if relative.starts_with("tools") {
-                continue;
-            }
-            let copy = exported.join(relative);
-            if !copy.is_file() {
-                missing.push(relative.display().to_string());
-                continue;
-            }
-            if std::fs::read(&path).ok() != std::fs::read(&copy).ok() {
-                differing.push(relative.display().to_string());
-            }
+            loose.push(path);
+        }
+    }
+    let mut expected = Vec::new();
+    for path in loose {
+        let relative = path.strip_prefix(&tree).expect("under the suite");
+        expected.push(relative.display().to_string());
+        let copy = exported.join(relative);
+        if !copy.is_file() {
+            missing.push(relative.display().to_string());
+            continue;
+        }
+        if std::fs::read(&path).ok() != std::fs::read(&copy).ok() {
+            differing.push(relative.display().to_string());
         }
     }
     assert!(missing.is_empty(), "not built into the binary: {missing:?}");
     assert!(
         differing.is_empty(),
         "the built-in copy has drifted: {differing:?}"
+    );
+
+    // And the other direction, which the first half cannot see: a file deleted
+    // from the tree but still embedded would export cleanly and match nothing.
+    let mut extra = Vec::new();
+    let mut stack = vec![exported.clone()];
+    while let Some(here) = stack.pop() {
+        for entry in std::fs::read_dir(&here)
+            .expect("reading the export")
+            .flatten()
+        {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            let relative = path
+                .strip_prefix(&exported)
+                .expect("under the export")
+                .display()
+                .to_string();
+            if !expected.contains(&relative) {
+                extra.push(relative);
+            }
+        }
+    }
+    assert!(
+        extra.is_empty(),
+        "built into the binary but no longer in the tree: {extra:?}"
     );
 }
 

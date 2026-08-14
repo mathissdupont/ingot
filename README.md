@@ -33,7 +33,7 @@ reaches nothing, rather than reaching everything.
 ## Thirty seconds, and no API key
 
 ```bash
-cargo install --git https://github.com/mathissdupont/ingot ingot-cli
+cargo install ingot-cli
 # or download a binary: https://github.com/mathissdupont/ingot/releases
 
 ingot init hello && cd hello
@@ -203,9 +203,20 @@ Four complete examples live in [`examples/`](examples/).
 
 ### With cargo
 
-Requires a stable Rust toolchain (MSRV 1.85). This builds and installs `ingot`
-alone; the reference tool server and language server are separate binaries in
-the same workspace.
+Requires a stable Rust toolchain (MSRV 1.85).
+
+```bash
+cargo install ingot-cli          # the `ingot` binary
+cargo install ingot-mcp          # `ingot-mcp-fs`, the reference tool server
+cargo install ingot-lsp          # the language server
+```
+
+Three crates rather than one because they are three permissions to grant a
+machine: a compiler, a process that reads your filesystem on an agent's behalf,
+and something an editor starts. Installing the first does not install the
+others.
+
+To track `main` instead of a release:
 
 ```bash
 cargo install --git https://github.com/mathissdupont/ingot ingot-cli

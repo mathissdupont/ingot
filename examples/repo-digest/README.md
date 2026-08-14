@@ -13,7 +13,7 @@ filesystem policy the runtime re-checks against the artifact.
 The server has to be on `PATH`:
 
 ```bash
-cargo install --path crates/ingot-mcp
+cargo install ingot-mcp          # or `--path crates/ingot-mcp` in a checkout
 ```
 
 Or point `command` in [`ingot.toml`](ingot.toml) at the built binary directly.

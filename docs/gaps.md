@@ -509,7 +509,23 @@ of what they hit. The likely findings are not bugs in the cases — they are
 places the specification is silent, or clear only to somebody who already knew
 the answer.
 
-*Recorded in.* [`specs/conformance/README.md`](../specs/conformance/README.md),
+*One data point, a day later.* This entry was written on 2026-08-13. On
+2026-08-14, preparing the crates.io publish, the first question asked on behalf
+of somebody outside — *what does a person who runs `cargo install` actually
+get?* — found that they would have got a binary with **no cases in it**. The
+suite was embedded from `specs/conformance`, two directories above the crate,
+and a package carries nothing above itself. The build script read a directory
+that was not there, which is not an error, and the binary would have shipped
+looking complete.
+
+Nothing in this repository could have caught it, because everything in this
+repository is a checkout. That is the whole entry in one bug: the failure was
+not in the cases or the specification, it was in the distance between here and
+somebody else, and it was invisible from this side. Fixed by moving the cases
+into [`ingot-conformance`](../crates/ingot-conformance/README.md) — but the
+finding is the point, not the fix.
+
+*Recorded in.* [`crates/ingot-conformance/README.md`](../crates/ingot-conformance/README.md),
 [the backend author's guide](guide/writing-a-backend.md).
 
 ### GAP-039
@@ -693,7 +709,7 @@ do, and there was no way to find out whether yours did. The interpreter's own
 tests were the closest thing, and they were not packaged for anybody else.
 
 *What closed it.* `ingot conform`, a suite of seven cases in
-[`specs/conformance/`](../specs/conformance/README.md), and
+[`crates/ingot-conformance/`](../crates/ingot-conformance/README.md), and
 [a guide](guide/writing-a-backend.md).
 
 A backend under test is a **command**: the suite writes a request file, runs the
@@ -715,7 +731,7 @@ sub-agent, a policy denial at run time, a budget being exhausted, or a
 `checkpoint`. The suite's own README says so: a suite that implied coverage it
 does not have would be worse than a small one.
 
-*Recorded in.* [`specs/conformance/README.md`](../specs/conformance/README.md),
+*Recorded in.* [`crates/ingot-conformance/README.md`](../crates/ingot-conformance/README.md),
 [the backend author's guide](guide/writing-a-backend.md),
 `crates/ingot-cli/src/conform.rs`,
 `crates/ingot-cli/tests/conformance.rs`.

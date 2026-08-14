@@ -1,5 +1,6 @@
 [package]
 name = "ingot-language-service"
+description = "Editor-facing analysis for Ingot: the diagnostics, hovers and symbols an editor shows, from the same compiler the CLI runs."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
