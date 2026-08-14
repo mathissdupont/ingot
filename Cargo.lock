@@ -521,11 +521,11 @@ version = "0.5.0"
 dependencies = [
  "ingot-diagnostics",
  "ingot-ir",
+ "ingot-lang-types",
  "ingot-parser",
  "ingot-semantic",
  "ingot-source",
  "ingot-syntax",
- "ingot-types",
  "serde_json",
 ]
 
@@ -554,14 +554,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ingot-lang-types"
+version = "0.5.0"
+
+[[package]]
 name = "ingot-language-service"
 version = "0.5.0"
 dependencies = [
  "ingot-compiler",
  "ingot-diagnostics",
+ "ingot-lang-types",
  "ingot-source",
  "ingot-syntax",
- "ingot-types",
  "serde",
 ]
 
@@ -622,7 +626,7 @@ name = "ingot-runtime"
 version = "0.5.0"
 dependencies = [
  "ingot-ir",
- "ingot-types",
+ "ingot-lang-types",
  "serde",
  "serde_json",
  "sha2",
@@ -644,10 +648,10 @@ name = "ingot-semantic"
 version = "0.5.0"
 dependencies = [
  "ingot-diagnostics",
+ "ingot-lang-types",
  "ingot-parser",
  "ingot-source",
  "ingot-syntax",
- "ingot-types",
 ]
 
 [[package]]
@@ -675,10 +679,6 @@ version = "0.5.0"
 dependencies = [
  "ingot-source",
 ]
-
-[[package]]
-name = "ingot-types"
-version = "0.5.0"
 
 [[package]]
 name = "inotify"

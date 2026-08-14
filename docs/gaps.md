@@ -1170,6 +1170,16 @@ is distributed as `ingot-cli` and as prebuilt archives — `cargo install
 ingot-cli` installs a binary called `ingot` either way. What is left is discovery
 confusion, not a conflict.
 
+*It cost one name, 2026-08-14.* "Costs nothing" was very nearly right and not
+quite. Preparing the crates.io publish found that the same owner also holds
+**`ingot-types`** — the crate this project's type, effect and capability model
+was called. Every other name in the workspace was free. Renaming the package to
+`ingot-lang-types` while keeping `[lib] name = "ingot_types"` moved no Rust at
+all, so the cost really was one line in a manifest; but it is worth recording
+that a neighbouring name in an occupied namespace is not free by default, and
+the next one may not be this cheap. This does not reopen the entry: the decision
+it records was about a trademark search, and nothing here bears on that.
+
 A *trademark* search is the other thing, and it protects against being made to
 rename after adoption. That risk is real and is **knowingly accepted**: the cost
 of a rename is a maintainer's problem, and holding a release for a search nobody

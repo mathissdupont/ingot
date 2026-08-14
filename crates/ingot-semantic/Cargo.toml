@@ -12,7 +12,7 @@ authors.workspace = true
 ingot-source.workspace = true
 ingot-diagnostics.workspace = true
 ingot-syntax.workspace = true
-ingot-types.workspace = true
+ingot-lang-types.workspace = true
 
 [dev-dependencies]
 ingot-parser.workspace = true

@@ -1,0 +1,25 @@
+[package]
+# Not `ingot-types`: that name on crates.io belongs to an unrelated,
+# actively-maintained packet-parsing library from the same project that holds
+# `ingot`. The gap register already accepted the discovery confusion around the
+# bare name; this one is not a choice, because the name is simply taken.
+name = "ingot-lang-types"
+description = "Type, effect and capability model shared by the Ingot compiler stages."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords = ["ingot", "types", "effects", "compiler"]
+categories = ["compilers", "development-tools"]
+
+[lib]
+# The library keeps its original name, so `use ingot_types::…` reads the same in
+# every stage that depends on it. A package name is an address in a registry; a
+# library name is what the code says. Only the first one collided.
+name = "ingot_types"
+path = "src/lib.rs"
+
+[dependencies]

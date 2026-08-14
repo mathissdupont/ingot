@@ -6,7 +6,7 @@ members = [
     "crates/ingot-lexer",
     "crates/ingot-syntax",
     "crates/ingot-parser",
-    "crates/ingot-types",
+    "crates/ingot-lang-types",
     "crates/ingot-semantic",
     "crates/ingot-ir",
     "crates/ingot-package",
@@ -39,7 +39,7 @@ ingot-diagnostics = { path = "crates/ingot-diagnostics", version = "0.5.0" }
 ingot-lexer = { path = "crates/ingot-lexer", version = "0.5.0" }
 ingot-syntax = { path = "crates/ingot-syntax", version = "0.5.0" }
 ingot-parser = { path = "crates/ingot-parser", version = "0.5.0" }
-ingot-types = { path = "crates/ingot-types", version = "0.5.0" }
+ingot-lang-types = { path = "crates/ingot-lang-types", version = "0.5.0" }
 ingot-semantic = { path = "crates/ingot-semantic", version = "0.5.0" }
 ingot-ir = { path = "crates/ingot-ir", version = "0.5.0" }
 ingot-package = { path = "crates/ingot-package", version = "0.5.0" }

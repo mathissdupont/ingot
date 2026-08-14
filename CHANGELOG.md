@@ -45,6 +45,22 @@ they are three separate permissions to grant a machine.
   packaged sources, run from a directory with no checkout above it, executes all
   twelve cases.
 
+**`ingot-types` is now `ingot-lang-types`** (internal; no source change)
+
+The name on crates.io belongs to an unrelated packet-parsing library — the same
+project that holds the bare `ingot`, actively maintained, four published
+versions. [GAP-019](docs/gaps.md#gap-019) had already weighed the bare name and
+accepted the discovery confusion, concluding it "costs nothing"; it did not know
+the same owner held this one too. This is not a preference — the name is taken.
+
+Only the **package** name changed. `[lib] name = "ingot_types"` is kept, so
+`use ingot_types::…` reads the same everywhere and not one line of Rust moved: a
+package name is an address in a registry, a library name is what the code says,
+and only the first one collided. A publish is all-or-nothing in practice —
+crates go up in dependency order and a name taken halfway through leaves the
+earlier ones permanently published — so this was worth finding before the token
+was ever used, not after.
+
 ## [0.5.0] — 2026-08-13
 
 The release where a declaration outlives the run that made it, and where the

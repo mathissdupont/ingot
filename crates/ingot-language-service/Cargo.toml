@@ -14,5 +14,5 @@ ingot-compiler.workspace = true
 ingot-diagnostics.workspace = true
 ingot-source.workspace = true
 ingot-syntax.workspace = true
-ingot-types.workspace = true
+ingot-lang-types.workspace = true
 serde.workspace = true
