@@ -53,7 +53,6 @@ to you*.
 | [GAP-038](#gap-038) | No backend outside this repository has ever run the suite | Unproven | somebody else's backend, and what they hit |
 | [GAP-039](#gap-039) | No agent outside this repository is known to run | Unproven | a program somebody depends on, and its friction |
 | [GAP-040](#gap-040) | A model call's timeout is fixed at 180 seconds | Absent | a place to say otherwise, and a decision about where it belongs |
-| [GAP-041](#gap-041) | An approval can only be answered at a terminal | Refused | a channel from a running agent to a person |
 | [GAP-042](#gap-042) | An agent cannot put a question to a person | Absent | a construct for it, and a decision about what it does to a replay |
 
 ---
@@ -519,60 +518,6 @@ argument looks right, and it is why this is an entry rather than a patch.
 *Recorded in.* [`crates/ingot-runtime/src/http.rs`](../crates/ingot-runtime/src/http.rs).
 
 
-### GAP-041
-
-**An approval can only be answered at a terminal.**
-
-`filesystem_write require approval` inserts an approval node, and at a terminal
-that node asks. Anywhere else it does not: `ingot run` selects
-`ApprovalMode::Deny` when standard input is not a terminal, so a run started by
-the studio, by cron, or by CI is refused at the gate rather than asked.
-
-*This is a decision, not an oversight.* [RFC-0015 §"Two things the page cannot
-ask for"](../rfcs/0015-ingot-studio.md) refused to put `--yes` in the argv the
-studio builds, on the grounds that a button in the same flow as building gets
-clicked the way a notification prompt gets clicked. That reasoning still holds.
-What was never recorded is its consequence, which is this entry: **an agent that
-needs a person cannot be run from the one surface built for people.** The studio
-can start a run, watch it, and show what it produced — and any artifact with an
-approval gate in it stops at that gate.
-
-*How it shows up.* `approval.ask` followed by a refusal in the event stream,
-with no way to answer. `--yes` at a terminal is the only path, and it answers
-every gate in the run rather than the one in front of you.
-
-*What closing it needs.* A channel from a running agent back to whoever started
-it, and a surface that renders one gate at a time. The supervisor channel
-([RFC-0005](../rfcs/0005-the-contained-run.md)) already carries an approval
-request out of a contained run, so the shape exists; what is missing is the same
-thing for an ordinary run and a page that can hold the answer. It should be
-designed together with [GAP-042](#gap-042) — a yes/no on an effect and a
-question put to a person want the same channel, and building it twice would give
-two.
-
-*Designed in.* [RFC-0020](../rfcs/0020-a-person-in-the-loop.md), together with
-[GAP-042](#gap-042) as this entry asked for. The design keeps RFC-0015's refusal
-of `--yes` intact and separates it from answering: a blanket answer given before
-the run stays refused, one gate answered at the moment it is reached does not.
-
-*Half built, and the half that is built is the smaller one.* `ingot run
---approvals stdin` exists: a parent process reads `approvalRequested` off the
-event stream and writes `{"node":"…","allowed":true}` back on standard input.
-Building it corrected the design — standard output carries the run's artifacts,
-so the protocol the RFC first proposed could not live there, and the outbound
-half turned out to already exist as the event stream. Only the answer needed a
-path.
-
-**The entry stays open, and the sentence that opened it is still true.** The
-studio cannot answer a gate. It spawns `ingot run` with
-[`Stdio::null()`](../crates/ingot-cli/src/launch.rs) on standard input and has
-nowhere to render one gate at a time, so *an agent that needs a person still
-cannot be run from the one surface built for people* — the channel it would use
-is simply no longer missing.
-
-*Recorded in.* [RFC-0015](../rfcs/0015-ingot-studio.md),
-[`crates/ingot-runtime/src/interp.rs`](../crates/ingot-runtime/src/interp.rs).
-
 ### GAP-042
 
 **An agent cannot put a question to a person and use the answer.**
@@ -598,10 +543,13 @@ a `--record` writes, what a replay does when the recorded answer no longer
 matches the question, and whether a run that stopped for a person is a
 [resumption](../rfcs/0018-state-that-outlives-a-run.md) rather than a pause.
 
-*The smaller half first.* [GAP-041](#gap-041) is a channel with no vocabulary
-above it. This is the vocabulary. They share a design and should not be built
-separately, but the channel is useful on its own and this is not useful without
-it.
+*The smaller half first, and it is built.* [GAP-041](#gap-041) was a channel
+with no vocabulary above it; this is the vocabulary. They shared a design, which
+is why that half waited for RFC-0020 rather than being built twice — and having
+it does not shorten this one. The channel carries a yes or a no on an effect the
+compiler gated. A question a program wrote, whose answer is a value the flow
+reads, still needs `consult`, the `human` effect, a third cassette list and an
+IR node. What is settled is where the answer travels.
 
 *Designed in.* [RFC-0020](../rfcs/0020-a-person-in-the-loop.md). It answers the
 three questions above in one move — a person is a third source of answers,
@@ -692,6 +640,54 @@ that closes this is somebody depending on one.
 When a gap closes it moves here with the release that closed it, and its section
 stays where a link can find it. Identifiers are never reused: a link to GAP-007
 must keep meaning what it meant.
+
+### GAP-041
+
+**An approval could only be answered at a terminal.**
+*Closed 2026-08-15.*
+
+`filesystem_write require approval` inserts an approval node, and at a terminal
+that node asked. Anywhere else it did not: `ingot run` selected
+`ApprovalMode::Deny` when standard input was not a terminal, so a run started by
+the studio, by cron or by CI was refused at the gate rather than asked. Which
+gave the entry its sentence: **an agent that needed a person could not be run
+from the one surface built for people.**
+
+*What closed it.* A channel, in two halves.
+[`ingot run --approvals stdin`](../crates/ingot-cli/src/run.rs) lets whatever
+started a run answer one gate at a time, and the studio uses it: the gate
+arrives as `approvalRequested` on the event stream, the page renders the effect
+and the reason, and the answer goes back as one line naming the node. Designed
+in [RFC-0020](../rfcs/0020-a-person-in-the-loop.md), together with
+[GAP-042](#gap-042) as this entry asked for.
+
+*What building it corrected.* The RFC proposed the supervisor's JSON-RPC on the
+run's standard streams. Standard output carries the run's artifacts so the
+command composes with a pipe, and a protocol there would interleave with the
+bytes an artifact is made of. The outbound half turned out to already exist —
+`ApprovalRequested` is emitted *before* the handler is asked — so only the
+answer ever needed a path.
+
+*What did not change, and is the point.*
+[RFC-0015](../rfcs/0015-ingot-studio.md) refused `--yes` in the studio's argv on
+the grounds that a button in the same flow as building gets clicked the way a
+notification prompt gets clicked. **That refusal stands.** `--yes` is still not
+in the argv and there is still no field that would put it there. What the page
+offers is the other thing: one gate, at the moment it is reached, with the
+effect and the reason in front of the person answering it. The next gate asks
+again. A blanket answer to gates nobody has seen and a single answer to the gate
+in front of you were only ever conflated because there was one mechanism.
+
+*The cost, stated.* A studio-started run that reaches a gate now **waits** where
+it used to fail. It waits indefinitely — a person is not a service and no clock
+decides for them — so the obligation moved to the surface: the page shows the
+run as waiting, with its gate, and the Stop button is there for the one nobody
+is going to answer. A forgotten gate must be visible; it must not be cancelled
+by a timer.
+
+*Recorded in.* [RFC-0015](../rfcs/0015-ingot-studio.md),
+[RFC-0020](../rfcs/0020-a-person-in-the-loop.md),
+[`crates/ingot-cli/src/launch.rs`](../crates/ingot-cli/src/launch.rs).
 
 ### GAP-007
 

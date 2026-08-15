@@ -24,19 +24,36 @@
 //! ends in the pid of the process that wrote it — rather than by asking the
 //! child to report one. Nothing new has to cross between them.
 //!
+//! # Answering a gate
+//!
+//! The child runs with `--events json --approvals stdin`, so an approval gate
+//! it reaches arrives here as an `approvalRequested` event and the answer goes
+//! back as one line on its standard input. See
+//! [RFC-0020](../../../rfcs/0020-a-person-in-the-loop.md).
+//!
+//! **This does not weaken what [RFC-0015](../../../rfcs/0015-ingot-studio.md)
+//! refused.** That decision was about `--yes` — a blanket answer, given before
+//! the run, to gates nobody has seen — on the grounds that a button in the same
+//! flow as building gets clicked the way a notification prompt gets clicked.
+//! `--yes` is still not in the argv this builds and there is still no field
+//! that would put it there. What arrives here is the opposite thing: **one
+//! gate, at the moment it is reached, with the effect and the reason in front
+//! of the person answering it.** The next gate asks again.
+//!
+//! Only one gate can be outstanding at a time, because the run blocks on it —
+//! so an answer names the node it answers, and one naming any other node is
+//! refused rather than applied. A tab left open cannot answer a gate it was
+//! never shown.
+//!
 //! # What this deliberately cannot do
 //!
-//! **Approve an effect.** The child is spawned with no terminal on its standard
-//! input, so [`crate::run`] selects `ApprovalMode::Deny`: an artifact that asks
-//! for a human does not get a silent yes. `--yes` is not in the argv this
-//! builds and there is no field that would put it there.
-//!
-//! **Keep no record.** `--no-history` is likewise absent. A studio-started run
-//! that wrote nothing down would be a run the studio could never show again.
+//! **Keep no record.** `--no-history` is absent from the argv. A studio-started
+//! run that wrote nothing down would be a run the studio could never show
+//! again.
 
-use std::io::Read;
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -85,6 +102,31 @@ fn default_provider() -> String {
     "auto".to_string()
 }
 
+/// A gate the run is stopped at, waiting for a person.
+///
+/// Held rather than merely shown: the run is blocked until this is answered, so
+/// a launch carrying one is a launch that will make no further progress. That
+/// is why [`LaunchView`] surfaces it — a run waiting on a person must not look
+/// the same as a run that is working.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GateView {
+    /// The node the gate is in front of. An answer names it, which is what
+    /// keeps a stale page from answering a gate it was never shown.
+    pub node: String,
+    pub effects: Vec<String>,
+    /// The label the compiler attached, naming what is about to happen.
+    pub reason: String,
+}
+
+/// What the page sends back.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AnswerRequest {
+    pub node: String,
+    pub allowed: bool,
+}
+
 /// A process this studio started.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -103,6 +145,9 @@ pub struct LaunchView {
     pub log: String,
     /// Whether either capture hit its ceiling.
     pub truncated: bool,
+    /// The gate this run is stopped at, when it is stopped at one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pending: Option<GateView>,
 }
 
 struct Launch {
@@ -116,6 +161,13 @@ struct Launch {
     exit_code: Arc<Mutex<Option<i32>>>,
     output: Arc<Mutex<Capture>>,
     log: Arc<Mutex<Capture>>,
+    /// The gate the run is blocked on, set when `approvalRequested` arrives and
+    /// cleared when `approvalDecided` does. At most one: the interpreter reaches
+    /// one gate at a time and waits there.
+    pending: Arc<Mutex<Option<GateView>>>,
+    /// The answering end. Taken once the run finishes, so a write to a dead
+    /// child is a refusal rather than a broken pipe.
+    stdin: Arc<Mutex<Option<ChildStdin>>>,
 }
 
 /// A bounded copy of one stream.
@@ -196,10 +248,17 @@ impl Launcher {
             command.arg("--input").arg(format!("{name}={value}"));
         }
 
+        // The gate leaves on the event stream and the answer comes back on
+        // standard input, so both are asked for together: `--approvals stdin`
+        // without `--events json` is refused by the child, and rightly.
+        command
+            .arg("--events")
+            .arg("json")
+            .arg("--approvals")
+            .arg("stdin");
+
         let mut child = command
-            // No terminal on standard input, which is what makes the child
-            // deny an effect that asks for a human rather than assume one.
-            .stdin(Stdio::null())
+            .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
@@ -210,9 +269,11 @@ impl Launcher {
         let log = Arc::new(Mutex::new(Capture::default()));
         let finished = Arc::new(AtomicBool::new(false));
         let exit_code = Arc::new(Mutex::new(None));
+        let pending = Arc::new(Mutex::new(None));
+        let stdin = Arc::new(Mutex::new(child.stdin.take()));
 
         drain(child.stdout.take(), Arc::clone(&output));
-        drain(child.stderr.take(), Arc::clone(&log));
+        drain_events(child.stderr.take(), Arc::clone(&log), Arc::clone(&pending));
 
         let launch = Arc::new(Launch {
             project: project.to_path_buf(),
@@ -225,6 +286,8 @@ impl Launcher {
             exit_code: Arc::clone(&exit_code),
             output,
             log,
+            pending: Arc::clone(&pending),
+            stdin: Arc::clone(&stdin),
         });
 
         // Reaped on its own thread so a finished child does not linger as one,
@@ -238,6 +301,11 @@ impl Launcher {
                     .and_then(|mut child| child.try_wait().ok().flatten());
                 if let Some(status) = status {
                     *exit_code.lock().expect("a poisoned lock") = status.code();
+                    // Both dropped before the launch is marked finished, so the
+                    // page can never see a gate offered on a run that has
+                    // already stopped being able to answer it.
+                    pending.lock().expect("a poisoned lock").take();
+                    stdin.lock().expect("a poisoned lock").take();
                     finished.store(true, Ordering::SeqCst);
                     return;
                 }
@@ -275,9 +343,58 @@ impl Launcher {
                     output: output.text.clone(),
                     log: log.text.clone(),
                     truncated: output.truncated || log.truncated,
+                    pending: launch.pending.lock().expect("a poisoned lock").clone(),
                 }
             })
             .collect()
+    }
+
+    /// Answer the gate one run is stopped at.
+    ///
+    /// `node` is the gate being answered, and it has to be the one outstanding.
+    /// The run blocks on one gate at a time, so an answer naming any other is a
+    /// page that has been looking at a stale view — and applying it would decide
+    /// the gate in front of the run with the intent of one already settled. The
+    /// child keeps the same rule on its own side, and both keeping it is the
+    /// point of a boundary rather than duplication.
+    pub fn answer(&self, project: &Path, pid: u32, answer: &AnswerRequest) -> Result<()> {
+        let launches = self.launches.lock().expect("a poisoned lock");
+        let Some(launch) = launches
+            .iter()
+            .find(|launch| launch.pid == pid && launch.project == project)
+        else {
+            bail!("this studio did not start process {pid}");
+        };
+
+        match launch.pending.lock().expect("a poisoned lock").as_ref() {
+            Some(gate) if gate.node == answer.node => {}
+            Some(gate) => bail!(
+                "this run is waiting at `{}` and the answer named `{}`; reload and answer the \
+                 gate it is actually at",
+                gate.node,
+                answer.node
+            ),
+            None => bail!("this run is not waiting at a gate"),
+        }
+
+        let mut handle = launch.stdin.lock().expect("a poisoned lock");
+        let Some(stdin) = handle.as_mut() else {
+            bail!("this run has finished and cannot be answered");
+        };
+        writeln!(
+            stdin,
+            r#"{{"node":{},"allowed":{}}}"#,
+            serde_json::to_string(&answer.node).expect("a string is always serializable"),
+            answer.allowed
+        )
+        .and_then(|()| stdin.flush())
+        .context("answering the gate")?;
+
+        // Cleared here rather than waiting for `approvalDecided` to come back,
+        // so the button cannot be pressed twice for one gate while the child is
+        // still deciding. The event confirms it; this prevents the second write.
+        launch.pending.lock().expect("a poisoned lock").take();
+        Ok(())
     }
 
     /// Stop one running child.
@@ -364,6 +481,84 @@ fn drain<R: Read + Send + 'static>(stream: Option<R>, into: Arc<Mutex<Capture>>)
             }
         }
     });
+}
+
+/// The same, for the stream the events arrive on.
+///
+/// Line-based rather than chunk-based because a gate is a line: under
+/// `--events json` every event is one JSON object per line, and the run blocks
+/// after emitting `approvalRequested` until somebody answers. Reading by chunk
+/// would leave a gate half-parsed in a buffer with nothing further coming to
+/// complete it — the one case where waiting for more input never ends.
+///
+/// Event lines are kept out of `log`. They are already in the run record,
+/// verbatim and durable, and duplicating them into a bounded in-memory buffer
+/// would push out what only that buffer holds: what the process said *around*
+/// the event stream, which is the whole reason it exists.
+fn drain_events<R: Read + Send + 'static>(
+    stream: Option<R>,
+    into: Arc<Mutex<Capture>>,
+    pending: Arc<Mutex<Option<GateView>>>,
+) {
+    let Some(stream) = stream else { return };
+    std::thread::spawn(move || {
+        for line in BufReader::new(stream).lines() {
+            let Ok(line) = line else { return };
+            match gate_event(&line) {
+                Some(Event::Requested(gate)) => {
+                    *pending.lock().expect("a poisoned lock") = Some(gate);
+                }
+                Some(Event::Decided) => {
+                    pending.lock().expect("a poisoned lock").take();
+                }
+                Some(Event::Other) => {}
+                // Not an event: a warning, a hint, a failure, or the model's
+                // text arriving live. This is what the capture is for.
+                None => {
+                    let mut capture = into.lock().expect("a poisoned lock");
+                    capture.push(&line);
+                    capture.push("\n");
+                }
+            }
+        }
+    });
+}
+
+enum Event {
+    Requested(GateView),
+    Decided,
+    Other,
+}
+
+/// What one line of the event stream says about a gate, if it is an event.
+///
+/// A line with no `event` key is not one: under `--events json` the model's
+/// text arrives live as lines without it, which is the documented shape rather
+/// than a quirk to guess at.
+fn gate_event(line: &str) -> Option<Event> {
+    let value: serde_json::Value = serde_json::from_str(line.trim()).ok()?;
+    match value.get("event")?.as_str()? {
+        "approvalRequested" => Some(Event::Requested(GateView {
+            node: value.get("node")?.as_str()?.to_string(),
+            effects: value
+                .get("effects")
+                .and_then(|effects| effects.as_array())
+                .map(|effects| {
+                    effects
+                        .iter()
+                        .filter_map(|effect| effect.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            reason: value
+                .get("reason")
+                .and_then(|reason| reason.as_str())
+                .unwrap_or_default()
+                .to_string(),
+        })),
+        "approvalDecided" => Some(Event::Decided),
+        _ => Some(Event::Other),
+    }
 }
 
 fn now() -> u64 {

@@ -50,10 +50,28 @@ Every way of failing to answer is a refusal, and each is tested: a closed pipe,
 an answer naming another gate, an unreadable line, an invented field. A gate that
 cannot reach anybody must never become consent.
 
-[GAP-041](docs/gaps.md#gap-041) **stays open.** The studio still spawns runs with
-no standard input and has nowhere to render a gate, so an agent that needs a
-person still cannot be run from the surface built for people. What changed is
-that the channel it would use is no longer missing.
+**The studio can answer a gate** (studio) — [GAP-041](docs/gaps.md#gap-041)
+**closed**.
+
+A studio-started run now runs with the channel attached. A gate it reaches
+arrives as `approvalRequested`, the page renders the effect and the reason the
+compiler attached, and two buttons send the answer back naming the node. The
+next gate asks again.
+
+**RFC-0015's refusal of `--yes` stands and is untouched.** It is still not in
+the argv the studio builds and there is still no field that would put it there.
+A blanket answer to gates nobody has seen and a single answer to the gate in
+front of you were only ever the same thing because there was one mechanism.
+
+Only one gate can be outstanding, because the run blocks on it — so an answer
+names the node it answers, and one naming any other is refused rather than
+applied. A tab left open cannot answer a gate it was never shown. Both sides
+keep that rule, which is the point of a boundary rather than duplication.
+
+**The cost, stated.** A studio-started run that reaches a gate now *waits* where
+it used to fail, and waits indefinitely — a person is not a service and no clock
+decides for them. So the obligation moved to the surface: the page shows the run
+as waiting, with its gate, and Stop is there for the one nobody will answer.
 
 ## [0.5.2] — 2026-08-14
 
