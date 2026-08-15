@@ -55,6 +55,20 @@ pub enum EventFormat {
     Quiet,
 }
 
+/// Where an approval gate is answered.
+///
+/// See [RFC-0020](../../../rfcs/0020-a-person-in-the-loop.md). The channel this
+/// adds is deliberately half a channel: the gate already leaves the run on the
+/// event stream, so only the answer needed a way in.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
+pub enum ApprovalChannel {
+    /// A terminal if standard input is one, and a refusal if it is not.
+    #[default]
+    Auto,
+    /// One JSON line per gate, read from standard input.
+    Stdin,
+}
+
 /// Where snapshots live inside a project's build directory.
 pub const SNAPSHOTS_DIR: &str = "snapshots";
 
@@ -96,6 +110,8 @@ pub struct RunConfig {
     pub memory: Option<PathBuf>,
     pub memory_mode: crate::memory::MemoryMode,
     pub yes: bool,
+    /// Where an approval gate is answered.
+    pub approvals: ApprovalChannel,
     pub max_steps: u32,
     /// The project directory; tool servers start here.
     pub root: PathBuf,
@@ -349,6 +365,7 @@ fn check_declared_reach(
 pub fn execute(compilation: &Compilation, config: &RunConfig) -> Result<u8> {
     let (ir, registry) = select_agent(compilation, config.agent.as_deref())?;
     check_declared_reach(&ir, &registry, config)?;
+    refuse_an_unanswerable_channel(config)?;
 
     let inputs = parse_inputs(&config.inputs)?;
     let mut approval = approval_mode(config);
@@ -831,12 +848,91 @@ fn approval_mode(config: &RunConfig) -> ApprovalMode {
     if config.yes {
         return ApprovalMode::AssumeYes;
     }
+    // Before the terminal check, and deliberately: an operator who named a
+    // channel gets it whether or not this process happens to have a terminal.
+    // The parent asked to answer, so the parent answers.
+    if config.approvals == ApprovalChannel::Stdin {
+        return ApprovalMode::Ask(Box::new(StdinApprovals));
+    }
     if std::io::stdin().is_terminal() {
         ApprovalMode::Ask(Box::new(TerminalApprovals))
     } else {
         // Unattended runs deny by default. An artifact that asked for a human
         // does not get one silently.
         ApprovalMode::Deny
+    }
+}
+
+/// One gate, answered by whoever started this process.
+///
+/// **This is half a channel, and that is the design.** A gate already leaves the
+/// run: [`RunEvent::ApprovalRequested`] is emitted before the handler is asked,
+/// so under `--events json` a parent watching stderr sees the node, the effects
+/// and the reason without anything new being invented. Only the answer had
+/// nowhere to go, so only the answer gets a path.
+///
+/// It is standard input rather than standard output because **stdout carries
+/// the run's artifacts** so the command composes with a pipe, and a protocol
+/// sharing that stream would corrupt them. See
+/// [RFC-0020](../../../rfcs/0020-a-person-in-the-loop.md).
+struct StdinApprovals;
+
+/// One line in: which gate, and whether it may proceed.
+///
+/// `deny_unknown_fields` for the reason the studio's request struct has it —
+/// inventing a field must be a refusal rather than something quietly ignored.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ApprovalAnswer {
+    node: String,
+    allowed: bool,
+}
+
+impl ApprovalHandler for StdinApprovals {
+    fn approve(&mut self, request: &ApprovalRequest) -> bool {
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match std::io::stdin().read_line(&mut line) {
+                // The parent went away without answering. Refusing is the only
+                // safe reading: a closed pipe must never become consent, which
+                // is the one failure an approval gate exists to prevent.
+                Ok(0) => {
+                    eprintln!(
+                        "approval channel: standard input closed before node `{}` was answered",
+                        request.node
+                    );
+                    return false;
+                }
+                Ok(_) if line.trim().is_empty() => continue,
+                Ok(_) => break,
+                Err(error) => {
+                    eprintln!("approval channel: cannot read an answer: {error}");
+                    return false;
+                }
+            }
+        }
+
+        let answer: ApprovalAnswer = match serde_json::from_str(line.trim()) {
+            Ok(answer) => answer,
+            Err(error) => {
+                eprintln!("approval channel: unreadable answer for node `{}`: {error}\n  expected {{\"node\":\"…\",\"allowed\":true|false}}", request.node);
+                return false;
+            }
+        };
+
+        // An answer naming another gate means the channel is one message out of
+        // step, and the run blocks on one gate at a time — so this is a parent
+        // answering a question that was already settled. Applying it here would
+        // decide *this* gate with *that* intent, which is worse than refusing.
+        if answer.node != request.node {
+            eprintln!(
+                "approval channel: node `{}` was asked and the answer named `{}`",
+                request.node, answer.node
+            );
+            return false;
+        }
+        answer.allowed
     }
 }
 
@@ -857,6 +953,27 @@ impl ApprovalHandler for TerminalApprovals {
         }
         matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes")
     }
+}
+
+/// Refuse a channel whose other half nobody can see.
+///
+/// `--approvals stdin` splits an exchange across two streams: the gate leaves on
+/// the event stream and the answer comes back on standard input. Under
+/// `--events text` the gate leaves as prose meant for a person, and under
+/// `--events quiet` it does not leave at all — so a parent would wait for a line
+/// it has no way to know is wanted, and the run would wait for an answer nobody
+/// knew to send. **Two processes waiting for each other is the failure this
+/// whole channel exists to remove**, so it is refused here rather than reached.
+fn refuse_an_unanswerable_channel(config: &RunConfig) -> Result<()> {
+    if config.approvals == ApprovalChannel::Stdin && config.events != EventFormat::Json {
+        bail!(
+            "`--approvals stdin` needs `--events json`\n  \
+             a gate is answered on standard input and asked on the event stream, so a parent \
+             that cannot read the stream cannot know a gate is waiting\n  \
+             help: add `--events json`"
+        );
+    }
+    Ok(())
 }
 
 /// Refuse a remote server under a boundary that cannot cover it.

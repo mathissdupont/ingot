@@ -492,6 +492,15 @@ struct RunArgs {
     #[arg(long)]
     yes: bool,
 
+    /// Where an approval gate is answered.
+    ///
+    /// `stdin` lets whatever started this run answer one gate at a time: the
+    /// gate arrives on the event stream, the answer goes back as one JSON line
+    /// `{"node":"…","allowed":true}`. Needs `--events json`, because a parent
+    /// that cannot see the gate cannot answer it.
+    #[arg(long, value_enum, default_value_t = run::ApprovalChannel::Auto, conflicts_with = "yes")]
+    approvals: run::ApprovalChannel,
+
     /// Start no MCP server, whatever the manifest configures. Useful for
     /// checking that an agent fails the way it should when a tool is absent.
     #[arg(long)]
@@ -2061,6 +2070,7 @@ fn run_run(args: &RunArgs, color: RenderColor) -> Result<u8> {
                 _ => memory::MemoryMode::Open,
             },
             yes: args.yes,
+            approvals: args.approvals,
             max_steps: args.max_steps,
             mcp: target.mcp(),
             root: target.root.clone(),

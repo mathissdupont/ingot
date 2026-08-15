@@ -332,6 +332,91 @@ pub fn run_in(cwd: &Path, args: &[&str]) -> Output {
     command.output().expect("the ingot binary must be runnable")
 }
 
+/// Run with an approval channel, answering each gate the way a parent will.
+///
+/// The gate is read off the event stream rather than guessed from a node id the
+/// test hard-codes, because that is the exchange under test: watch stderr,
+/// recognise `approvalRequested`, write one line back on standard input.
+///
+/// `reply` is handed the node and the gate's ordinal and returns the exact line
+/// to send — so a test can send a malformed line, or one naming a different
+/// gate, and see what the run does with it. Returning `None` closes standard
+/// input instead, which is how a parent that went away is simulated.
+pub fn run_answering(
+    args: &[&str],
+    env: &[(&str, &str)],
+    reply: impl Fn(&str, usize) -> Option<String> + Send + 'static,
+) -> Output {
+    let mut command = Command::new(binary());
+    command.args(args).arg("--color").arg("never");
+    for name in [
+        "ANTHROPIC_API_KEY",
+        "INGOT_ANTHROPIC_BASE_URL",
+        "OPENAI_API_KEY",
+        "INGOT_OPENAI_BASE_URL",
+    ] {
+        command.env_remove(name);
+    }
+    for (name, value) in env {
+        command.env(name, value);
+    }
+
+    let mut child = command
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("the ingot binary must be runnable");
+
+    let mut stdin = Some(child.stdin.take().expect("standard input was piped"));
+    let pipe = child.stderr.take().expect("standard error was piped");
+
+    // Draining stderr on a thread is not tidiness. The run blocks at the gate
+    // waiting for a line that this reader is what produces, so anything that
+    // stopped reading would deadlock both halves.
+    let watcher = thread::spawn(move || {
+        let mut seen = 0usize;
+        let mut captured = String::new();
+        for line in BufReader::new(pipe).lines() {
+            let Ok(line) = line else { break };
+            captured.push_str(&line);
+            captured.push('\n');
+
+            let Ok(event) = serde_json::from_str::<Value>(&line) else {
+                continue;
+            };
+            if event.get("event").and_then(Value::as_str) != Some("approvalRequested") {
+                continue;
+            }
+            let node = event
+                .get("node")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            match reply(node, seen) {
+                Some(answer) => {
+                    if let Some(handle) = stdin.as_mut() {
+                        let _ = writeln!(handle, "{answer}");
+                        let _ = handle.flush();
+                    }
+                }
+                // Dropping the handle closes the pipe, so the run reads end of
+                // file rather than waiting for a line that is never coming.
+                None => drop(stdin.take()),
+            }
+            seen += 1;
+        }
+        captured
+    });
+
+    let output = child.wait_with_output().expect("waiting for the run");
+    let stderr = watcher.join().expect("the stderr watcher must not panic");
+    Output {
+        status: output.status,
+        stdout: output.stdout,
+        stderr: stderr.into_bytes(),
+    }
+}
+
 pub fn stdout(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }

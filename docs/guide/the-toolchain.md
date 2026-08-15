@@ -422,6 +422,41 @@ the local source can map `agent:node` back to the originating `.ing` byte range.
 Those spans use project-relative slash-normalized source ids; absolute build
 machine paths are not embedded as a shortcut.
 
+### Answering a gate from another program
+
+An artifact whose policy says `require approval` stops in front of the gated
+effect and asks. At a terminal it prompts. Anywhere else — cron, CI, a parent
+process — there is no terminal, and the gate is **denied** rather than assumed:
+the artifact asked for a person, and not having one is an answer.
+
+`--approvals stdin` gives that person a way in without a terminal:
+
+```bash
+ingot run ./agent --events json --approvals stdin
+```
+
+The exchange uses two streams that already exist. The gate leaves on the event
+stream, and the answer comes back as one JSON line:
+
+```text
+stderr  {"event":"approvalRequested","node":"n7","effects":["filesystem_write"],"reason":"…"}
+stdin   {"node":"n7","allowed":true}
+```
+
+`--events json` is required, and a run that asks for the channel without it is
+refused before it starts — a parent that cannot see a gate cannot answer one, and
+both sides would wait for the other forever. `--yes` cannot be combined with it
+either: that answers every gate in the run before any of them is reached, which
+is a different thing from answering the one in front of you.
+
+Standard output is untouched, because it carries the run's artifacts so the
+command still composes with a pipe.
+
+Every way of failing to answer is a refusal. A closed pipe, an unreadable line,
+an answer naming a different gate — none of them opens the gate, because the one
+thing an approval exists to prevent is an effect happening without a person. See
+[RFC-0020](../../rfcs/0020-a-person-in-the-loop.md).
+
 ## Tools
 
 An `.ing` file declares what a tool is — its parameter types, its result type,
