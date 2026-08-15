@@ -279,13 +279,51 @@ pub trait Interlocutor {
 an `Interlocutor`, `AssumeYes` (which approves and refuses to consult, as above),
 and `Deny` (which refuses both, naming which it refused).
 
-**The transport already exists.** [RFC-0005](0005-the-contained-run.md) carries
-an approval out of a contained run and a decision back in, over line-delimited
-JSON-RPC, because there is nobody inside the box to ask. `CALL_CONSULT` joins
-`CALL_APPROVAL` beside it. What is new is not the protocol but *where it is
-spoken*: `ingot run --channel-stdio` makes an ordinary run speak it, so a parent
-process — the studio's launcher, or anything else — can answer without a
-container in the picture.
+**Inside a container the transport already exists.**
+[RFC-0005](0005-the-contained-run.md) carries an approval out of a contained run
+and a decision back in, over line-delimited JSON-RPC, because there is nobody
+inside the box to ask. `CALL_CONSULT` joins `CALL_APPROVAL` beside it.
+
+**Outside one, it turned out to need less.** The first draft of this section
+proposed `ingot run --channel-stdio`: an ordinary run speaking the same JSON-RPC
+on its standard streams. Building it found that it cannot, and the reason is
+worth keeping rather than quietly fixing.
+
+**Standard output carries the run's artifacts**, so `ingot run` composes with a
+pipe ([`write_outputs`](../crates/ingot-cli/src/run.rs)). A protocol sharing that
+stream would interleave lines with the bytes an artifact is made of. The
+codebase already knew this from the other direction — `Guest::on_stdio` warns
+that nothing else may write to stdout afterwards — but that is a guest whose only
+job is to be supervised, and an ordinary run has an artifact to hand back.
+
+Which forced the better question: *how much of an exchange is actually missing?*
+Not the outbound half. `ApprovalRequested` is emitted **before** the handler is
+asked, so under `--events json` a parent watching stderr already sees the node,
+the effects and the reason. **Only the answer had nowhere to go.**
+
+So the channel is half a channel, deliberately:
+
+| Direction | Path | New? |
+|---|---|---|
+| the gate, outward | the event stream on stderr | no — it was already there |
+| the answer, inward | one JSON line on stdin | yes, and it is all that is |
+
+`ingot run --approvals stdin` selects it, and an answer is
+`{"node":"n7","allowed":true}`. Three properties hold by construction, and each
+is the safe reading of a failure rather than a feature:
+
+- **A closed pipe is a refusal.** A parent that went away cannot become consent.
+- **An answer naming another gate is refused.** The run blocks on one gate at a
+  time, so a mismatch means the channel is a message out of step; applying it
+  would decide *this* gate with *that* intent.
+- **An unreadable answer is a refusal**, and `deny_unknown_fields` makes an
+  invented field unreadable — the rule the studio's request struct already keeps.
+
+**`--approvals stdin` requires `--events json`,** refused before the run starts.
+Under `--events text` the gate leaves as prose for a person and under `--events
+quiet` it does not leave at all, so a parent would wait for a line it cannot know
+is wanted while the run waits for an answer nobody knew to send. Two processes
+waiting for each other is precisely the failure this channel exists to remove.
 
 That inverts nothing about the existing design. A run with no channel and no
 terminal behaves as it does today: it refuses at the gate, with a message.
@@ -510,6 +548,22 @@ it is as reproducible as one without**. So:
       question.
 - [ ] A run with no channel and no terminal refuses at a consultation with a
       message naming the question, and does not hang.
+
+The channel half has its own, and they are about refusing rather than answering
+— an approval gate exists to prevent one thing, and every way of failing to
+answer must still prevent it. **Built**, in
+[`crates/ingot-cli/tests/approvals.rs`](../crates/ingot-cli/tests/approvals.rs):
+
+- [x] A gate answered over the channel lets the run finish and the effect happen.
+- [x] A gate refused over the channel stops the run before the effect.
+- [x] An answer naming another gate is refused, and names the gate it claimed.
+- [x] A parent that closes the channel is a refusal and not a hang.
+- [x] An unreadable answer is refused, and says what shape was wanted.
+- [x] An answer carrying an invented field is refused.
+- [x] `--approvals stdin` without `--events json` is refused before the run.
+- [x] `--approvals stdin` and `--yes` cannot be asked for together.
+- [x] The same run *without* the channel is still refused at the gate — the
+      control, without which none of the above proves the flag does anything.
 - [ ] The choice form binds one of the listed strings and nothing else, including
       when a channel returns something not on the list.
 - [ ] A run blocked on a question appears in `ingot runs` as blocked, with the

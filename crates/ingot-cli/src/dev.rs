@@ -141,6 +141,10 @@ fn cycle(target: Target, revision: u64, last_good: &mut Option<u64>, config: &De
             memory: None,
             memory_mode: crate::memory::MemoryMode::Disabled,
             yes: config.yes,
+            // Always the terminal. A watch loop owns standard input to notice a
+            // save, so a run inside it has no line to read an answer from, and
+            // a channel that could never be answered is worse than the prompt.
+            approvals: crate::run::ApprovalChannel::Auto,
             max_steps: config.max_steps,
             root: target.root.clone(),
             mcp: target.mcp(),

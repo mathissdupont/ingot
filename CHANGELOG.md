@@ -28,6 +28,33 @@ everything conversational and is a second program model rather than a missing
 feature. The hard part is not the socket, it is what a replay does with an
 answer a person typed.
 
+**A gate can be answered by whatever started the run** (CLI) — the design in
+[RFC-0020](rfcs/0020-a-person-in-the-loop.md), and the smaller half of it.
+
+`ingot run --approvals stdin` lets a parent process answer one gate at a time:
+the gate arrives on the event stream as `approvalRequested`, the answer goes
+back as one JSON line `{"node":"…","allowed":true}`. It needs `--events json`
+and is refused without it, because a parent that cannot see a gate cannot answer
+one and two processes waiting for each other is the failure the channel exists
+to remove. `--yes` and a channel cannot be asked for together.
+
+**Building it corrected the RFC.** The draft proposed the supervisor's JSON-RPC
+on the run's standard streams; standard output carries the run's artifacts so
+`ingot run` composes with a pipe, and a protocol there would interleave with the
+bytes an artifact is made of. That forced the better question — *how much of the
+exchange is actually missing?* — and the answer was: only the inbound half. The
+gate already leaves on the event stream, emitted before the handler is asked. So
+the channel is half a channel, on purpose.
+
+Every way of failing to answer is a refusal, and each is tested: a closed pipe,
+an answer naming another gate, an unreadable line, an invented field. A gate that
+cannot reach anybody must never become consent.
+
+[GAP-041](docs/gaps.md#gap-041) **stays open.** The studio still spawns runs with
+no standard input and has nowhere to render a gate, so an agent that needs a
+person still cannot be run from the surface built for people. What changed is
+that the channel it would use is no longer missing.
+
 ## [0.5.2] — 2026-08-14
 
 **`model requires { … }` could not work with a provider you declared** (runtime)

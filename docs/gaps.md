@@ -554,7 +554,21 @@ two.
 [GAP-042](#gap-042) as this entry asked for. The design keeps RFC-0015's refusal
 of `--yes` intact and separates it from answering: a blanket answer given before
 the run stays refused, one gate answered at the moment it is reached does not.
-Draft, and unbuilt — this entry stays open until it runs.
+
+*Half built, and the half that is built is the smaller one.* `ingot run
+--approvals stdin` exists: a parent process reads `approvalRequested` off the
+event stream and writes `{"node":"…","allowed":true}` back on standard input.
+Building it corrected the design — standard output carries the run's artifacts,
+so the protocol the RFC first proposed could not live there, and the outbound
+half turned out to already exist as the event stream. Only the answer needed a
+path.
+
+**The entry stays open, and the sentence that opened it is still true.** The
+studio cannot answer a gate. It spawns `ingot run` with
+[`Stdio::null()`](../crates/ingot-cli/src/launch.rs) on standard input and has
+nowhere to render one gate at a time, so *an agent that needs a person still
+cannot be run from the one surface built for people* — the channel it would use
+is simply no longer missing.
 
 *Recorded in.* [RFC-0015](../rfcs/0015-ingot-studio.md),
 [`crates/ingot-runtime/src/interp.rs`](../crates/ingot-runtime/src/interp.rs).
