@@ -550,6 +550,12 @@ designed together with [GAP-042](#gap-042) — a yes/no on an effect and a
 question put to a person want the same channel, and building it twice would give
 two.
 
+*Designed in.* [RFC-0020](../rfcs/0020-a-person-in-the-loop.md), together with
+[GAP-042](#gap-042) as this entry asked for. The design keeps RFC-0015's refusal
+of `--yes` intact and separates it from answering: a blanket answer given before
+the run stays refused, one gate answered at the moment it is reached does not.
+Draft, and unbuilt — this entry stays open until it runs.
+
 *Recorded in.* [RFC-0015](../rfcs/0015-ingot-studio.md),
 [`crates/ingot-runtime/src/interp.rs`](../crates/ingot-runtime/src/interp.rs).
 
@@ -582,6 +588,16 @@ matches the question, and whether a run that stopped for a person is a
 above it. This is the vocabulary. They share a design and should not be built
 separately, but the channel is useful on its own and this is not useful without
 it.
+
+*Designed in.* [RFC-0020](../rfcs/0020-a-person-in-the-loop.md). It answers the
+three questions above in one move — a person is a third source of answers,
+recorded and replayed like the model and the tools — so `--record` writes a
+`consultations` list, a changed question is the digest mismatch every other list
+already gives, and a run stopped for a person is a **pause** rather than a
+resumption, because [RFC-0018](../rfcs/0018-state-that-outlives-a-run.md) refused
+the arbitrary-depth snapshot a resumption would need and `checkpoint` already
+covers the case that outlives a sitting. Draft, and unbuilt — this entry stays
+open until it runs.
 
 *Recorded in.* [Language 0.2](../specs/language/v0.2.md),
 [RFC-0015](../rfcs/0015-ingot-studio.md).
