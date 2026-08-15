@@ -564,6 +564,18 @@ answer must still prevent it. **Built**, in
 - [x] `--approvals stdin` and `--yes` cannot be asked for together.
 - [x] The same run *without* the channel is still refused at the gate — the
       control, without which none of the above proves the flag does anything.
+
+And the surface that uses it, in
+[`crates/ingot-cli/tests/studio.rs`](../crates/ingot-cli/tests/studio.rs) —
+these are what close [GAP-041](../docs/gaps.md#gap-041):
+
+- [x] A gate reaches the page carrying its effect and its reason, on a run the
+      page still shows as running, and answering it lets the run finish.
+- [x] A gate refused from the page stops the run before the effect.
+- [x] An answer naming a gate the run is not at is refused, names the gate it is
+      actually at, and leaves the run still waiting.
+- [x] An answer carrying an invented field is refused, and leaves it waiting.
+- [x] Answering a process this studio did not start is refused.
 - [ ] The choice form binds one of the listed strings and nothing else, including
       when a channel returns something not on the list.
 - [ ] A run blocked on a question appears in `ingot runs` as blocked, with the

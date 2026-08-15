@@ -261,6 +261,24 @@ button.action:disabled { opacity: 0.5; cursor: progress; }
 
 .add { display: flex; gap: 8px; }
 
+/* A run stopped in front of an effect, waiting for a person. It is the only
+   thing on this page that blocks something, so it is the only thing that
+   borrows the warning colour for a whole block rather than a chip. */
+.gate {
+  margin-top: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--warn);
+  border-radius: 6px;
+  background: var(--warn-soft);
+}
+.gate .what {
+  font-family: var(--mono);
+  font-size: 12px;
+  margin-top: 6px;
+  word-break: break-all;
+}
+.gate .answer { display: flex; gap: 8px; margin-top: 10px; }
+
 pre.block {
   margin: 0;
   padding: 12px 16px;
@@ -763,6 +781,38 @@ function startPanel() {
 
 const LAUNCH_CHIP = { running: "warn", exited: "pass", failed: "fail" };
 
+// One gate, at the moment the run reaches it, with the effect and the reason in
+// front of the person answering. Deliberately not a blanket "approve this run":
+// that is `--yes`, which this studio does not pass and has no field for. The
+// next gate asks again.
+function gateBlock(launch) {
+  const gate = launch.pending;
+  const answer = async (allowed) => {
+    try {
+      const reply = await api("approval?" + q({ path: state.path, pid: launch.pid }), {
+        method: "POST",
+        headers: { "X-Ingot-Token": TOKEN, "Content-Type": "application/json" },
+        // The node is sent back, so an answer from a tab showing an older gate
+        // is refused rather than applied to whichever one is waiting now.
+        body: JSON.stringify({ node: gate.node, allowed: allowed }),
+      });
+      state.runs = reply.runs;
+      state.launches = reply.launches;
+    } catch (error) { state.error = String(error.message || error); }
+    render();
+  };
+
+  return el("div", { class: "gate" }, [
+    el("b", { text: "This run is waiting for you" }),
+    el("div", { class: "fix", text: gate.reason || "an effect this artifact's policy gates" }),
+    el("div", { class: "what", text: (gate.effects || []).join(", ") + "  ·  node " + gate.node }),
+    el("div", { class: "answer" }, [
+      el("button", { class: "action", text: "Allow this", onclick: () => answer(true) }),
+      el("button", { class: "action quiet", text: "Refuse", onclick: () => answer(false) }),
+    ]),
+  ]);
+}
+
 function renderLaunches(inner) {
   const launches = (state.launches || []).slice().reverse();
   if (!launches.length) return;
@@ -777,6 +827,7 @@ function renderLaunches(inner) {
       launch.state === "failed"
         ? el("div", { class: "fix", text: "exit " + launch.exitCode + " — the log below is what it said" })
         : null,
+      launch.pending ? gateBlock(launch) : null,
       launch.log && launch.state !== "running" ? el("pre", { class: "block", style: "margin-top:8px", text: launch.log.trimEnd() }) : null,
       launch.output ? el("pre", { class: "block", style: "margin-top:8px", text: launch.output.trimEnd() }) : null,
       launch.truncated ? el("div", { class: "fix", text: "output was longer than the studio keeps" }) : null,

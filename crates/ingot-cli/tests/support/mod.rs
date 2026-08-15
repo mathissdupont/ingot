@@ -332,6 +332,64 @@ pub fn run_in(cwd: &Path, args: &[&str]) -> Output {
     command.output().expect("the ingot binary must be runnable")
 }
 
+/// An agent that writes one file, behind a gate the compiler inserts.
+///
+/// `filesystem_write require approval` in front of a real MCP tool call, so the
+/// gate is one the compiler put there rather than one a test simulated. Shared
+/// because two test binaries drive the same gate from different sides — the CLI
+/// channel and the studio — and two copies would drift.
+pub const GATED_AGENT: &str = r#"language 0.1
+
+/// Writes a UTF-8 text file into the workspace.
+tool fs.write_file(path: string, content: text) -> file !filesystem_write
+
+/// Writes one file, behind a gate a person has to open.
+agent Gatekeeper(note: string) -> receipt<markdown> {
+  model requires {
+    structured_output
+  }
+
+  tools {
+    mcp fs.write_file
+  }
+
+  budget {
+    steps <= 6
+    tokens <= 20000
+  }
+
+  policy {
+    filesystem_write require approval
+    network deny
+    secrets deny export
+  }
+
+  flow {
+    body = ask<markdown>("Write one line about ${note}.")
+    _filed = call fs.write_file("out/note.md", body)
+    emit receipt = body
+  }
+}
+"#;
+
+/// Write [`GATED_AGENT`] and a manifest serving it, into `dir`.
+///
+/// The gated write lands at `data/out/note.md`, and its absence is how a test
+/// asserts that a refused gate refused something real.
+pub fn gated_project(dir: &Path) {
+    std::fs::create_dir_all(dir.join("data")).expect("creating the workspace");
+    std::fs::write(dir.join("main.ing"), GATED_AGENT).expect("writing the source");
+    std::fs::write(
+        dir.join("ingot.toml"),
+        format!(
+            "[project]\nname = \"gate\"\n\n[mcp]\ntimeout-seconds = 10\n\n\
+             [[mcp.server]]\nname = \"workspace\"\ncommand = {}\nargs = [\"--root\", \"data\", \"--allow-write\"]\n",
+            toml_string(&fs_server().display().to_string())
+        ),
+    )
+    .expect("writing the manifest");
+}
+
 /// Run with an approval channel, answering each gate the way a parent will.
 ///
 /// The gate is read off the event stream rather than guessed from a node id the

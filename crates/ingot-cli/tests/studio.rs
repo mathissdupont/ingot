@@ -770,3 +770,166 @@ fn the_boundary_the_page_shows_is_the_one_sandbox_prints() {
         0
     );
 }
+
+// --- answering a gate -------------------------------------------------------
+//
+// [GAP-041](../../../docs/gaps.md#gap-041) in one sentence: an agent that needs
+// a person could not be run from the one surface built for people. These drive
+// the gate from the page's side.
+//
+// What RFC-0015 refused is still refused. `--yes` is a blanket answer given
+// before the run to gates nobody has seen; this is one gate, at the moment it is
+// reached, with the effect and the reason in front of whoever answers it.
+
+/// A studio pointed at a stub, and a project whose write is gated.
+fn gated(tag: &str) -> (TempDir, StubProvider, Serving) {
+    let dir = TempDir::new(&format!("studio-{tag}"));
+    gated_project(dir.path());
+    let stub = stub_provider(vec![text_reply("A line about the harbour.\n")]);
+    let studio = Serving::start_with(
+        tag,
+        &[
+            ("ANTHROPIC_API_KEY", "stub-key"),
+            ("INGOT_ANTHROPIC_BASE_URL", &stub.url),
+        ],
+    );
+    studio.post(&format!("/api/projects?path={}", encoded(dir.path())));
+    (dir, stub, studio)
+}
+
+/// Start the gated run and wait until the page is offering its gate.
+fn until_waiting(studio: &Serving, dir: &Path) -> (u32, String) {
+    let (status, body) = studio.send_json(
+        "POST",
+        &format!("/api/run?path={}", encoded(dir)),
+        r#"{"provider":"anthropic","inputs":{"note":"the harbour"}}"#,
+    );
+    assert_eq!(status, 200, "{body}");
+
+    let answer = studio.until(dir, |answer| answer["launches"][0]["pending"].is_object());
+    let launch = &answer["launches"][0];
+    assert_eq!(
+        launch["state"], "running",
+        "a run waiting at a gate is still running: {launch}"
+    );
+    (
+        launch["pid"].as_u64().expect("a pid") as u32,
+        launch["pending"]["node"]
+            .as_str()
+            .expect("the gate names its node")
+            .to_string(),
+    )
+}
+
+#[test]
+fn a_gate_reaches_the_page_and_answering_it_lets_the_run_finish() {
+    let (dir, _stub, studio) = gated("gate-allow");
+    let (pid, node) = until_waiting(&studio, dir.path());
+
+    // What the person is shown before answering: the effect, and the reason the
+    // compiler attached. Approving something unnamed is the thing RFC-0015
+    // refused, and it is refused by showing this rather than by a rule.
+    let answer = studio.get(&format!("/api/runs?path={}", encoded(dir.path())));
+    let gate = &answer["launches"][0]["pending"];
+    assert_eq!(gate["effects"][0], "filesystem_write", "{gate}");
+    assert!(
+        gate["reason"]
+            .as_str()
+            .map(|r| !r.is_empty())
+            .unwrap_or(false),
+        "the gate has to say what is about to happen: {gate}"
+    );
+
+    let (status, body) = studio.send_json(
+        "POST",
+        &format!("/api/approval?path={}&pid={}", encoded(dir.path()), pid),
+        &format!(r#"{{"node":"{node}","allowed":true}}"#),
+    );
+    assert_eq!(status, 200, "{body}");
+
+    studio.until(dir.path(), |answer| {
+        answer["launches"][0]["state"] == "exited"
+    });
+    assert!(
+        dir.path().join("data/out/note.md").is_file(),
+        "the gate was opened, so the write must have happened"
+    );
+}
+
+#[test]
+fn a_gate_refused_from_the_page_stops_the_run_before_the_effect() {
+    let (dir, _stub, studio) = gated("gate-refuse");
+    let (pid, node) = until_waiting(&studio, dir.path());
+
+    let (status, body) = studio.send_json(
+        "POST",
+        &format!("/api/approval?path={}&pid={}", encoded(dir.path()), pid),
+        &format!(r#"{{"node":"{node}","allowed":false}}"#),
+    );
+    assert_eq!(status, 200, "{body}");
+
+    let answer = studio.until(dir.path(), |answer| {
+        answer["launches"][0]["state"] == "failed"
+    });
+    assert!(
+        !dir.path().join("data/out/note.md").exists(),
+        "the gate was refused, so nothing may have been written: {answer}"
+    );
+}
+
+#[test]
+fn an_answer_naming_a_gate_the_run_is_not_at_is_refused() {
+    // A tab left open showing an older gate. Applying its answer would decide
+    // the gate the run is actually at with the intent of one already settled.
+    let (dir, _stub, studio) = gated("gate-stale");
+    let (pid, node) = until_waiting(&studio, dir.path());
+
+    let (status, body) = studio.send_json(
+        "POST",
+        &format!("/api/approval?path={}&pid={}", encoded(dir.path()), pid),
+        r#"{"node":"a-gate-from-another-run","allowed":true}"#,
+    );
+    assert_eq!(status, 400, "{body}");
+    assert!(
+        body.contains(&node),
+        "the refusal names the real gate: {body}"
+    );
+
+    // And the run is still waiting, rather than having been decided either way.
+    let answer = studio.get(&format!("/api/runs?path={}", encoded(dir.path())));
+    assert_eq!(answer["launches"][0]["pending"]["node"], node.as_str());
+}
+
+#[test]
+fn an_answer_the_page_invented_a_field_for_is_refused() {
+    let (dir, _stub, studio) = gated("gate-field");
+    let (pid, node) = until_waiting(&studio, dir.path());
+
+    let (status, body) = studio.send_json(
+        "POST",
+        &format!("/api/approval?path={}&pid={}", encoded(dir.path()), pid),
+        &format!(r#"{{"node":"{node}","allowed":true,"forever":true}}"#),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(
+        studio.get(&format!("/api/runs?path={}", encoded(dir.path())))["launches"][0]["pending"]
+            ["node"],
+        node.as_str()
+    );
+}
+
+#[test]
+fn answering_a_process_this_studio_did_not_start_is_refused() {
+    let dir = TempDir::new("studio-gate-stranger");
+    project(dir.path());
+    let studio = Serving::start("gate-stranger");
+    studio.post(&format!("/api/projects?path={}", encoded(dir.path())));
+
+    let (status, body) = studio.send_json(
+        "POST",
+        &format!("/api/approval?path={}&pid=999999", encoded(dir.path())),
+        r#"{"node":"n0","allowed":true}"#,
+    );
+    assert_eq!(status, 400, "{body}");
+    assert!(body.contains("did not start"), "{body}");
+}

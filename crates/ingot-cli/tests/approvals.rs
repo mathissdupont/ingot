@@ -17,44 +17,9 @@ mod support;
 use std::path::Path;
 
 use support::{
-    code, fs_server, run_answering, run_env, stderr, stub_provider, text_reply, toml_string,
-    TempDir, EXIT_OK,
+    code, gated_project, run_answering, run_env, stderr, stub_provider, text_reply, TempDir,
+    EXIT_OK,
 };
-
-/// An agent that writes one file, behind a gate the compiler inserts.
-const GATED: &str = r#"language 0.1
-
-/// Writes a UTF-8 text file into the workspace.
-tool fs.write_file(path: string, content: text) -> file !filesystem_write
-
-/// Writes one file, behind a gate a person has to open.
-agent Gatekeeper(note: string) -> receipt<markdown> {
-  model requires {
-    structured_output
-  }
-
-  tools {
-    mcp fs.write_file
-  }
-
-  budget {
-    steps <= 6
-    tokens <= 20000
-  }
-
-  policy {
-    filesystem_write require approval
-    network deny
-    secrets deny export
-  }
-
-  flow {
-    body = ask<markdown>("Write one line about ${note}.")
-    _filed = call fs.write_file("out/note.md", body)
-    emit receipt = body
-  }
-}
-"#;
 
 struct Project {
     dir: TempDir,
@@ -63,18 +28,7 @@ struct Project {
 impl Project {
     fn new(tag: &str) -> Project {
         let dir = TempDir::new(tag);
-        let root = dir.path();
-        std::fs::create_dir_all(root.join("data")).expect("creating the workspace");
-        std::fs::write(root.join("main.ing"), GATED).expect("writing the source");
-        std::fs::write(
-            root.join("ingot.toml"),
-            format!(
-                "[project]\nname = \"gate\"\n\n[mcp]\ntimeout-seconds = 10\n\n\
-                 [[mcp.server]]\nname = \"workspace\"\ncommand = {}\nargs = [\"--root\", \"data\", \"--allow-write\"]\n",
-                toml_string(&fs_server().display().to_string())
-            ),
-        )
-        .expect("writing the manifest");
+        gated_project(dir.path());
         Project { dir }
     }
 

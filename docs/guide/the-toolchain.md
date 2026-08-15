@@ -82,9 +82,19 @@ nothing.
 
 A run can also be started from the page. The form offers the agents the artifact
 declares and a field per input it takes, and then spawns the same command you
-would type — the studio interprets nothing itself. It cannot pass `--yes`: the
-child gets no terminal, so an effect that needs a person is denied rather than
-assumed.
+would type — the studio interprets nothing itself.
+
+**It still cannot pass `--yes`,** and a gate it reaches is shown rather than
+assumed. The run stops in front of the effect and the page says so: what the
+effect is, the reason the compiler attached, and two buttons. Answering one gate
+lets the run continue to the next, which asks again. A run waiting this way is
+still `running` and will wait indefinitely — a person is not a service and no
+clock decides for them — so the page shows it as waiting and the Stop button is
+there for the run nobody is going to answer.
+
+That distinction is the whole of it: `--yes` answers every gate in a run before
+any of them has been seen, and this answers the one in front of you. See
+[RFC-0020](../../rfcs/0020-a-person-in-the-loop.md).
 
 Connecting a model service is still something you do by hand: the page shows the
 `[[model.provider]]` block to write and the variable to export, and there is no

@@ -113,6 +113,9 @@ impl Answers for Routes {
             (Method::Delete, "run") => with_id(request, |path, id| self.run_delete(path, id)),
             (Method::Post, "run") => with_path(request, |path| self.start(path, body)),
             (Method::Delete, "launch") => with_path(request, |path| self.stop(request, path)),
+            (Method::Post, "approval") => {
+                with_path(request, |path| self.answer(request, path, body))
+            }
             (Method::Post, "launches") => with_path(request, |path| {
                 self.launcher.clear(path);
                 self.run_list(path)
@@ -171,6 +174,21 @@ impl Routes {
             bail!("this route needs a numeric `pid` parameter");
         };
         self.launcher.stop(&resolve(path), pid)?;
+        self.run_list(path)
+    }
+
+    /// Answer the one gate a run is stopped at.
+    ///
+    /// The body names the node, and the launcher refuses an answer for any node
+    /// but the outstanding one — which is what a page left open in another tab
+    /// would send. See [RFC-0020](../../../rfcs/0020-a-person-in-the-loop.md).
+    fn answer(&self, request: &Head, path: &Path, body: &[u8]) -> Result<String> {
+        let Some(pid) = request.param("pid").and_then(|pid| pid.parse::<u32>().ok()) else {
+            bail!("this route needs a numeric `pid` parameter");
+        };
+        let answer: launch::AnswerRequest =
+            serde_json::from_slice(body).context("reading the answer")?;
+        self.launcher.answer(&resolve(path), pid, &answer)?;
         self.run_list(path)
     }
 }
