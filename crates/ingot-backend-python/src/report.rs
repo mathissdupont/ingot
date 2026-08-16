@@ -236,6 +236,14 @@ fn verdict(kind: NodeKind) -> (Support, &'static str) {
         // limitation of this target, so neither is a finding — the compiler's
         // ING6006 is where a bodyless verifier gets said.
         NodeKind::Verify => (Support::Supported, ""),
+        // A backend with no channel to a person must refuse the artifact at
+        // build time rather than accept it and fail at the node: an artifact
+        // that builds and cannot run is the failure the effect system exists to
+        // prevent, and a backend gets no exemption from it (RFC-0020).
+        NodeKind::Consult => (
+            Support::Unimplemented,
+            "there is no channel to a person from a generated program, so a              question could be printed but its answer could not be read back              into the flow the way the reference interpreter reads one",
+        ),
         NodeKind::ToolCall => (
             Support::Unimplemented,
             "an MCP client over stdio is not written for this target yet; an \

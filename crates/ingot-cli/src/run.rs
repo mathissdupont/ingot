@@ -11,11 +11,13 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 use ingot_compiler::Compilation;
 use ingot_mcp::{AgentTools, McpConfig, McpToolHost};
+use ingot_runtime::cassette::{Consultation, RecordingInterlocutor, ReplayInterlocutor};
 use ingot_runtime::{
-    run as run_agent, AgentRegistry, ApprovalHandler, ApprovalMode, ApprovalRequest, Artifact,
-    Cassette, DenyAllTools, EventSink, ModelConfig, ModelProvider, RecordingProvider,
-    RecordingTools, ReplayProvider, ReplayToolHost as ReplayTools, RoutingProvider, RunError,
-    RunEvent, RunOptions, RunReport, ToolHost,
+    run as run_agent, AgentRegistry, ApprovalRequest, Artifact, Cassette, ConsultError,
+    ConsultRequest, DenyAllTools, EventSink, HumanChannel, Interlocutor, ModelConfig,
+    ModelProvider, RecordingProvider, RecordingTools, ReplayProvider,
+    ReplayToolHost as ReplayTools, RoutingProvider, RunError, RunEvent, RunOptions, RunReport,
+    ToolHost,
 };
 use serde_json::Value;
 
@@ -426,6 +428,36 @@ pub fn execute(compilation: &Compilation, config: &RunConfig) -> Result<u8> {
         .map(|snapshot| snapshot.model_calls as usize)
         .unwrap_or(0);
 
+    // A person is the third source of answers, so the channel is arranged the
+    // way the provider and the tool host already are: replayed from the
+    // recording when there is one, wrapped in a recorder when one is being
+    // made. See [RFC-0020](../../../rfcs/0020-a-person-in-the-loop.md).
+    let mut recorded_answers: Option<std::rc::Rc<std::cell::RefCell<Vec<Consultation>>>> = None;
+    if config.provider == ProviderChoice::Replay {
+        // Read again rather than threaded down from the provider, which loads
+        // it for its own half. One small file, and it keeps each half asking
+        // the cassette for what it needs instead of one half carrying the
+        // other's.
+        if let Some(path) = &config.cassette {
+            let cassette = Cassette::load(path).map_err(anyhow::Error::msg)?;
+            let played = resume
+                .as_ref()
+                .map(|snapshot| snapshot.consultations as usize)
+                .unwrap_or(0);
+            // Strict, like the provider a run gets: a changed question must
+            // fail loudly rather than reuse an answer somebody gave to a
+            // different one. Leniency belongs to tooling that deliberately
+            // replays against edited sources, and a run is not that.
+            approval = HumanChannel::Ask(Box::new(
+                ReplayInterlocutor::new(cassette.consultations).skipping(played),
+            ));
+        }
+    } else if config.record.is_some() {
+        let (recorder, answers) = RecordingInterlocutor::new(approval);
+        approval = HumanChannel::Ask(Box::new(recorder));
+        recorded_answers = Some(answers);
+    }
+
     let mut provider = build_provider(config, &ir.agent, &inputs, replay_from)?;
     let mut sink = RunSink {
         printer: printer_for(config, compilation, false),
@@ -466,6 +498,9 @@ pub fn execute(compilation: &Compilation, config: &RunConfig) -> Result<u8> {
     if let Some(path) = &config.record {
         if let Some(mut cassette) = provider.finish_recording() {
             cassette.tool_calls = tools.finish_recording();
+            if let Some(answers) = &recorded_answers {
+                cassette.consultations = answers.borrow().clone();
+            }
             cassette.save(path).map_err(anyhow::Error::msg)?;
             eprintln!(
                 "recorded {} interaction(s) and {} tool call(s) to {}",
@@ -844,22 +879,22 @@ fn parse_inputs(raw: &[String]) -> Result<BTreeMap<String, Value>> {
     Ok(inputs)
 }
 
-fn approval_mode(config: &RunConfig) -> ApprovalMode {
+fn approval_mode(config: &RunConfig) -> HumanChannel {
     if config.yes {
-        return ApprovalMode::AssumeYes;
+        return HumanChannel::AssumeYes;
     }
     // Before the terminal check, and deliberately: an operator who named a
     // channel gets it whether or not this process happens to have a terminal.
     // The parent asked to answer, so the parent answers.
     if config.approvals == ApprovalChannel::Stdin {
-        return ApprovalMode::Ask(Box::new(StdinApprovals));
+        return HumanChannel::Ask(Box::new(StdinChannel));
     }
     if std::io::stdin().is_terminal() {
-        ApprovalMode::Ask(Box::new(TerminalApprovals))
+        HumanChannel::Ask(Box::new(TerminalPerson))
     } else {
         // Unattended runs deny by default. An artifact that asked for a human
         // does not get one silently.
-        ApprovalMode::Deny
+        HumanChannel::Deny
     }
 }
 
@@ -875,7 +910,7 @@ fn approval_mode(config: &RunConfig) -> ApprovalMode {
 /// the run's artifacts** so the command composes with a pipe, and a protocol
 /// sharing that stream would corrupt them. See
 /// [RFC-0020](../../../rfcs/0020-a-person-in-the-loop.md).
-struct StdinApprovals;
+struct StdinChannel;
 
 /// One line in: which gate, and whether it may proceed.
 ///
@@ -888,30 +923,39 @@ struct ApprovalAnswer {
     allowed: bool,
 }
 
-impl ApprovalHandler for StdinApprovals {
-    fn approve(&mut self, request: &ApprovalRequest) -> bool {
-        let mut line = String::new();
-        loop {
-            line.clear();
-            match std::io::stdin().read_line(&mut line) {
-                // The parent went away without answering. Refusing is the only
-                // safe reading: a closed pipe must never become consent, which
-                // is the one failure an approval gate exists to prevent.
-                Ok(0) => {
-                    eprintln!(
-                        "approval channel: standard input closed before node `{}` was answered",
-                        request.node
-                    );
-                    return false;
-                }
-                Ok(_) if line.trim().is_empty() => continue,
-                Ok(_) => break,
-                Err(error) => {
-                    eprintln!("approval channel: cannot read an answer: {error}");
-                    return false;
-                }
+/// One answer line from the parent, skipping blanks.
+///
+/// Shared by both halves of the channel because both want the same thing: the
+/// next line, or a reason there will not be one.
+fn read_answer_line(node: &str) -> Result<String, String> {
+    let mut line = String::new();
+    loop {
+        line.clear();
+        match std::io::stdin().read_line(&mut line) {
+            Ok(0) => {
+                return Err(format!(
+                    "standard input closed before node `{node}` was answered"
+                ))
             }
+            Ok(_) if line.trim().is_empty() => continue,
+            Ok(_) => return Ok(line.trim().to_string()),
+            Err(error) => return Err(format!("cannot read an answer: {error}")),
         }
+    }
+}
+
+impl Interlocutor for StdinChannel {
+    fn approve(&mut self, request: &ApprovalRequest) -> bool {
+        // The parent went away without answering. Refusing is the only safe
+        // reading: a closed pipe must never become consent, which is the one
+        // failure an approval gate exists to prevent.
+        let line = match read_answer_line(&request.node) {
+            Ok(line) => line,
+            Err(reason) => {
+                eprintln!("approval channel: {reason}");
+                return false;
+            }
+        };
 
         let answer: ApprovalAnswer = match serde_json::from_str(line.trim()) {
             Ok(answer) => answer,
@@ -934,11 +978,28 @@ impl ApprovalHandler for StdinApprovals {
         }
         answer.allowed
     }
+
+    fn consult(&mut self, request: &ConsultRequest) -> Result<String, ConsultError> {
+        let line = read_answer_line(&request.node).map_err(ConsultError::Failed)?;
+        let answer: ConsultAnswer = serde_json::from_str(line.trim()).map_err(|error| {
+            ConsultError::Failed(format!(
+                "unreadable answer for node `{}`: {error}; expected                  {{\"node\":\"…\",\"answer\":\"…\"}}",
+                request.node
+            ))
+        })?;
+        if answer.node != request.node {
+            return Err(ConsultError::Failed(format!(
+                "node `{}` was asked and the answer named `{}`",
+                request.node, answer.node
+            )));
+        }
+        Ok(answer.answer)
+    }
 }
 
-struct TerminalApprovals;
+struct TerminalPerson;
 
-impl ApprovalHandler for TerminalApprovals {
+impl Interlocutor for TerminalPerson {
     fn approve(&mut self, request: &ApprovalRequest) -> bool {
         eprintln!();
         eprintln!("  APPROVAL REQUIRED at node {}", request.node);
@@ -952,6 +1013,77 @@ impl ApprovalHandler for TerminalApprovals {
             return false;
         }
         matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes")
+    }
+
+    fn consult(&mut self, request: &ConsultRequest) -> Result<String, ConsultError> {
+        eprintln!();
+        eprintln!("  A QUESTION FOR YOU at node {}", request.node);
+        for (name, value) in &request.context {
+            eprintln!("  {name}: {}", render_context(value));
+        }
+        eprintln!("  {}", request.question);
+
+        if request.choices.is_empty() {
+            eprint!("  your answer: ");
+            let _ = std::io::stderr().flush();
+            let mut answer = String::new();
+            if std::io::stdin().read_line(&mut answer).is_err() {
+                return Err(ConsultError::Failed("standard input closed".to_string()));
+            }
+            return Ok(answer.trim().to_string());
+        }
+
+        for (index, choice) in request.choices.iter().enumerate() {
+            eprintln!("    {}) {choice}", index + 1);
+        }
+        // Re-asked rather than failed on a typo. A question has no safe default,
+        // so the only alternative to asking again is ending the run over a
+        // mistyped digit — which loses everything before it.
+        loop {
+            eprint!("  choose 1-{}: ", request.choices.len());
+            let _ = std::io::stderr().flush();
+            let mut answer = String::new();
+            if std::io::stdin().read_line(&mut answer).is_err() {
+                return Err(ConsultError::Failed("standard input closed".to_string()));
+            }
+            let answer = answer.trim();
+            if answer.is_empty() {
+                return Err(ConsultError::Failed(
+                    "no answer given at the terminal".to_string(),
+                ));
+            }
+            if let Some(choice) = answer
+                .parse::<usize>()
+                .ok()
+                .filter(|number| *number >= 1 && *number <= request.choices.len())
+                .map(|number| request.choices[number - 1].clone())
+            {
+                return Ok(choice);
+            }
+            if let Some(choice) = request.choices.iter().find(|choice| *choice == answer) {
+                return Ok(choice.clone());
+            }
+            eprintln!("  `{answer}` is not one of the choices");
+        }
+    }
+}
+
+/// One line in: which question, and what the person said.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ConsultAnswer {
+    node: String,
+    answer: String,
+}
+
+/// A context value, as a person should see it.
+///
+/// A bare string shows as itself rather than as a quoted JSON string: the person
+/// is reading prose, not a document.
+fn render_context(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(text) => text.clone(),
+        other => other.to_string(),
     }
 }
 
@@ -1721,7 +1853,7 @@ pub fn test(compilation: &Compilation, config: &TestConfig) -> Result<u8> {
             &mut sink,
             RunOptions {
                 inputs,
-                approval: ApprovalMode::Deny,
+                approval: HumanChannel::Deny,
                 max_steps: 1_000,
                 // No store. A test is offline and repeatable, and a run that
                 // started from whatever a previous run happened to leave on

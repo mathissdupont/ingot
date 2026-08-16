@@ -66,6 +66,12 @@ pub const INVALID_OPERAND_TYPE: &str = "ING3012";
 pub const MISSING_INITIAL_VALUE: &str = "ING3013";
 /// A `persistent` field whose initial value is not a literal.
 pub const INITIAL_VALUE_NOT_LITERAL: &str = "ING3014";
+/// A `consult` whose `choices` are not string literals.
+///
+/// They have to be in the source before anybody is asked: that is what lets a
+/// reviewer see every answer the recording could contain, and what makes the
+/// choice form unable to leak anything that was not already committed.
+pub const CHOICES_NOT_LITERAL: &str = "ING3015";
 
 // --- ING4xxx: effects, capabilities and policy ---------------------------
 
@@ -79,6 +85,8 @@ pub const MISSING_POLICY_RULE: &str = "ING4007";
 pub const UNKNOWN_MODEL_CAPABILITY: &str = "ING4008";
 pub const REACH_BEYOND_POLICY: &str = "ING4009";
 pub const INVALID_EFFECT_REACH: &str = "ING4010";
+/// A policy action the subject does not accept, such as `human require approval`.
+pub const INAPPLICABLE_POLICY_ACTION: &str = "ING4011";
 
 // --- ING5xxx: budgets and static bounds ----------------------------------
 
@@ -307,6 +315,20 @@ pub fn explain(code: &str) -> Option<&'static str> {
              so this is rejected before it runs. Raise the budget or shorten the \
              flow."
         }
+        CHOICES_NOT_LITERAL => {
+            "`choices` on a `consult` must be a non-empty list of string literals.
+
+             The answers have to be in the source before anybody is asked. That is what lets              somebody reviewing a recorded run see every answer it could contain — and it is              why the choice form cannot leak something that was not already committed. A              computed list would give that up while looking identical.
+
+             Write the answers out, or drop `choices:` to accept free text."
+        }
+        INAPPLICABLE_POLICY_ACTION => {
+            "This policy subject does not accept this action.
+
+             `human require approval` is the case this exists for. An approval gate in front of              a question is a question in front of a question, and the person answering the              first is the person who would answer the second.
+
+             Write `human allow` or `human deny`."
+        }
         _ => return None,
     };
     Some(text)
@@ -338,6 +360,8 @@ pub const EXPLAINED_CODES: &[&str] = &[
     VERIFIER_NOT_PERFORMED,
     VERIFY_AFTER_EMIT,
     INVALID_IN_PARALLEL,
+    CHOICES_NOT_LITERAL,
+    INAPPLICABLE_POLICY_ACTION,
     RECURSIVE_AGENT,
     FUNCTION_NOT_PURE,
     VERIFIER_BODY_NOT_BOOL,

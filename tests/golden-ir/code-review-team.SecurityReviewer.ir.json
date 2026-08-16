@@ -1,5 +1,5 @@
 {
-  "irVersion": "0.2",
+  "irVersion": "0.3",
   "language": "0.1",
   "agent": "heptapus.examples.review.SecurityReviewer",
   "doc": "Reviews one file for security problems.\n\nA sub-agent: it has its own capability grants and its own budget, so the\ncaller cannot widen what it is allowed to reach.",

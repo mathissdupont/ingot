@@ -143,6 +143,30 @@ impl HumanTrace {
                 detail.push(self.progress());
                 format!("agent.call   {}:{node} -> {agent}", self.current_agent())
             }
+            RunEvent::ConsultationAsked {
+                node,
+                index,
+                question,
+                choices,
+            } => {
+                // The question is shown in full. Unlike a prompt it is not
+                // redacted: a person is about to be asked it out loud, so
+                // hiding it here would hide it from the only reader who could
+                // check what was asked.
+                detail.push(format!("asks {question}"));
+                if !choices.is_empty() {
+                    detail.push(format!("choices {}", choices.join(" | ")));
+                }
+                format!("consult.ask  {}:{node}  #{index}", self.current_agent())
+            }
+            RunEvent::ConsultationAnswered {
+                node,
+                index,
+                answer,
+            } => {
+                detail.push(format!("answer {answer}"));
+                format!("consult.said {}:{node}  #{index}", self.current_agent())
+            }
             RunEvent::ApprovalRequested {
                 node,
                 effects,

@@ -1,5 +1,5 @@
 {
-  "irVersion": "0.2",
+  "irVersion": "0.3",
   "language": "0.1",
   "agent": "heptapus.examples.research.ResearchAgent",
   "doc": "A realistic research workflow.\n\nExercises: MCP tools, a network allowlist, working memory, `parallel map`\nfan-out, record field access, verification and budgets.",

@@ -1,6 +1,6 @@
 # RFC-0020: A person in the loop
 
-- Status: **Draft**
+- Status: **Accepted**, implemented 2026-08-16
 - Created: 2026-08-15
 - Affects: language, IR, artifact, runtime, CLI, `ingot-studio`, `ingot-supervisor`
 - Closes: [GAP-041](../docs/gaps.md#gap-041), [GAP-042](../docs/gaps.md#gap-042)
@@ -62,7 +62,7 @@ person is a service.
 `consult` is an expression, beside `ask` and `call`:
 
 ```ingot
-framing = consult<string>("Which framing should the report take?")
+framing = consult("Which framing should the report take?")
 ```
 
 The common case is not that one. It is this one:
@@ -88,6 +88,15 @@ approach = consult(
 `consult` takes one positional argument — the question — plus optional named
 arguments `context` and `choices`. Its effect is `human`.
 
+**Corrected while building: there is no type parameter.** This section first
+wrote `consult<string>(…)`, mirroring `ask<T>`. But the answer is always a
+string — a person types text or picks from a list, and the section below rules
+out anything richer on purpose — so `<string>` would have been the only legal
+thing anybody could ever write. **A type parameter with exactly one legal value
+is not a type parameter**, and writing it every time would have been ceremony
+that taught a reader nothing. If literal-union types land later, the choice form
+narrows a type without a parameter appearing.
+
 ### Why `context` is not optional decoration
 
 A person's answer can depend on something they saw earlier — the draft that went
@@ -104,9 +113,11 @@ models.
 
 ### Typing an answer
 
-`consult<string>` yields text a person typed. `choices:` yields one of the listed
-strings, and the runtime guarantees it — the person picked from a list rather
-than typing something that has to be validated afterwards.
+Without `choices:` the value is text a person typed. With it, the value is one of
+the listed strings and **the runtime guarantees that** — a channel returning
+anything else fails the run rather than binding it. The program limited what may
+come back, so the runtime holds the limit; a channel is not a trusted source
+because a person is behind it.
 
 There is deliberately no `consult<Report>`. A model can be schema-constrained
 into a struct; a person confronted with one is being asked to type JSON, which is
@@ -332,8 +343,8 @@ terminal behaves as it does today: it refuses at the gate, with a message.
 
 Two events join `RunEvent`, beside the two an approval already emits:
 
-- `ConsultationAsked { node, id, question, choices }`
-- `ConsultationAnswered { node, id, answer }`
+- `ConsultationAsked { node, index, question, choices }`
+- `ConsultationAnswered { node, index, answer }`
 
 These are not decoration, and leaving them out would break the half of this RFC
 that motivates it. **RFC-0015's whole claim is that the studio can watch a run**,
@@ -343,9 +354,12 @@ pending question reaches the page the way every other fact about a run does, ove
 the stream that was already there. The channel carries the answer back; the
 stream is what says one is wanted.
 
-`id` is the question id an answer must name, so the two halves of an exchange are
-joinable in a recorded stream as well as a live one — which is what lets
-`ingot trace` show a question and its answer together after the fact.
+`index` is which consultation this is within the run, counting from zero.
+*Corrected while building: this RFC first called it an opaque `id`.* The index is
+**the same number the cassette matches by**, so a recorded event stream and a
+recording line up without either carrying the other's identifier — and an opaque
+id would have been a second way of saying the same thing, which is the kind of
+thing that drifts.
 
 ## The studio surface
 
@@ -409,8 +423,10 @@ nothing new bounds it, and nothing new needs to.
 
 Two places, and both already have the rule and the reason written down.
 
-**Inside `parallel map` (`ING6008`)**, joining `emit`, `checkpoint` and state
-writes. Those three are refused because iterations are concurrent and they would
+**Inside `parallel map` (`ING6005`)**, joining `emit`, `checkpoint` and state
+writes. *Corrected while building: this RFC first invented `ING6008` for it.
+`INVALID_IN_PARALLEL` already existed and already said exactly this — a second
+code for one rule would have fragmented the rule rather than sharpened it.* Those three are refused because iterations are concurrent and they would
 make the result depend on scheduling. Questions to a person are worse than
 order-dependent: the order is *observable to the person*, who sees three
 questions arrive at once with no way to know which branch each belongs to. The
@@ -521,21 +537,21 @@ value nobody chose into a flow and a recording, and it would make the CI story
 The property is not "a person can be asked". It is that **a run with a person in
 it is as reproducible as one without**. So:
 
-- [ ] A recorded consultation replays with no channel attached, no prompt shown,
+- [x] A recorded consultation replays with no channel attached, no prompt shown,
       and the same bound value.
-- [ ] A replay whose question text changed is refused, naming the node, and the
+- [x] A replay whose question text changed is refused, naming the node, and the
       message says re-record.
 - [ ] A replay whose `context:` argument changed is refused, though the question
       text is byte-identical — the digest covers what determined the answer.
-- [ ] A replay whose `choices:` list changed is refused.
+- [x] A replay whose `choices:` list changed is refused.
 - [ ] A 0.2 cassette replays unchanged under 0.3; a cassette declaring 0.2 and
       carrying consultations is refused.
 - [ ] Consultations and interactions are matched independently: an agent that
       asks a model twice between two questions replays correctly.
-- [ ] `consult` without `human` in the policy is `ING4007`, before the run.
-- [ ] `human require approval` is `ING4011`.
-- [ ] `consult` inside `parallel map` is `ING6008`.
-- [ ] `consult` inside a verifier body is `ING2019`.
+- [x] `consult` without `human` in the policy is `ING4007`, before the run.
+- [x] `human require approval` is `ING4011`.
+- [x] `consult` inside `parallel map` is `ING6005`.
+- [x] `consult` inside a verifier body is `ING2019`.
 - [ ] An agent calling a sub-agent that consults, whose own policy does not grant
       `human`, is refused before the run.
 - [ ] `ConsultationAsked` reaches the event stream before the run blocks, and
@@ -544,9 +560,9 @@ it is as reproducible as one without**. So:
       contain the same sequence.
 - [ ] The secret scan reads `consultations` and fails a package whose recorded
       answer carries a secret shape.
-- [ ] `--yes` approves an approval gate and fails at a consultation, naming the
+- [x] `--yes` approves an approval gate and fails at a consultation, naming the
       question.
-- [ ] A run with no channel and no terminal refuses at a consultation with a
+- [x] A run with no channel and no terminal refuses at a consultation with a
       message naming the question, and does not hang.
 
 The channel half has its own, and they are about refusing rather than answering
@@ -576,12 +592,12 @@ these are what close [GAP-041](../docs/gaps.md#gap-041):
       actually at, and leaves the run still waiting.
 - [x] An answer carrying an invented field is refused, and leaves it waiting.
 - [x] Answering a process this studio did not start is refused.
-- [ ] The choice form binds one of the listed strings and nothing else, including
+- [x] The choice form binds one of the listed strings and nothing else, including
       when a channel returns something not on the list.
 - [ ] A run blocked on a question appears in `ingot runs` as blocked, with the
       question.
 - [ ] An answer naming a question id that is not outstanding is refused.
 - [ ] A `checkpoint` before a `consult` produces a snapshot; the resumed half asks
       the question and completes.
-- [ ] An artifact using `consult` is refused at build time by a backend that
+- [x] An artifact using `consult` is refused at build time by a backend that
       declares no `human` support.

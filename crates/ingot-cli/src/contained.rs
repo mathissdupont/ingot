@@ -15,7 +15,7 @@ use ingot_compiler::Compilation;
 use ingot_ir::{AgentIr, NodeKind};
 use ingot_mcp::{McpConfig, McpToolHost};
 use ingot_runtime::{
-    run as run_agent, AgentRegistry, ApprovalMode, DenyAllTools, ModelProvider, RunOptions,
+    run as run_agent, AgentRegistry, DenyAllTools, HumanChannel, ModelProvider, RunOptions,
     RunReport, ToolHost,
 };
 use ingot_sandbox::{Network, SandboxPlan, RUN_SUBJECT};
@@ -104,7 +104,7 @@ pub fn execute(
     entry: &AgentIr,
     inputs: BTreeMap<String, Value>,
     provider: &mut dyn ModelProvider,
-    approval: &mut ApprovalMode,
+    approval: &mut HumanChannel,
 ) -> Result<u8> {
     let wire = WireConfig {
         protocol: PROTOCOL_VERSION,
@@ -450,7 +450,7 @@ pub fn exec() -> Result<u8> {
             // Always `Ask`. The decision is the host's; this side only carries
             // the question, so `--yes` and an unattended deny are both applied
             // out there where the operator is.
-            approval: ApprovalMode::Ask(Box::new(guest.approvals())),
+            approval: HumanChannel::Ask(Box::new(guest.approvals())),
             max_steps: config.max_steps,
             // The store is a file outside the box, and nothing crosses the
             // boundary but the artifact, the inputs and the tool

@@ -157,10 +157,12 @@ impl Emitter<'_> {
             // Refused rather than skipped. `report::analyse` already told the
             // operator this would happen; reaching here means they were told and
             // the build proceeded anyway, so the failure has to be loud.
-            NodeKind::ToolCall | NodeKind::AgentCall => Err(EmitError::UnsupportedNode {
-                node: id.clone(),
-                kind: node.kind.as_str().to_string(),
-            }),
+            NodeKind::ToolCall | NodeKind::AgentCall | NodeKind::Consult => {
+                Err(EmitError::UnsupportedNode {
+                    node: id.clone(),
+                    kind: node.kind.as_str().to_string(),
+                })
+            }
         }
     }
 

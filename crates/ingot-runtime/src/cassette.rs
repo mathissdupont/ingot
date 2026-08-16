@@ -5,8 +5,10 @@
 //! verifies the request digest, so an edited prompt fails loudly instead of
 //! quietly reusing the previous recording.
 
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::rc::Rc;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -14,16 +16,20 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::provider::{CompletionRequest, CompletionResponse, ModelProvider, ProviderError, Usage};
-use crate::tools::{ToolError, ToolHost, ToolInvocation};
+use crate::tools::{
+    ApprovalRequest, ConsultError, ConsultRequest, HumanChannel, Interlocutor, ToolError, ToolHost,
+    ToolInvocation,
+};
 
 /// The version this crate writes.
-pub const CASSETTE_VERSION: &str = "0.2";
+pub const CASSETTE_VERSION: &str = "0.3";
 
 /// Versions this crate can read.
 ///
-/// 0.2 is 0.1 plus `toolCalls`, so a 0.1 recording is a valid 0.2 one with no
-/// tool calls in it and keeps replaying unchanged. Re-recording moves it.
-pub const SUPPORTED_CASSETTE_VERSIONS: &[&str] = &["0.1", "0.2"];
+/// Each is the one before it plus a list: 0.2 added `toolCalls`, 0.3 added
+/// `consultations`. So an older recording is a valid newer one with that list
+/// empty and keeps replaying unchanged. Re-recording moves it.
+pub const SUPPORTED_CASSETTE_VERSIONS: &[&str] = &["0.1", "0.2", "0.3"];
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -51,6 +57,44 @@ pub struct Cassette {
     /// cassettes as well as source.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tool_calls: Vec<ToolExchange>,
+    /// Questions put to a person, and what they said, in order.
+    ///
+    /// A third list beside the other two, matched the same way, because **a
+    /// person is a third source of answers**. A question sends a prompt and gets
+    /// back a typed value; what determined the answer is the question and the
+    /// context it was asked in; asking again after either changed would be
+    /// reusing the wrong row. The shape is the same, so the machinery is.
+    ///
+    /// Kept separate rather than interleaved for the reason `toolCalls` is: the
+    /// three are matched independently, and one ordered stream would make each
+    /// side's position depend on the others'. It is also the single most
+    /// important thing about a recorded run — **which answers a machine produced
+    /// and which a person did** — and one list cannot say that.
+    ///
+    /// See [RFC-0020](../../../rfcs/0020-a-person-in-the-loop.md).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub consultations: Vec<Consultation>,
+}
+
+/// One question, and what a person answered.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Consultation {
+    pub index: usize,
+    /// The IR node that asked.
+    pub node: String,
+    /// Digest of everything that determined the answer.
+    pub question_digest: String,
+    /// The question as it was put.
+    ///
+    /// Recorded beside the digest even though the digest would be enough to
+    /// match. A cassette is checked in and reviewed, and somebody reading
+    /// `"answer": "executive"` needs to see what was asked without running
+    /// anything. The same reason [`Interaction`] carries `model`.
+    pub question: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub choices: Vec<String>,
+    pub answer: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -107,6 +151,7 @@ impl Cassette {
             inputs: BTreeMap::new(),
             interactions: Vec::new(),
             tool_calls: Vec::new(),
+            consultations: Vec::new(),
         }
     }
 
@@ -134,6 +179,13 @@ impl Cassette {
         // A 0.1 recording that carries tool calls was written by something that
         // did not mean 0.1. Refusing beats replaying a field the stated version
         // does not have.
+        if cassette.cassette_version != CASSETTE_VERSION && !cassette.consultations.is_empty() {
+            return Err(format!(
+                "the cassette states version `{}` and carries consultations, which only {} has \
+                 a field for; re-record it",
+                cassette.cassette_version, CASSETTE_VERSION
+            ));
+        }
         if cassette.cassette_version == "0.1" && !cassette.tool_calls.is_empty() {
             return Err(
                 "the cassette states version `0.1` and carries tool calls, which 0.1 has no \
@@ -350,6 +402,163 @@ pub fn invocation_digest(invocation: &ToolInvocation) -> String {
         hasher.update(value.to_string().as_bytes());
     }
     format!("{:x}", hasher.finalize())
+}
+
+/// A stable digest of everything that determined what a person answered.
+///
+/// The question, the choices, and the context the run showed them. Context is in
+/// it for the reason it is an argument at all: a person's answer can depend on
+/// what they were shown, so two runs with identical question text can deserve
+/// different answers — and a digest that ignored it would replay the first into
+/// the second without noticing.
+pub fn question_digest(request: &ConsultRequest) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(request.question.as_bytes());
+    for choice in &request.choices {
+        hasher.update([0]);
+        hasher.update(choice.as_bytes());
+    }
+    for (name, value) in &request.context {
+        hasher.update([0]);
+        hasher.update(name.as_bytes());
+        hasher.update([0]);
+        hasher.update(value.to_string().as_bytes());
+    }
+    format!("{:x}", hasher.finalize())
+}
+
+/// Serves recorded answers in order, asking nobody.
+///
+/// The bargain the other two replays strike, for the half that costs most to
+/// re-record: **a consultation in CI is served from the recording, never asked.**
+/// That is not a workaround — it is the identical arrangement already in place
+/// for the model and for the tools.
+pub struct ReplayInterlocutor {
+    consultations: Vec<Consultation>,
+    position: usize,
+    strict: bool,
+}
+
+impl ReplayInterlocutor {
+    pub fn new(consultations: Vec<Consultation>) -> ReplayInterlocutor {
+        ReplayInterlocutor {
+            consultations,
+            position: 0,
+            strict: true,
+        }
+    }
+
+    pub fn lenient(mut self) -> ReplayInterlocutor {
+        self.strict = false;
+        self
+    }
+
+    /// Start at `played`, for continuing an interrupted run.
+    pub fn skipping(mut self, played: usize) -> ReplayInterlocutor {
+        self.position = played.min(self.consultations.len());
+        self
+    }
+
+    /// Answers recorded but never played back.
+    pub fn remaining(&self) -> usize {
+        self.consultations.len().saturating_sub(self.position)
+    }
+}
+
+impl Interlocutor for ReplayInterlocutor {
+    /// A recorded run's gates were decided when it was recorded, and a cassette
+    /// does not carry them. Approving is what lets a recorded run replay at all,
+    /// and it decides nothing new: the effect already happened once, under a
+    /// person who said yes.
+    fn approve(&mut self, _request: &ApprovalRequest) -> bool {
+        true
+    }
+
+    fn consult(&mut self, request: &ConsultRequest) -> Result<String, ConsultError> {
+        let Some(recorded) = self.consultations.get(self.position) else {
+            return Err(ConsultError::NoChannel(format!(
+                "the cassette records {} consultation(s) and the run asked for another at node \
+                 `{}`; re-record it",
+                self.consultations.len(),
+                request.node
+            )));
+        };
+        self.position += 1;
+
+        if self.strict && recorded.question_digest != question_digest(request) {
+            return Err(ConsultError::Failed(format!(
+                "consultation {} was recorded for a different question at node `{}`. The \
+                 question or its context changed since recording — re-record the cassette and \
+                 review the diff. Re-recording this one means asking somebody again.",
+                recorded.index, request.node
+            )));
+        }
+        Ok(recorded.answer.clone())
+    }
+}
+
+/// Wraps a channel and records every answer a person gives.
+///
+/// Owns the channel it wraps and hands back a shared handle on the list, rather
+/// than borrowing: the wrapped channel is moved into the run, so there is no
+/// borrow left out here to read the recording from afterwards. Single-threaded
+/// by construction — the interpreter asks one question at a time and waits — so
+/// `Rc<RefCell<_>>` is the honest representation rather than a compromise, the
+/// same reading the supervisor's guest already takes.
+pub struct RecordingInterlocutor {
+    inner: HumanChannel,
+    consultations: Rc<RefCell<Vec<Consultation>>>,
+}
+
+impl RecordingInterlocutor {
+    /// The wrapper, and the list it will fill.
+    pub fn new(inner: HumanChannel) -> (RecordingInterlocutor, Rc<RefCell<Vec<Consultation>>>) {
+        let consultations = Rc::new(RefCell::new(Vec::new()));
+        (
+            RecordingInterlocutor {
+                inner,
+                consultations: Rc::clone(&consultations),
+            },
+            consultations,
+        )
+    }
+}
+
+impl Interlocutor for RecordingInterlocutor {
+    fn approve(&mut self, request: &ApprovalRequest) -> bool {
+        match &mut self.inner {
+            HumanChannel::Ask(interlocutor) => interlocutor.approve(request),
+            HumanChannel::AssumeYes => true,
+            HumanChannel::Deny => false,
+        }
+    }
+
+    fn consult(&mut self, request: &ConsultRequest) -> Result<String, ConsultError> {
+        let answer = match &mut self.inner {
+            HumanChannel::Ask(interlocutor) => interlocutor.consult(request)?,
+            HumanChannel::AssumeYes => {
+                return Err(ConsultError::NoChannel(
+                    "`--yes` approves a gate and cannot answer a question".to_string(),
+                ))
+            }
+            HumanChannel::Deny => {
+                return Err(ConsultError::NoChannel(
+                    "this run has no channel to a person".to_string(),
+                ))
+            }
+        };
+        let mut consultations = self.consultations.borrow_mut();
+        let index = consultations.len();
+        consultations.push(Consultation {
+            index,
+            node: request.node.clone(),
+            question_digest: question_digest(request),
+            question: request.question.clone(),
+            choices: request.choices.clone(),
+            answer: answer.clone(),
+        });
+        Ok(answer)
+    }
 }
 
 /// Serves recorded tool results in order.

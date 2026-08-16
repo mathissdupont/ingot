@@ -19,7 +19,7 @@ use serde_json::json;
 
 use crate::events::{CollectingSink, RunEvent};
 use crate::provider::Usage;
-use crate::tools::{ApprovalMode, ScriptedApprovals, StaticToolHost};
+use crate::tools::{HumanChannel, ScriptedApprovals, StaticToolHost};
 use crate::{
     run, Cassette, DenyAllTools, RecordingProvider, ReplayProvider, RunError, RunOptions,
     ScriptedProvider,
@@ -711,7 +711,7 @@ fn gated() -> AgentIr {
     ir
 }
 
-fn run_gated(approval: ApprovalMode) -> (Result<crate::RunReport, RunError>, Vec<RunEvent>) {
+fn run_gated(approval: HumanChannel) -> (Result<crate::RunReport, RunError>, Vec<RunEvent>) {
     let ir = gated();
     let mut provider = ScriptedProvider::new(vec![json!("sent it")]);
     let mut tools = StaticToolHost::new().with("mailer.send", |_| Ok(json!(true)));
@@ -733,7 +733,7 @@ fn run_gated(approval: ApprovalMode) -> (Result<crate::RunReport, RunError>, Vec
 
 #[test]
 fn an_approval_denial_aborts_the_run() {
-    let (result, events) = run_gated(ApprovalMode::Deny);
+    let (result, events) = run_gated(HumanChannel::Deny);
     let error = result.unwrap_err();
     assert!(matches!(error, RunError::ApprovalDenied { .. }));
     assert!(events
@@ -749,7 +749,7 @@ fn an_approval_denial_aborts_the_run() {
 
 #[test]
 fn an_approval_grant_lets_the_gated_call_proceed() {
-    let (result, events) = run_gated(ApprovalMode::Ask(Box::new(ScriptedApprovals::new(vec![
+    let (result, events) = run_gated(HumanChannel::Ask(Box::new(ScriptedApprovals::new(vec![
         true,
     ]))));
     assert!(result.is_ok(), "{:?}", result.err().map(|e| e.to_string()));
@@ -760,7 +760,7 @@ fn an_approval_grant_lets_the_gated_call_proceed() {
 
 #[test]
 fn assume_yes_is_an_explicit_opt_in() {
-    let (result, _) = run_gated(ApprovalMode::AssumeYes);
+    let (result, _) = run_gated(HumanChannel::AssumeYes);
     assert!(result.is_ok());
 }
 
@@ -834,7 +834,7 @@ fn gated_after_a_sub_agent() -> (AgentIr, crate::AgentRegistry) {
 }
 
 fn run_gated_after_a_sub_agent(
-    approval: ApprovalMode,
+    approval: HumanChannel,
 ) -> (Result<crate::RunReport, RunError>, Vec<RunEvent>) {
     let (ir, registry) = gated_after_a_sub_agent();
     let mut provider = ScriptedProvider::new(vec![json!("child notes"), json!("parent note")]);
@@ -859,7 +859,7 @@ fn calling_a_sub_agent_does_not_disarm_a_later_approval_gate() {
     // The approval mode used to be *moved* into the sub-agent, leaving the
     // parent set to deny. Every gate after the first `agent.call` was then
     // refused without anyone being asked — including under `--yes`.
-    let (result, events) = run_gated_after_a_sub_agent(ApprovalMode::AssumeYes);
+    let (result, events) = run_gated_after_a_sub_agent(HumanChannel::AssumeYes);
     assert!(
         result.is_ok(),
         "the gate must still be approvable after a sub-agent call: {:?}",
@@ -876,7 +876,7 @@ fn calling_a_sub_agent_does_not_disarm_a_later_approval_gate() {
 #[test]
 fn the_operator_is_asked_by_the_parent_even_after_a_sub_agent_ran() {
     let (result, events) =
-        run_gated_after_a_sub_agent(ApprovalMode::Ask(Box::new(ScriptedApprovals::new(vec![
+        run_gated_after_a_sub_agent(HumanChannel::Ask(Box::new(ScriptedApprovals::new(vec![
             true,
         ]))));
     assert!(result.is_ok(), "{:?}", result.err().map(|e| e.to_string()));
@@ -895,7 +895,7 @@ fn the_operator_is_asked_by_the_parent_even_after_a_sub_agent_ran() {
 
 #[test]
 fn a_denial_after_a_sub_agent_still_stops_the_run() {
-    let (result, _) = run_gated_after_a_sub_agent(ApprovalMode::Deny);
+    let (result, _) = run_gated_after_a_sub_agent(HumanChannel::Deny);
     let error = result.unwrap_err();
     assert!(matches!(error, RunError::ApprovalDenied { .. }), "{error}");
 }
