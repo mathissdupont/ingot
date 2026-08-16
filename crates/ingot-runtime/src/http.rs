@@ -30,9 +30,10 @@ pub const DEFAULT_MAX_RETRIES: u32 = 3;
 
 /// POST a JSON body and read a JSON reply, retrying what is worth retrying.
 ///
-/// `timeout` bounds each attempt, and running out of it ends the call — see
-/// [`is_timeout`]. `None` is no bound at all, which is what an operator asks
-/// for with `timeout-seconds = 0`.
+/// `timeout` bounds each attempt, and running out of it ends the call rather
+/// than starting another one — a stated ceiling has to be the wait an operator
+/// gets, not that wait times the retry count. `None` is no bound at all, which
+/// is what `timeout-seconds = 0` asks for.
 ///
 /// `headers` carries authentication, so it never appears in an error message.
 pub fn post_json(
