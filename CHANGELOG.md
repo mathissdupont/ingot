@@ -8,6 +8,26 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-08-16
+
+The release where a person became part of a run without the run stopping being
+reproducible, and where the studio stopped being a window and became a surface.
+
+Since 0.5.2: an agent can put a question to a person and read the answer, and
+that answer is recorded and replayed like a model's — so an agent with a human in
+it still has an offline test. A gate can be answered by whatever started the
+run, so the studio can run an artifact that needs somebody. And the studio can
+change a program, under a rule that keeps it from ever becoming the source of
+truth: it produces a byte range and a replacement, never a file.
+
+Three format versions moved together — language 0.3, Agent IR 0.3, cassette 0.3
+— and older documents still work: an 0.2 cassette replays untouched, and a
+`language 0.1` source compiles as it always did.
+
+`consult` is a new reserved word, gated on the declared language version, so a
+program that binds that name keeps compiling until its header moves. That is the
+only break.
+
 **A model call's timeout is fixed at 180 seconds** — recorded as
 [GAP-040](docs/gaps.md#gap-040), not fixed. `DEFAULT_TIMEOUT` is a `const` with
 no manifest field, environment variable or flag behind it. Generous for a hosted
@@ -1554,7 +1574,8 @@ Backends, packaging and the language server are not part of this release.
 - `Ingot` is a working name. Trademark, domain and registry clearance has not
   been carried out and requires legal review before any public release.
 
-[Unreleased]: https://github.com/mathissdupont/ingot/compare/v0.5.2...HEAD
+[Unreleased]: https://github.com/mathissdupont/ingot/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/mathissdupont/ingot/compare/v0.5.2...v0.6.0
 [0.5.2]: https://github.com/mathissdupont/ingot/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/mathissdupont/ingot/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/mathissdupont/ingot/compare/v0.4.0...v0.5.0
