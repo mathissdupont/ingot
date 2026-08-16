@@ -28,6 +28,46 @@ everything conversational and is a second program model rather than a missing
 feature. The hard part is not the socket, it is what a replay does with an
 answer a person typed.
 
+**The canvas has a model and a set of edits** (language service) — the half of
+[RFC-0016](rfcs/0016-the-canvas.md) everything else rests on.
+
+`ingot-language-service::canvas` renders one agent's flow as blocks with spans,
+derives the edges between them, and produces edits. The rule it exists to keep:
+
+> The canvas never produces a file. It produces a **byte range and a
+> replacement**, and everything outside that range is untouched by construction.
+
+Every gesture is one range and one replacement, including a move — expressing a
+move as two edits would have broken the rule the design rests on, so the range
+spans both positions and the replacement is the original bytes reordered.
+Everything between that is neither the moved block nor the boundary is copied
+through character for character. An insert is a replacement of an **empty**
+range, which is why there is no second mechanism for it.
+
+**An edit carries the text it expects to find.** A canvas holds a rendering of
+bytes it read some time ago, and applying a stale range is the one way this
+design can lose somebody's work. The application compares before replacing and
+refuses with *"this file changed since the canvas read it; reload"*.
+
+**The move unit reads the source text, not the tree**, and that is worth stating:
+the lexer skips a comment and keeps no span, so the tree cannot say a comment
+exists, let alone that it belongs to the statement below. Moving by the AST span
+alone would leave it behind describing whatever moved into its place — the quiet
+loss this design exists to prevent, caused by the mechanism meant to prevent it.
+
+Twelve tests, including the eight the RFC names. The property is not that the
+canvas draws correctly; it is that **the file survives** — asserted by rendering
+every statement and every leaf of every reference example, replacing each with
+itself, and requiring the file back byte-identical.
+
+**Writing the tests corrected the RFC.** It cited `ING2003` for a binding moved
+below its reader. `ING2003` is `UNKNOWN_TYPE` and never fires for that case; the
+code is `ING2001`, or `ING2009` when the reader is a string interpolation, which
+is how a prompt reads a binding. A conformance test written from the RFC alone
+would have asserted a code that cannot occur.
+
+The surface that uses this is not built yet, so the studio is still read-only.
+
 **An agent can put a question to a person and read the answer** (language, IR,
 runtime, CLI) — [GAP-042](docs/gaps.md#gap-042) **closed**, and with it all of
 [RFC-0020](rfcs/0020-a-person-in-the-loop.md).

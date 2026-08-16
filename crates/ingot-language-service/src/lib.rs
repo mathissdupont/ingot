@@ -20,6 +20,8 @@ use ingot_syntax::{
 use ingot_types::{PolicySubject, MODEL_CAPABILITIES};
 use serde::Serialize;
 
+pub mod canvas;
+
 pub const LANGUAGE_SERVICE_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -381,7 +383,7 @@ fn collect_diagnostics(map: &SourceMap, diagnostics: &DiagnosticBag) -> Vec<Edit
         .collect()
 }
 
-fn source_range(map: &SourceMap, span: Span) -> SourceRange {
+pub(crate) fn source_range(map: &SourceMap, span: Span) -> SourceRange {
     let file = map.file(span.file);
     SourceRange {
         file: file.name().to_string(),

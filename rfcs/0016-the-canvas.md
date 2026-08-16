@@ -1,6 +1,6 @@
 # RFC-0016: The canvas, a two-way view of a flow
 
-- Status: **Accepted**
+- Status: **Accepted**; the model and the edits implemented 2026-08-16, the surface pending
 - Created: 2026-08-11
 - Affects: `ingot-studio`, `ingot-language-service`, CLI
 - Builds on: [RFC-0015](0015-ingot-studio.md)
@@ -154,8 +154,11 @@ common case is a drop that does not land rather than an error afterwards.
 
 But that check is an ergonomic convenience and **nothing depends on it being
 right**. The edit produces source; the source is compiled; a mistake is
-`ING2003: 'queries' is not in scope` with a span, shown the way every other
-diagnostic is shown. This is the property that makes the canvas safe to be wrong
+`ING2001: 'queries' is not in scope` with a span, shown the way every other
+diagnostic is shown. *(This RFC first wrote `ING2003`. That code is
+`UNKNOWN_TYPE` and never fires for this case; writing the conformance test is
+what found it. A binding read through a string interpolation — which is how a
+prompt reads one — reports `ING2009`.)* This is the property that makes the canvas safe to be wrong
 about things.
 
 ## Concurrency: the file moved under the view
@@ -244,19 +247,34 @@ canvas never opens for most real projects.
 The property to test is not "the canvas draws correctly". It is that **the file
 survives**. So:
 
-* Round-trip: for every reference example, render every statement, apply an
-  identity edit to each, and assert the file is byte-identical.
-* Move a statement with a comment above it and assert the comment moved with it.
-* Move a statement below one that uses its binding, apply the edit anyway
-  (bypassing the canvas's own check), and assert `ingot check` reports
-  `ING2003` — the compiler is the backstop, and the test proves it.
-* Edit a leaf in a file containing a construct the canvas cannot draw, and
-  assert that construct is byte-identical afterwards.
-* Apply an edit whose expected text no longer matches, and assert refusal.
-* A file that does not parse still yields a canvas, with the unreadable
-  statement marked.
-* Widen a policy through the canvas so that a tool's declared reach falls
-  outside it, and assert `ING4009` — a policy edit is compiled like any other,
-  and the canvas cannot write its way past a check.
-* Edit a policy rule in a file whose policy block carries comments between the
-  rules, and assert every comment is byte-identical afterwards.
+**Built**, in
+[`crates/ingot-language-service/tests/canvas.rs`](../crates/ingot-language-service/tests/canvas.rs):
+
+- [x] Round-trip: for every reference example, render every statement, apply an
+      identity edit to each, and assert the file is byte-identical. Extended
+      while building to cover every *leaf* as well, which is the span a person
+      actually edits and the one an off-by-one would hide in.
+- [x] Move a statement with a comment above it and assert the comment moved with
+      it — and that the file's lines are the same lines, reordered.
+- [x] Move a statement below one that uses its binding, apply the edit anyway
+      (bypassing the canvas's own check), and assert the compiler reports an
+      unresolved name. The compiler is the backstop, and the test proves it.
+- [x] Edit a leaf in a file containing a construct the canvas cannot draw, and
+      assert that construct is byte-identical afterwards.
+- [x] Apply an edit whose expected text no longer matches, and assert refusal.
+- [x] A file that does not parse still yields a canvas, with the unreadable
+      statement marked and not editable.
+- [x] Widen a policy through the canvas so that a tool's declared reach falls
+      outside it, and assert `ING4009` — a policy edit is compiled like any
+      other, and the canvas cannot write its way past a check.
+- [x] Edit a policy rule in a file whose policy block carries comments between
+      the rules, and assert every comment is byte-identical afterwards.
+
+Three more the RFC did not name, added because building the gestures showed what
+they rest on:
+
+- [x] An insert covers no existing bytes, and loses none.
+- [x] Deleting a block takes its comment and nothing else.
+- [x] An edge is derived and names the binding that ties it — and a name that is
+      only a prefix of another draws none, so `topic` does not appear to feed
+      `topics`.
