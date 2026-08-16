@@ -480,7 +480,7 @@ dependencies = [
 
 [[package]]
 name = "ingot-backend-python"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "ingot-ir",
  "serde",
@@ -489,7 +489,7 @@ dependencies = [
 
 [[package]]
 name = "ingot-cli"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -517,7 +517,7 @@ dependencies = [
 
 [[package]]
 name = "ingot-compiler"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "ingot-diagnostics",
  "ingot-ir",
@@ -531,11 +531,11 @@ dependencies = [
 
 [[package]]
 name = "ingot-conformance"
-version = "0.5.2"
+version = "0.6.0"
 
 [[package]]
 name = "ingot-diagnostics"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "ingot-source",
  "serde",
@@ -543,11 +543,11 @@ dependencies = [
 
 [[package]]
 name = "ingot-egress"
-version = "0.5.2"
+version = "0.6.0"
 
 [[package]]
 name = "ingot-ir"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -555,11 +555,11 @@ dependencies = [
 
 [[package]]
 name = "ingot-lang-types"
-version = "0.5.2"
+version = "0.6.0"
 
 [[package]]
 name = "ingot-language-service"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "ingot-compiler",
  "ingot-diagnostics",
@@ -571,7 +571,7 @@ dependencies = [
 
 [[package]]
 name = "ingot-lexer"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "ingot-diagnostics",
  "ingot-source",
@@ -579,7 +579,7 @@ dependencies = [
 
 [[package]]
 name = "ingot-lsp"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "ingot-diagnostics",
@@ -592,7 +592,7 @@ dependencies = [
 
 [[package]]
 name = "ingot-mcp"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "ingot-runtime",
  "serde",
@@ -603,7 +603,7 @@ dependencies = [
 
 [[package]]
 name = "ingot-package"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "ingot-ir",
  "serde",
@@ -613,7 +613,7 @@ dependencies = [
 
 [[package]]
 name = "ingot-parser"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "ingot-diagnostics",
  "ingot-lexer",
@@ -623,7 +623,7 @@ dependencies = [
 
 [[package]]
 name = "ingot-runtime"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "ingot-ir",
  "ingot-lang-types",
@@ -636,7 +636,7 @@ dependencies = [
 
 [[package]]
 name = "ingot-sandbox"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "ingot-ir",
  "serde",
@@ -645,7 +645,7 @@ dependencies = [
 
 [[package]]
 name = "ingot-semantic"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "ingot-diagnostics",
  "ingot-lang-types",
@@ -656,15 +656,15 @@ dependencies = [
 
 [[package]]
 name = "ingot-source"
-version = "0.5.2"
+version = "0.6.0"
 
 [[package]]
 name = "ingot-studio"
-version = "0.5.2"
+version = "0.6.0"
 
 [[package]]
 name = "ingot-supervisor"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "ingot-ir",
  "ingot-mcp",
@@ -675,7 +675,7 @@ dependencies = [
 
 [[package]]
 name = "ingot-syntax"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "ingot-source",
 ]
