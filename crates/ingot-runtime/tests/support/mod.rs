@@ -82,6 +82,30 @@ pub fn serve_stream(
     (format!("http://127.0.0.1:{port}{path}"), rx)
 }
 
+/// Accept connections and never answer any of them.
+///
+/// For proving a timeout: the connection is held open rather than closed, so
+/// the client waits for a reply that is not coming instead of being told at
+/// once that there is nobody there — which is a different error and would test
+/// nothing. Every attempt gets its own connection, so a retried request finds a
+/// server that is still silent.
+///
+/// The listener thread outlives the test, which is what a test binary can
+/// afford and a shutdown channel would only obscure.
+pub fn serve_silently(path: &str) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("binding a local port");
+    let port = listener.local_addr().unwrap().port();
+
+    thread::spawn(move || {
+        let mut held = Vec::new();
+        while let Ok((stream, _)) = listener.accept() {
+            held.push(stream);
+        }
+    });
+
+    format!("http://127.0.0.1:{port}{path}")
+}
+
 fn handle(stream: TcpStream, status: u16, response: &Value) -> Option<Captured> {
     let payload = serde_json::to_vec(response).ok()?;
     handle_raw(stream, status, "application/json", &payload)

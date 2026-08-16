@@ -46,7 +46,9 @@ pub struct AnthropicProvider {
     /// `low` | `medium` | `high` | `xhigh` | `max`. Omitted when `None`.
     effort: Option<String>,
     max_retries: u32,
-    timeout: Duration,
+    /// How long one request may take, or `None` for no ceiling. Set from
+    /// `[[model.provider]] timeout-seconds`.
+    timeout: Option<Duration>,
     base_url: String,
     /// What each model provides, so a capability requirement can be matched.
     ///
@@ -77,6 +79,11 @@ impl AnthropicProvider {
         if let Some(url) = http::base_url_from_env("INGOT_ANTHROPIC_BASE_URL") {
             provider = provider.with_base_url(url);
         }
+        // No declaration to read a wait from, so the machine's own answer is the
+        // only one there is.
+        provider = provider.with_timeout(
+            crate::catalogue::resolve_timeout(None).map_err(ProviderError::Configuration)?,
+        );
         Ok(provider)
     }
 
@@ -88,7 +95,7 @@ impl AnthropicProvider {
             vendor: None,
             effort: None,
             max_retries: DEFAULT_MAX_RETRIES,
-            timeout: DEFAULT_TIMEOUT,
+            timeout: Some(DEFAULT_TIMEOUT),
             base_url: API_URL.to_string(),
         }
     }
@@ -130,6 +137,16 @@ impl AnthropicProvider {
     /// Point at a different endpoint. Used by tests against a local stub.
     pub fn with_base_url(mut self, url: impl Into<String>) -> Self {
         self.base_url = url.into();
+        self
+    }
+
+    /// How long one request may take. `None` is no ceiling at all.
+    ///
+    /// Unlike the other builders, this one's argument is the value rather than
+    /// an override — `None` means *wait indefinitely*, not *leave the default
+    /// alone*, because that is the choice `timeout-seconds = 0` expresses.
+    pub fn with_timeout(mut self, timeout: Option<Duration>) -> Self {
+        self.timeout = timeout;
         self
     }
 

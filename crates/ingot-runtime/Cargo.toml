@@ -16,7 +16,8 @@ default = []
 http = ["dep:ureq"]
 # Network model providers. Off by default so the core interpreter, and its
 # tests, carry no TLS or HTTP dependency. All of them share `http.rs`, so the
-# retry rule and the timeout are the same whichever service answers.
+# retry rule is the same whichever service answers — the wait is not, because
+# `timeout-seconds` is a fact about the endpoint.
 anthropic = ["http"]
 openai = ["http"]
 google = ["http"]

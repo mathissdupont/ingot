@@ -8,6 +8,47 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
 
 ## [Unreleased]
 
+### Added
+
+- **A model provider can say how long it may take.** `timeout-seconds` on a
+  `[[model.provider]]`, beside `base-url`, bounds one request to that endpoint.
+  Absent, it is the same 180 seconds the three built-in providers use; `0` waits
+  indefinitely, as the word already does in `[run] timeout-seconds`. Closes
+  [GAP-040](docs/gaps.md#gap-040). *CLI.*
+
+  The decision the gap existed to force: **an artifact may not state one.** A
+  `budget` travels with the program because a step count means the same thing on
+  every machine; a wall clock does not, and an artifact carrying one would
+  finish here and fail there with nothing in the program to explain it. So it is
+  deployment configuration, beside the prices and the catalogue.
+
+- **`INGOT_MODEL_TIMEOUT_SECONDS`**, for when the machine is slow rather than
+  one endpoint on it. It answers for the built-in providers and for a program
+  written by `ingot build --target python`, which has no manifest to read and so
+  had no way to receive this at all. A `timeout-seconds` on a declaration beats
+  it — the precedence `INGOT_OPENAI_BASE_URL` already has. A value that is not a
+  whole number of seconds is refused on both backends rather than ignored. *CLI.*
+
+### Changed
+
+- **A model request that runs out of time is no longer retried.** It arrived as
+  an ordinary transport failure and was retried three times, which would have
+  made a stated ceiling mean four times itself — `timeout-seconds = 900` as an
+  hour. A retry is right for a refused connection and wrong for an endpoint that
+  is there and slow. A wedged endpoint therefore now fails after 180 seconds
+  rather than after roughly twelve minutes, which is what the constant always
+  claimed. Every other transport failure retries exactly as before. Both
+  backends. *CLI.*
+
+### Fixed
+
+- **A model call that ran long in a generated Python program ended it in a
+  traceback.** `urlopen` raises a read deadline bare, as `TimeoutError` rather
+  than wrapped in a `URLError`, and the prelude's `_post` caught only
+  `HTTPError` and `URLError` — so it escaped both handlers instead of becoming a
+  named failure. `_post_sse` was unaffected, having already caught `OSError`.
+  *CLI.*
+
 ## [0.6.0] — 2026-08-16
 
 The release where a person became part of a run without the run stopping being

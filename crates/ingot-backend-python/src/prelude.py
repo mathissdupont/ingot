@@ -14,6 +14,7 @@ import base64
 import hashlib
 import json
 import os
+import socket
 import sys
 import urllib.error
 import urllib.request
@@ -438,7 +439,59 @@ def canonical(value):
 
 
 _DEFAULT_TIMEOUT = 180
+_TIMEOUT_ENV = "INGOT_MODEL_TIMEOUT_SECONDS"
 _MAX_RETRIES = 3
+
+
+def model_timeout():
+    """How long one model request may take, or None to wait indefinitely.
+
+    This program is self-contained and reads no manifest, so the environment is
+    where its configuration comes from -- the same place it takes
+    `INGOT_OPENAI_BASE_URL` from. The reference interpreter reads the same
+    variable, so a machine whose models are slow is configured once whichever
+    backend runs the agent.
+
+    A value that is not a number is refused rather than ignored. Ignoring it
+    would leave an operator believing they had raised a ceiling on a run where
+    they had not, and the only evidence would be the timeout they were trying
+    to avoid.
+    """
+    raw = os.environ.get(_TIMEOUT_ENV)
+    # Exported-but-empty is a shell accident, not a request.
+    if raw is None or not raw.strip():
+        return _DEFAULT_TIMEOUT
+    text = raw.strip()
+    if not text.isdigit():
+        _fail(
+            "%s is `%s`, which is not a whole number of seconds\n  "
+            "set it to a count of seconds, or to `0` to wait indefinitely"
+            % (_TIMEOUT_ENV, text),
+            operator=True,
+        )
+    seconds = int(text)
+    # Zero waits indefinitely, as it does in `[run] timeout-seconds`. `None` is
+    # what urllib takes for no deadline.
+    return None if seconds == 0 else seconds
+
+
+def _is_timeout(error):
+    """Whether a failure is a deadline rather than a machine that said no.
+
+    **Not retried, unlike every other transport failure.** A refused connection
+    might answer if asked again; an endpoint that is there and slow is slow
+    again, and retrying would multiply a stated ceiling by `_MAX_RETRIES`. The
+    reference interpreter draws the same line, and `timeout-seconds` on a tool
+    server already did.
+
+    Two shapes reach here. A connect deadline arrives wrapped in a `URLError`;
+    a read deadline is raised bare, and used to escape both handlers and end
+    the program in a traceback rather than in a named failure.
+    """
+    if isinstance(error, (socket.timeout, TimeoutError)):
+        return True
+    reason = getattr(error, "reason", None)
+    return isinstance(reason, (socket.timeout, TimeoutError))
 
 # Runtime 0.3 section 4. The ceiling belongs to the transport, never to the
 # artifact: a service that composes a whole response before sending it holds
@@ -448,7 +501,7 @@ _WHOLE_BODY_CEILING = 16000
 _STREAMED_CEILING = 64000
 
 
-def _post(url, headers, body, timeout=_DEFAULT_TIMEOUT):
+def _post(url, headers, body, timeout):
     payload = json.dumps(body).encode("utf-8")
     request = urllib.request.Request(url, data=payload, method="POST")
     request.add_header("content-type", "application/json")
@@ -470,20 +523,22 @@ def _post(url, headers, body, timeout=_DEFAULT_TIMEOUT):
                     continue
                 _fail(last)
             _fail("provider rejected the request (%d): %s" % (error.code, text[:400]))
-        except urllib.error.URLError as error:
-            last = "provider transport failed: %s" % error.reason
-            if attempt + 1 < _MAX_RETRIES:
-                continue
-            _fail(last)
+        except (urllib.error.URLError, OSError) as error:
+            reason = getattr(error, "reason", error)
+            last = "provider transport failed: %s" % reason
+            if _is_timeout(error) or attempt + 1 >= _MAX_RETRIES:
+                _fail(last)
+            continue
     _fail(last or "provider transport failed")
 
 
-def _post_sse(url, headers, body, on_event, timeout=_DEFAULT_TIMEOUT):
+def _post_sse(url, headers, body, on_event, timeout):
     """POST and read a `text/event-stream`, one decoded event at a time.
 
     Retries only while nothing has been delivered. Once a watcher has seen
     text, repeating the call would show the answer twice and charge for it
-    twice, so a mid-stream failure is final.
+    twice, so a mid-stream failure is final. A deadline is final either way --
+    see `_is_timeout`.
     """
     payload = json.dumps(body).encode("utf-8")
     last = None
@@ -510,7 +565,7 @@ def _post_sse(url, headers, body, on_event, timeout=_DEFAULT_TIMEOUT):
         except (urllib.error.URLError, OSError) as error:
             reason = getattr(error, "reason", error)
             last = "provider transport failed: %s" % reason
-            if delivered or attempt + 1 >= _MAX_RETRIES:
+            if delivered or _is_timeout(error) or attempt + 1 >= _MAX_RETRIES:
                 _fail(last)
             continue
     _fail(last or "provider transport failed")
@@ -705,6 +760,9 @@ class Anthropic:
         self.key = key
         self.base_url = base_url or "https://api.anthropic.com/v1/messages"
         self.model = model
+        # Resolved once, not per call: it is a fact about the endpoint, and a
+        # variable read mid-run could give two calls different deadlines.
+        self.timeout = model_timeout()
 
     def streams(self):
         return True
@@ -766,7 +824,9 @@ class Anthropic:
 
     def complete(self, request):
         model = self._model(request)
-        reply = _post(self.base_url, self._headers(), self._body(request, model))
+        reply = _post(
+            self.base_url, self._headers(), self._body(request, model), self.timeout
+        )
         return self._read(request, reply, model)
 
     def complete_streaming(self, request, on_delta):
@@ -782,6 +842,7 @@ class Anthropic:
             self._headers(),
             body,
             lambda name, data: stream.event(name, data, on_delta),
+            self.timeout,
         )
         return self._read(request, stream.payload(), model)
 
@@ -795,6 +856,9 @@ class OpenAiCompatible:
         self.key = key
         self.base_url = base_url or "https://api.openai.com/v1/chat/completions"
         self.model = model
+        # Resolved once, not per call: it is a fact about the endpoint, and a
+        # variable read mid-run could give two calls different deadlines.
+        self.timeout = model_timeout()
 
     def streams(self):
         return True
@@ -836,7 +900,9 @@ class OpenAiCompatible:
 
     def complete(self, request):
         model = self._model(request)
-        reply = _post(self.base_url, self._headers(), self._body(request, model))
+        reply = _post(
+            self.base_url, self._headers(), self._body(request, model), self.timeout
+        )
         return self._read(request, reply, model)
 
     def complete_streaming(self, request, on_delta):
@@ -854,6 +920,7 @@ class OpenAiCompatible:
             self._headers(),
             body,
             lambda _name, data: stream.chunk(data, on_delta),
+            self.timeout,
         )
         return self._read(request, stream.payload(), model)
 
