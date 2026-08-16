@@ -22,7 +22,10 @@ use crate::price::{parse_micros, Pricing, Spend};
 use crate::provider::{CompletionRequest, ModelProvider, ModelSelection, ProviderError, Usage};
 use crate::schema;
 use crate::snapshot::{self, Resumption};
-use crate::tools::{ApprovalMode, ApprovalRequest, ToolError, ToolHost, ToolInvocation};
+use crate::tools::{
+    ApprovalRequest, ConsultError, ConsultRequest, HumanChannel, ToolError, ToolHost,
+    ToolInvocation,
+};
 use crate::{RunError, RunReport};
 
 /// Hard ceiling on a single call whose answer arrives as one whole body.
@@ -44,7 +47,7 @@ const STREAMING_CEILING: u32 = 64_000;
 pub struct RunOptions {
     /// Input name to value.
     pub inputs: BTreeMap<String, Value>,
-    pub approval: ApprovalMode,
+    pub approval: HumanChannel,
     /// Stop after this many steps even if the artifact allows more. A backstop
     /// for artifacts with no `steps` budget.
     pub max_steps: u32,
@@ -76,7 +79,7 @@ impl Default for RunOptions {
     fn default() -> Self {
         RunOptions {
             inputs: BTreeMap::new(),
-            approval: ApprovalMode::Deny,
+            approval: HumanChannel::Deny,
             max_steps: 1_000,
             memory: BTreeMap::new(),
             stop_at: None,
@@ -95,7 +98,7 @@ struct Interp<'a> {
     provider: &'a mut dyn ModelProvider,
     tools: &'a mut dyn ToolHost,
     sink: &'a mut dyn EventSink,
-    approval: &'a mut ApprovalMode,
+    approval: &'a mut HumanChannel,
 
     bindings: BTreeMap<String, Value>,
     state: BTreeMap<String, Value>,
@@ -122,6 +125,7 @@ struct Interp<'a> {
     run_inputs: BTreeMap<String, Value>,
     /// Model and tool calls made, so a snapshot can say where a cassette got to.
     model_calls: u32,
+    consultations: u32,
     tool_calls: u32,
 }
 
@@ -173,7 +177,7 @@ fn run_nested(
     tools: &mut dyn ToolHost,
     sink: &mut dyn EventSink,
     inputs: BTreeMap<String, Value>,
-    approval: &mut ApprovalMode,
+    approval: &mut HumanChannel,
     step_ceiling: u32,
     // Whatever the caller loaded from the agent's store. A sub-agent gets none
     // of its caller's: persistent memory belongs to an agent, and a sub-agent
@@ -324,6 +328,10 @@ fn run_nested(
             Some(snapshot) => snapshot.inputs.clone(),
             None => inputs,
         },
+        consultations: resume
+            .as_ref()
+            .map(|snapshot| snapshot.consultations)
+            .unwrap_or(0),
         model_calls: resume
             .as_ref()
             .map(|snapshot| snapshot.model_calls)
@@ -446,6 +454,7 @@ impl Interp<'_> {
             usage: self.usage,
             spend: self.spend.clone(),
             model_calls: self.model_calls,
+            consultations: self.consultations,
             tool_calls: self.tool_calls,
         })
     }
@@ -477,6 +486,7 @@ impl Interp<'_> {
             NodeKind::Parallel => self.run_parallel(node),
             NodeKind::Loop => self.run_loop(node),
             NodeKind::Approval => self.run_approval(node),
+            NodeKind::Consult => self.run_consult(node),
             NodeKind::Verify => self.run_verify(node),
             NodeKind::StateRead => self.run_state_read(node),
             NodeKind::StateWrite => self.run_state_write(node),
@@ -982,9 +992,9 @@ impl Interp<'_> {
         });
 
         let allowed = match self.approval {
-            ApprovalMode::AssumeYes => true,
-            ApprovalMode::Deny => false,
-            ApprovalMode::Ask(handler) => handler.approve(&ApprovalRequest {
+            HumanChannel::AssumeYes => true,
+            HumanChannel::Deny => false,
+            HumanChannel::Ask(handler) => handler.approve(&ApprovalRequest {
                 node: node.id.clone(),
                 effects: node.effects.clone(),
                 reason: reason.clone(),
@@ -1003,6 +1013,108 @@ impl Interp<'_> {
                 reason,
             })
         }
+    }
+
+    /// Put a question to a person and bind what they said.
+    ///
+    /// The order matters and is the reason this is not three lines: the event
+    /// goes out **before** the channel is asked, so a surface watching the
+    /// stream can render the question while the run is still waiting for it. A
+    /// run blocked on a person that looked identical to a run that is working
+    /// would be the failure this whole feature exists to remove.
+    fn run_consult(&mut self, node: &Node) -> Result<(), RunError> {
+        self.charge_step(node)?;
+        let index = self.consultations as usize;
+        // Counted on the attempt, like a model call: a recording advances its
+        // position whether or not the answer arrived, so a resumed run has to
+        // pick up past this one.
+        self.consultations += 1;
+
+        let question_value = node
+            .prompt
+            .as_ref()
+            .ok_or_else(|| RunError::MalformedIr(format!("`{}` has no question", node.id)))?;
+        let question = self.render_prompt(question_value)?;
+
+        let mut choices = Vec::new();
+        let mut context = Vec::new();
+        for argument in &node.args {
+            let value = self.eval(&argument.value)?;
+            match argument.name.as_str() {
+                "choices" => {
+                    choices = value
+                        .as_array()
+                        .map(|items| {
+                            items
+                                .iter()
+                                .filter_map(|item| item.as_str().map(str::to_string))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                }
+                name => context.push((name.to_string(), value)),
+            }
+        }
+
+        self.sink.emit(RunEvent::ConsultationAsked {
+            node: node.id.clone(),
+            index,
+            question: question.clone(),
+            choices: choices.clone(),
+        });
+
+        let request = ConsultRequest {
+            node: node.id.clone(),
+            index,
+            question: question.clone(),
+            choices: choices.clone(),
+            context,
+        };
+
+        let answered = match self.approval {
+            HumanChannel::Ask(interlocutor) => interlocutor.consult(&request),
+            // There is no default answer to a question, so approving everything
+            // in advance cannot answer one. Guessing would put a value nobody
+            // chose into the flow and into the recording.
+            HumanChannel::AssumeYes => Err(ConsultError::NoChannel(
+                "`--yes` approves a gate and cannot answer a question; there is no safe side to                  guess"
+                    .to_string(),
+            )),
+            HumanChannel::Deny => Err(ConsultError::NoChannel(
+                "this run has no channel to a person".to_string(),
+            )),
+        };
+
+        let answer = match answered {
+            Ok(answer) if choices.is_empty() || choices.iter().any(|choice| choice == &answer) => {
+                answer
+            }
+            // The program limited what may come back, so the runtime holds the
+            // limit rather than trusting whatever arrived. A channel is not a
+            // trusted source just because a person is behind it.
+            Ok(answer) => {
+                return Err(RunError::ConsultFailed {
+                    node: node.id.clone(),
+                    question,
+                    reason: ConsultError::NotAChoice { answer, choices }.to_string(),
+                })
+            }
+            Err(error) => {
+                return Err(RunError::ConsultFailed {
+                    node: node.id.clone(),
+                    question,
+                    reason: error.to_string(),
+                })
+            }
+        };
+
+        self.sink.emit(RunEvent::ConsultationAnswered {
+            node: node.id.clone(),
+            index,
+            answer: answer.clone(),
+        });
+        self.bind(node, Value::String(answer));
+        Ok(())
     }
 
     fn run_verify(&mut self, node: &Node) -> Result<(), RunError> {

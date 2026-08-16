@@ -23,7 +23,7 @@ use ingot_runtime::provider::{
     CompletionRequest, CompletionResponse, ModelSelection, ProviderError, Usage,
 };
 use ingot_runtime::schema::ResponseShape;
-use ingot_runtime::{ApprovalRequest, Artifact};
+use ingot_runtime::{ApprovalRequest, Artifact, ConsultRequest};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -39,6 +39,7 @@ pub const PROTOCOL_VERSION: u32 = 1;
 pub const CALL_CONFIG: &str = "config";
 pub const CALL_MODEL: &str = "model";
 pub const CALL_APPROVAL: &str = "approval";
+pub const CALL_CONSULT: &str = "consult";
 pub const NOTIFY_EVENT: &str = "event";
 pub const NOTIFY_FINISHED: &str = "finished";
 pub const NOTIFY_FAILED: &str = "failed";
@@ -247,6 +248,48 @@ impl ApprovalCall {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ApprovalReply {
     pub allowed: bool,
+}
+
+/// The `consult` call. A question is written inside and answered outside, for
+/// the same reason a gate is: there is nobody in the box to ask.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConsultCall {
+    pub node: String,
+    pub index: usize,
+    pub question: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub choices: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub context: Vec<(String, Value)>,
+}
+
+impl ConsultCall {
+    pub fn of(request: &ConsultRequest) -> ConsultCall {
+        ConsultCall {
+            node: request.node.clone(),
+            index: request.index,
+            question: request.question.clone(),
+            choices: request.choices.clone(),
+            context: request.context.clone(),
+        }
+    }
+
+    pub fn into_request(self) -> ConsultRequest {
+        ConsultRequest {
+            node: self.node,
+            index: self.index,
+            question: self.question,
+            choices: self.choices,
+            context: self.context,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConsultReply {
+    pub answer: String,
 }
 
 /// The `finished` notification: what the run produced.

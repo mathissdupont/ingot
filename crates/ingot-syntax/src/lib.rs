@@ -560,6 +560,17 @@ pub enum Expr {
         args: Vec<Arg>,
         span: Span,
     },
+    /// `consult("Which framing?", choices: ["a", "b"])` — a question put to a
+    /// person, whose answer the flow reads.
+    ///
+    /// No type parameter, unlike [`Expr::Ask`]. A person types text or picks
+    /// from a list, so the answer is always `string` — and a type parameter with
+    /// exactly one legal value is not a type parameter. See
+    /// [RFC-0020](../../../rfcs/0020-a-person-in-the-loop.md).
+    Consult {
+        args: Vec<Arg>,
+        span: Span,
+    },
     /// `call web.search(query)` — a tool call or a sub-agent call.
     Call {
         callee: DottedName,
@@ -611,6 +622,7 @@ impl Expr {
             | Expr::Bool { span, .. }
             | Expr::List { span, .. }
             | Expr::Ask { span, .. }
+            | Expr::Consult { span, .. }
             | Expr::Call { span, .. }
             | Expr::ParallelMap { span, .. }
             | Expr::Builtin { span, .. }

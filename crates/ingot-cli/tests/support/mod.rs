@@ -405,6 +405,25 @@ pub fn run_answering(
     env: &[(&str, &str)],
     reply: impl Fn(&str, usize) -> Option<String> + Send + 'static,
 ) -> Output {
+    run_conversing(args, env, move |event, seen| {
+        let node = event
+            .get("node")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        reply(node, seen)
+    })
+}
+
+/// The same, for a run that may reach a gate *or* a question.
+///
+/// `reply` is handed the whole event, so a test can tell `approvalRequested`
+/// from `consultationAsked` and answer each in its own shape. They are one
+/// channel, and this is the side of it a parent process sees.
+pub fn run_conversing(
+    args: &[&str],
+    env: &[(&str, &str)],
+    reply: impl Fn(&Value, usize) -> Option<String> + Send + 'static,
+) -> Output {
     let mut command = Command::new(binary());
     command.args(args).arg("--color").arg("never");
     for name in [
@@ -443,14 +462,13 @@ pub fn run_answering(
             let Ok(event) = serde_json::from_str::<Value>(&line) else {
                 continue;
             };
-            if event.get("event").and_then(Value::as_str) != Some("approvalRequested") {
+            if !matches!(
+                event.get("event").and_then(Value::as_str),
+                Some("approvalRequested") | Some("consultationAsked")
+            ) {
                 continue;
             }
-            let node = event
-                .get("node")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            match reply(node, seen) {
+            match reply(&event, seen) {
                 Some(answer) => {
                     if let Some(handle) = stdin.as_mut() {
                         let _ = writeln!(handle, "{answer}");

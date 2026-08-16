@@ -574,6 +574,9 @@ fn print_expr(out: &mut String, expr: &Expr, level: usize) {
         Expr::Ask { result, args, .. } => {
             let _ = write!(out, "ask<{}>({})", result.text(), print_args(args, level));
         }
+        Expr::Consult { args, .. } => {
+            let _ = write!(out, "consult({})", print_args(args, level));
+        }
         Expr::Call { callee, args, .. } => {
             let _ = write!(out, "call {}({})", callee.text(), print_args(args, level));
         }

@@ -28,6 +28,57 @@ everything conversational and is a second program model rather than a missing
 feature. The hard part is not the socket, it is what a replay does with an
 answer a person typed.
 
+**An agent can put a question to a person and read the answer** (language, IR,
+runtime, CLI) — [GAP-042](docs/gaps.md#gap-042) **closed**, and with it all of
+[RFC-0020](rfcs/0020-a-person-in-the-loop.md).
+
+```ingot
+framing = consult(
+  "Which framing should the report take?",
+  choices: ["technical", "executive", "narrative"]
+)
+```
+
+`consult` is an expression beside `ask` and `call`. Its value is a `string` a
+person typed or picked, and its effect is `human` — default-denied like every
+other, which is the part that earns most: **whether an artifact can run
+unattended is now answered by reading its policy** rather than by starting it.
+CI denies `human`, and an artifact that needs a person fails at the gate naming
+the question instead of waiting on a pipe.
+
+**A person is a third source of answers.** A cassette already held two
+independent ordered lists — the model's and the tools' — matched by position and
+then by a digest of everything that determined the answer. A question has that
+shape, so it is a third list, `consultations`, and the matching machinery learned
+nothing new. Cassette version 0.3; an 0.2 recording is a valid 0.3 one with that
+list empty, and keeps replaying unchanged.
+
+**`--yes` approves a gate and fails at a question.** There is no safe side to
+*which framing should the report take*, and inventing one would put a value
+nobody chose into the flow and into the recording. In CI a consultation
+**replays** — the bargain already struck for the model and the tools.
+
+Language version 0.3, IR version 0.3, cassette version 0.3. `consult` is a new
+reserved word, gated on the declared language version, so a program that binds
+that name keeps compiling until its header moves.
+
+**Building it corrected the RFC twice, and both corrections were subtractions.**
+The design wrote `consult<string>`, mirroring `ask<T>` — but the answer is always
+a string, so that parameter had exactly one legal value and is not a parameter.
+It invented `ING6008` for `consult` inside `parallel map` — but
+`INVALID_IN_PARALLEL` already said exactly that, and a second code for one rule
+fragments the rule.
+
+**Left open on purpose.** Partial re-record. When model prompts change but
+questions do not, `--record` still costs a person their answers again. The right
+shape is unclear, and guessing would put a second matching rule beside the one
+that works.
+
+**The Python backend refuses an artifact that consults**, at build time, naming
+`human` as unsupported. There is no channel to a person from a generated
+program, and an artifact that builds and cannot run is the failure the effect
+system exists to prevent.
+
 **A gate can be answered by whatever started the run** (CLI) — the design in
 [RFC-0020](rfcs/0020-a-person-in-the-loop.md), and the smaller half of it.
 

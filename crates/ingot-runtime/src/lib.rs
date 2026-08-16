@@ -81,8 +81,8 @@ pub use provider::{
 pub use router::RoutingProvider;
 pub use snapshot::{artifact_digest, Resumption, SnapshotError};
 pub use tools::{
-    ApprovalHandler, ApprovalMode, ApprovalRequest, DenyAllTools, ScriptedApprovals,
-    StaticToolHost, ToolError, ToolHost, ToolInvocation,
+    ApprovalRequest, ConsultError, ConsultRequest, DenyAllTools, HumanChannel, Interlocutor,
+    ScriptedAnswers, ScriptedApprovals, StaticToolHost, ToolError, ToolHost, ToolInvocation,
 };
 
 /// What a completed run produced.
@@ -131,6 +131,15 @@ pub enum RunError {
     },
     /// An approval gate was refused.
     ApprovalDenied { node: String, reason: String },
+    /// A question could not be put to a person, or was not answered.
+    ///
+    /// Not a refusal like [`RunError::ApprovalDenied`]: a gate has a safe answer
+    /// and a question does not, so there is nothing to carry on with.
+    ConsultFailed {
+        node: String,
+        question: String,
+        reason: String,
+    },
     /// A `verify` ran its check and the property did not hold.
     ///
     /// The `verified` event carrying `failed` is emitted before this is
@@ -222,6 +231,15 @@ impl fmt::Display for RunError {
             RunError::ApprovalDenied { node, reason } => {
                 write!(f, "approval was refused at node `{node}`: {reason}")
             }
+            RunError::ConsultFailed {
+                node,
+                question,
+                reason,
+            } => write!(
+                f,
+                "the question at node `{node}` was not answered: {reason}
+  asked: {question}"
+            ),
             RunError::VerificationFailed { node, verifier } => write!(
                 f,
                 "the check `{verifier}` did not hold at node `{node}`, so the run stopped there"
@@ -308,6 +326,7 @@ impl RunError {
                 | RunError::InvalidInput { .. }
                 | RunError::UnknownInput { .. }
                 | RunError::ApprovalDenied { .. }
+                | RunError::ConsultFailed { .. }
                 | RunError::AgentNotAvailable { .. }
                 | RunError::Tool {
                     source: ToolError::NotAvailable(_),

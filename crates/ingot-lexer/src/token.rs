@@ -152,6 +152,7 @@ pub enum Keyword {
     Approval,
 
     Ask,
+    Consult,
     Call,
     Parallel,
     Map,
@@ -197,6 +198,7 @@ impl Keyword {
             Keyword::Require => "require",
             Keyword::Approval => "approval",
             Keyword::Ask => "ask",
+            Keyword::Consult => "consult",
             Keyword::Call => "call",
             Keyword::Parallel => "parallel",
             Keyword::Map => "map",
@@ -245,6 +247,7 @@ impl Keyword {
             "require" => Keyword::Require,
             "approval" => Keyword::Approval,
             "ask" => Keyword::Ask,
+            "consult" => Keyword::Consult,
             "call" => Keyword::Call,
             "parallel" => Keyword::Parallel,
             "map" => Keyword::Map,

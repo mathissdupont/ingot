@@ -19,6 +19,16 @@ pub enum Effect {
     FilesystemRead,
     /// Writes to the workspace filesystem.
     FilesystemWrite,
+    /// Puts a question to a person and waits for the answer.
+    ///
+    /// Policy-controlled like any other, and that is what it is for: **whether
+    /// an artifact can run unattended becomes a question you answer by reading
+    /// its policy**, rather than by starting it and finding out. A scheduler can
+    /// refuse to enqueue what it cannot answer, and CI denies it so an artifact
+    /// needing a person fails at the gate instead of waiting on a pipe.
+    ///
+    /// See [RFC-0020](../../../rfcs/0020-a-person-in-the-loop.md).
+    Human,
     /// Calls the language model. Implicit on every `ask`, and always permitted:
     /// an agent that may not call a model is not an agent.
     ModelAccess,
@@ -36,6 +46,7 @@ impl Effect {
             "filesystem_write" => Effect::FilesystemWrite,
             "external_write" => Effect::ExternalWrite,
             "secret_access" => Effect::SecretAccess,
+            "human" => Effect::Human,
             "model_access" => Effect::ModelAccess,
             _ => return None,
         };
@@ -49,6 +60,7 @@ impl Effect {
             Effect::FilesystemWrite => "filesystem_write",
             Effect::ExternalWrite => "external_write",
             Effect::SecretAccess => "secret_access",
+            Effect::Human => "human",
             Effect::ModelAccess => "model_access",
         }
     }
@@ -83,11 +95,12 @@ impl Effect {
         }
     }
 
-    pub fn all() -> [Effect; 6] {
+    pub fn all() -> [Effect; 7] {
         [
             Effect::ExternalWrite,
             Effect::FilesystemRead,
             Effect::FilesystemWrite,
+            Effect::Human,
             Effect::ModelAccess,
             Effect::Network,
             Effect::SecretAccess,

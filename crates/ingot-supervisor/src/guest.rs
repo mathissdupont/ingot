@@ -20,15 +20,16 @@ use std::rc::Rc;
 
 use ingot_runtime::provider::{CompletionRequest, CompletionResponse, ProviderError};
 use ingot_runtime::{
-    ApprovalHandler, ApprovalRequest, EventSink, ModelProvider, RunError, RunEvent, RunReport,
+    ApprovalRequest, ConsultError, ConsultRequest, EventSink, Interlocutor, ModelProvider,
+    RunError, RunEvent, RunReport,
 };
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
 use crate::protocol::{
-    ApprovalCall, ApprovalReply, Failed, Finished, GuestLine, Hello, HostLine, ModelCall,
-    ModelReply, RunConfig, WireError, CALL_APPROVAL, CALL_CONFIG, CALL_MODEL, NOTIFY_EVENT,
-    NOTIFY_FAILED, NOTIFY_FINISHED, PROTOCOL_VERSION,
+    ApprovalCall, ApprovalReply, ConsultCall, ConsultReply, Failed, Finished, GuestLine, Hello,
+    HostLine, ModelCall, ModelReply, RunConfig, WireError, CALL_APPROVAL, CALL_CONFIG,
+    CALL_CONSULT, CALL_MODEL, NOTIFY_EVENT, NOTIFY_FAILED, NOTIFY_FINISHED, PROTOCOL_VERSION,
 };
 
 /// Why a guest could not talk to its supervisor.
@@ -329,7 +330,7 @@ impl fmt::Debug for GuestApprovals {
     }
 }
 
-impl ApprovalHandler for GuestApprovals {
+impl Interlocutor for GuestApprovals {
     fn approve(&mut self, request: &ApprovalRequest) -> bool {
         match self
             .inner
@@ -342,6 +343,16 @@ impl ApprovalHandler for GuestApprovals {
             // failure mode an approval gate exists to prevent.
             Err(_) => false,
         }
+    }
+
+    fn consult(&mut self, request: &ConsultRequest) -> Result<String, ConsultError> {
+        // No safe default here, unlike a gate: there is no answer to fall back
+        // to, so a broken channel is reported rather than papered over.
+        self.inner
+            .borrow_mut()
+            .call::<_, ConsultReply>(CALL_CONSULT, &ConsultCall::of(request))
+            .map(|reply| reply.answer)
+            .map_err(|error| ConsultError::Failed(GuestError::from(error).to_string()))
     }
 }
 

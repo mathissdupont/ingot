@@ -118,6 +118,7 @@
         "external_write",
         "filesystem_read",
         "filesystem_write",
+        "human",
         "model_access",
         "network",
         "secret_access"
@@ -244,6 +245,7 @@
             "parallel",
             "loop",
             "approval",
+            "consult",
             "verify",
             "state.read",
             "state.write",

@@ -76,6 +76,11 @@ pub struct Resumption {
     /// How many tool calls it made, for the same reason.
     #[serde(default)]
     pub tool_calls: u32,
+    /// How many questions it put to a person, for the same reason. A recorded
+    /// answer is matched by position like everything else, so a resumed run has
+    /// to start where the first half stopped.
+    #[serde(default)]
+    pub consultations: u32,
 }
 
 /// Why a snapshot could not be used.
@@ -283,6 +288,7 @@ mod tests {
             spend: Spend::default(),
             model_calls: 0,
             tool_calls: 0,
+            consultations: 0,
         }
     }
 

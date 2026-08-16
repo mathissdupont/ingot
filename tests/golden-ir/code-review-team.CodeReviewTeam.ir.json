@@ -1,5 +1,5 @@
 {
-  "irVersion": "0.2",
+  "irVersion": "0.3",
   "language": "0.1",
   "agent": "heptapus.examples.review.CodeReviewTeam",
   "doc": "Coordinates a review across several files and publishes the result.\n\nExercises: sub-agent calls, `parallel map` over inputs, a branch,\nfilesystem and external-write capabilities, and an approval checkpoint the\ncompiler inserts from `external_write require approval`.",

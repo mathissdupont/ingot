@@ -365,3 +365,64 @@ and tools declared once can be shared across a project's files. See
 
 Every diagnostic has a stable code, and `ingot explain ING4007` prints the full
 explanation of any of them.
+
+## Asking a person
+
+An `ask` goes to a model. A `consult` goes to a person, and its answer is a value
+the flow reads:
+
+```ingot
+language 0.3
+
+/// Asks a person how to frame a report, then writes it that way.
+agent Framing(topic: string) -> report<markdown> {
+  budget {
+    steps <= 6
+    tokens <= 20000
+  }
+
+  policy {
+    human allow
+    network deny
+  }
+
+  flow {
+    framing = consult(
+      "Which framing should the report take?",
+      choices: ["technical", "executive", "narrative"]
+    )
+    emit report = ask<markdown>("Write about ${topic} as ${framing}.")
+  }
+}
+```
+
+Without `choices:` the person types free text. With it they pick, and the runtime
+guarantees the value is one of the listed strings — the program said what may
+come back, so nothing else can.
+
+The effect is `human`, and like every effect it has to be granted. That grant is
+worth more than it looks: **whether an artifact can run unattended becomes a
+question you answer by reading its policy**, instead of by starting it and
+finding out. CI denies `human`, and an artifact needing a person fails at the
+gate naming the question rather than waiting forever on a pipe.
+
+A question is recorded like a model call and replays like one, so an agent with a
+person in it still has an offline test:
+
+```bash
+ingot run . --record tests/cassettes/framing.json --approvals stdin --events json
+ingot run . --provider replay --cassette tests/cassettes/framing.json
+```
+
+The replay asks nobody. What it will not do is reuse an answer to a question that
+changed — a different question, or different choices, is a digest mismatch and a
+loud refusal, the same as an edited prompt. Re-recording that one means asking
+somebody again, which is why `consult` is worth being sparing with.
+
+`--yes` cannot answer a question. It approves gates, and there is no safe default
+for *which framing should the report take*.
+
+`consult` is refused inside `parallel map` and inside a verifier body. Both rules
+already existed, for `emit` and for `ask`, and the reasons transfer unchanged.
+See [Language 0.3](../../specs/language/v0.3.md) and
+[RFC-0020](../../rfcs/0020-a-person-in-the-loop.md).

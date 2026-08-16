@@ -1,5 +1,5 @@
 {
-  "irVersion": "0.2",
+  "irVersion": "0.3",
   "language": "0.1",
   "agent": "heptapus.examples.digest.RepoDigest",
   "doc": "Summarises a directory into one markdown digest and files it.\n\nThe example that runs end to end with real tools: every tool here is served\nby `ingot-mcp-fs`, the sandboxed MCP server this repository ships, so no\nthird-party server and no credential are involved.\n\nExercises: MCP tools over stdio, a `file` result, working memory, and a\nfilesystem policy the runtime re-checks against the artifact.",

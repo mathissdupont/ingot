@@ -96,6 +96,25 @@ pub enum RunEvent {
         node: String,
         allowed: bool,
     },
+    /// A question has been put to a person and the run is waiting.
+    ///
+    /// Emitted *before* the channel is asked, so a surface watching the stream
+    /// sees the question while there is still something to answer. A run
+    /// stopped at one must not look like a run that is working.
+    ConsultationAsked {
+        node: String,
+        /// Which consultation this is within the run, counting from zero — the
+        /// same number a cassette matches by.
+        index: usize,
+        question: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        choices: Vec<String>,
+    },
+    ConsultationAnswered {
+        node: String,
+        index: usize,
+        answer: String,
+    },
     StateWritten {
         node: String,
         field: String,
@@ -175,6 +194,21 @@ impl RunEvent {
                     "        approval needed for [{}]: {reason}",
                     effects.join(", ")
                 )
+            }
+            RunEvent::ConsultationAsked {
+                question, choices, ..
+            } => {
+                if choices.is_empty() {
+                    format!("        asking a person: {question}")
+                } else {
+                    format!(
+                        "        asking a person: {question} [{}]",
+                        choices.join(" | ")
+                    )
+                }
+            }
+            RunEvent::ConsultationAnswered { answer, .. } => {
+                format!("        a person answered: {answer}")
             }
             RunEvent::ApprovalDecided { allowed, .. } => {
                 format!(

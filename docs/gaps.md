@@ -53,7 +53,6 @@ to you*.
 | [GAP-038](#gap-038) | No backend outside this repository has ever run the suite | Unproven | somebody else's backend, and what they hit |
 | [GAP-039](#gap-039) | No agent outside this repository is known to run | Unproven | a program somebody depends on, and its friction |
 | [GAP-040](#gap-040) | A model call's timeout is fixed at 180 seconds | Absent | a place to say otherwise, and a decision about where it belongs |
-| [GAP-042](#gap-042) | An agent cannot put a question to a person | Absent | a construct for it, and a decision about what it does to a replay |
 
 ---
 
@@ -518,51 +517,6 @@ argument looks right, and it is why this is an entry rather than a patch.
 *Recorded in.* [`crates/ingot-runtime/src/http.rs`](../crates/ingot-runtime/src/http.rs).
 
 
-### GAP-042
-
-**An agent cannot put a question to a person and use the answer.**
-
-There is one interaction point between a run and a human, and it is not one the
-program writes: the compiler inserts an approval node in front of an effect the
-policy gates. It carries the effect and the tool, it answers yes or no, and its
-answer is not a value the flow can read. An agent that wants to ask *which of
-these three framings should the report take* has nowhere to put the question.
-
-*What this rules out.* Everything conversational. An Ingot agent is
-`Agent(inputs) -> outputs`: the inputs are fixed before the first node runs and
-nothing arrives after. A chat is a different shape, and calling it a missing
-feature understates it — it is a second program model beside the one the
-language has.
-
-*Why it is not simply added.* A run is reproducible because everything that
-enters it is either an input, a cassette or a declared store, and a replay
-reproduces the event sequence byte for byte. An answer typed by a person
-mid-run is none of those. It would have to be recorded like a completion and
-replayed like one, which is probably right and is exactly the design work: what
-a `--record` writes, what a replay does when the recorded answer no longer
-matches the question, and whether a run that stopped for a person is a
-[resumption](../rfcs/0018-state-that-outlives-a-run.md) rather than a pause.
-
-*The smaller half first, and it is built.* [GAP-041](#gap-041) was a channel
-with no vocabulary above it; this is the vocabulary. They shared a design, which
-is why that half waited for RFC-0020 rather than being built twice — and having
-it does not shorten this one. The channel carries a yes or a no on an effect the
-compiler gated. A question a program wrote, whose answer is a value the flow
-reads, still needs `consult`, the `human` effect, a third cassette list and an
-IR node. What is settled is where the answer travels.
-
-*Designed in.* [RFC-0020](../rfcs/0020-a-person-in-the-loop.md). It answers the
-three questions above in one move — a person is a third source of answers,
-recorded and replayed like the model and the tools — so `--record` writes a
-`consultations` list, a changed question is the digest mismatch every other list
-already gives, and a run stopped for a person is a **pause** rather than a
-resumption, because [RFC-0018](../rfcs/0018-state-that-outlives-a-run.md) refused
-the arbitrary-depth snapshot a resumption would need and `checkpoint` already
-covers the case that outlives a sitting. Draft, and unbuilt — this entry stays
-open until it runs.
-
-*Recorded in.* [Language 0.2](../specs/language/v0.2.md),
-[RFC-0015](../rfcs/0015-ingot-studio.md).
 ## Unproven
 
 A claim the project makes that nothing yet demonstrates. Not a limitation — a
@@ -688,6 +642,60 @@ by a timer.
 *Recorded in.* [RFC-0015](../rfcs/0015-ingot-studio.md),
 [RFC-0020](../rfcs/0020-a-person-in-the-loop.md),
 [`crates/ingot-cli/src/launch.rs`](../crates/ingot-cli/src/launch.rs).
+
+### GAP-042
+
+**An agent could not put a question to a person and use the answer.**
+*Closed 2026-08-16.*
+
+There was one interaction point between a run and a human, and it was not one the
+program wrote: the compiler inserted an approval node in front of an effect the
+policy gated. It carried the effect and the tool, it answered yes or no, and its
+answer was not a value the flow could read. An agent that wanted to ask *which of
+these three framings should the report take* had nowhere to put the question.
+
+*What closed it.* `consult`, in language 0.3 — an expression beside `ask` and
+`call` whose value is a `string` a person typed or picked. Its effect is `human`,
+default-denied like any other, and that effect is the part that earns most:
+**whether an artifact can run unattended is now a question you answer by reading
+its policy** rather than by starting it and finding out.
+
+*The move that made it reproducible.* A person is a **third source of answers**,
+recorded and replayed exactly like the other two. A cassette already held two
+independent ordered lists matched by position and then by a digest of everything
+that determined the answer; a question has that shape, so it is a third list,
+`consultations`, and the matching machinery learned nothing new. Cassette version
+0.3.
+
+That answered the three questions this entry asked. `--record` writes a
+`consultations` list. A changed question is the digest mismatch the other two
+lists already give. And a run stopped for a person is a **pause** rather than a
+resumption, because [RFC-0018](../rfcs/0018-state-that-outlives-a-run.md) refused
+the arbitrary-depth snapshot a resumption would need, and a `checkpoint` before
+the question already covers the case that outlives a sitting.
+
+*What did not change, and was the worry.* An Ingot agent is still
+`Agent(inputs) -> outputs`. A consultation is a node in a flow fixed before the
+run started, not a turn in a dialogue, and nothing branches on having been asked.
+This entry was right that a chat is a second program model; it is still not one
+this language has, and `consult` did not smuggle one in.
+
+*The asymmetry worth knowing.* `--yes` approves a gate and **fails** at a
+question. There is no safe side to *which framing should the report take*, and
+inventing one would put a value nobody chose into the flow and into the
+recording. In CI a consultation replays, which is the bargain already struck for
+the model and for the tools.
+
+*The cost, stated.* Re-recording a cassette that holds a consultation means
+**asking somebody again**, and no flag makes that cheaper. It is why `consult` is
+an expression with an effect that must be granted rather than a convenience, and
+why the choice form — stable across edits that a prose question is not — is the
+one shown first. Partial re-record is deliberately left open: the right shape is
+unclear, and guessing would put a second matching rule beside the one that works.
+
+*Recorded in.* [Language 0.3](../specs/language/v0.3.md),
+[RFC-0020](../rfcs/0020-a-person-in-the-loop.md),
+[`crates/ingot-runtime/src/cassette.rs`](../crates/ingot-runtime/src/cassette.rs).
 
 ### GAP-007
 

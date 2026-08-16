@@ -15,7 +15,7 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc::{sync_channel, Receiver, RecvTimeoutError};
 use std::time::Duration;
 
-use ingot_runtime::{ApprovalMode, ApprovalRequest, ModelProvider, RunEvent};
+use ingot_runtime::{ApprovalRequest, HumanChannel, ModelProvider, RunEvent};
 
 use crate::protocol::{
     version_mismatch, ApprovalCall, ApprovalReply, Failed, Finished, GuestLine, Hello, HostLine,
@@ -247,7 +247,7 @@ pub struct Supervisor<'a> {
     pub provider: &'a mut dyn ModelProvider,
     /// How gates are decided. `Ask` reaches the operator's terminal, which the
     /// guest has no access to.
-    pub approval: &'a mut ApprovalMode,
+    pub approval: &'a mut HumanChannel,
 }
 
 impl fmt::Debug for Supervisor<'_> {
@@ -435,11 +435,11 @@ fn answer(
 ///
 /// Borrowed rather than taken, so a gate reached during one call does not disarm
 /// the gates after it — the same mistake the interpreter made once already.
-fn decide(approval: &mut ApprovalMode, request: &ApprovalRequest) -> bool {
+fn decide(approval: &mut HumanChannel, request: &ApprovalRequest) -> bool {
     match approval {
-        ApprovalMode::AssumeYes => true,
-        ApprovalMode::Deny => false,
-        ApprovalMode::Ask(handler) => handler.approve(request),
+        HumanChannel::AssumeYes => true,
+        HumanChannel::Deny => false,
+        HumanChannel::Ask(handler) => handler.approve(request),
     }
 }
 
@@ -622,7 +622,7 @@ mod tests {
     fn exchange(
         guest_lines: &[String],
         provider: &mut dyn ModelProvider,
-        approval: &mut ApprovalMode,
+        approval: &mut HumanChannel,
     ) -> (Result<Outcome, HostError>, String, Vec<RunEvent>) {
         let script = guest_lines.join("\n");
         let mut written: Vec<u8> = Vec::new();
@@ -691,7 +691,7 @@ mod tests {
         let _hold = sender;
 
         let mut provider = Fixed("unused");
-        let mut approval = ApprovalMode::Deny;
+        let mut approval = HumanChannel::Deny;
         let mut written: Vec<u8> = Vec::new();
         let mut supervisor = Supervisor {
             config: config(),
@@ -736,7 +736,7 @@ mod tests {
         let _hold = sender;
 
         let mut provider = Fixed("unused");
-        let mut approval = ApprovalMode::Deny;
+        let mut approval = HumanChannel::Deny;
         let mut written: Vec<u8> = Vec::new();
         let mut supervisor = Supervisor {
             config: config(),
@@ -803,7 +803,7 @@ mod tests {
         let (outcome, written, _) = exchange(
             &[hello(1), model_call(2), finished()],
             &mut Fixed("# Brief"),
-            &mut ApprovalMode::Deny,
+            &mut HumanChannel::Deny,
         );
 
         let Ok(Outcome::Finished(report)) = outcome else {
@@ -837,7 +837,7 @@ mod tests {
         let (_, written, _) = exchange(
             &[hello(1), model_call(2), finished()],
             &mut Fixed("answer"),
-            &mut ApprovalMode::Deny,
+            &mut HumanChannel::Deny,
         );
         for leak in ["api", "key", "http", "Authorization"] {
             assert!(
@@ -854,7 +854,7 @@ mod tests {
         let (_, written, _) = exchange(
             &[hello(1), model_call(2), finished()],
             &mut Failing,
-            &mut ApprovalMode::Deny,
+            &mut HumanChannel::Deny,
         );
         assert!(written.contains("truncated"), "{written}");
         assert!(written.contains("512"), "{written}");
@@ -870,7 +870,7 @@ mod tests {
         let (_, written, events) = exchange(
             &[hello(1), event, finished()],
             &mut Fixed("x"),
-            &mut ApprovalMode::Deny,
+            &mut HumanChannel::Deny,
         );
         assert_eq!(events.len(), 1);
         assert!(matches!(events[0], RunEvent::NodeStarted { .. }));
@@ -888,10 +888,10 @@ mod tests {
         .unwrap();
 
         for (mut mode, expected) in [
-            (ApprovalMode::AssumeYes, true),
-            (ApprovalMode::Deny, false),
+            (HumanChannel::AssumeYes, true),
+            (HumanChannel::Deny, false),
             (
-                ApprovalMode::Ask(Box::new(ScriptedApprovals::new(vec![true]))),
+                HumanChannel::Ask(Box::new(ScriptedApprovals::new(vec![true]))),
                 true,
             ),
         ] {
@@ -919,7 +919,7 @@ mod tests {
             ))
             .unwrap()
         };
-        let mut mode = ApprovalMode::Ask(Box::new(ScriptedApprovals::new(vec![true, true])));
+        let mut mode = HumanChannel::Ask(Box::new(ScriptedApprovals::new(vec![true, true])));
         let (_, written, _) = exchange(
             &[hello(1), gate(2), gate(3), finished()],
             &mut Fixed("x"),
@@ -937,7 +937,7 @@ mod tests {
         let (_, written, _) = exchange(
             &[model_call(1), finished()],
             &mut Fixed("x"),
-            &mut ApprovalMode::Deny,
+            &mut HumanChannel::Deny,
         );
         assert!(written.contains("before `config`"), "{written}");
     }
@@ -947,7 +947,7 @@ mod tests {
         let (_, written, _) = exchange(
             &[hello(1), hello(2), finished()],
             &mut Fixed("x"),
-            &mut ApprovalMode::Deny,
+            &mut HumanChannel::Deny,
         );
         assert!(written.contains("twice"), "{written}");
     }
@@ -963,7 +963,7 @@ mod tests {
         let (_, written, _) = exchange(
             &[wrong, finished()],
             &mut Fixed("x"),
-            &mut ApprovalMode::Deny,
+            &mut HumanChannel::Deny,
         );
         assert!(
             written.contains(&(PROTOCOL_VERSION + 5).to_string()),
@@ -978,7 +978,7 @@ mod tests {
         let (outcome, written, _) = exchange(
             &[hello(1), odd, finished()],
             &mut Fixed("x"),
-            &mut ApprovalMode::Deny,
+            &mut HumanChannel::Deny,
         );
         assert!(written.contains("frobnicate"), "{written}");
         assert!(
@@ -989,7 +989,7 @@ mod tests {
 
     #[test]
     fn a_run_that_ends_without_an_outcome_is_a_failure_not_an_empty_success() {
-        let (outcome, _, _) = exchange(&[hello(1)], &mut Fixed("x"), &mut ApprovalMode::Deny);
+        let (outcome, _, _) = exchange(&[hello(1)], &mut Fixed("x"), &mut HumanChannel::Deny);
         let Err(HostError::NoOutcome(_)) = outcome else {
             panic!("expected NoOutcome, got {outcome:?}");
         };
@@ -1005,7 +1005,7 @@ mod tests {
         let (outcome, _, _) = exchange(
             &[hello(1), failed],
             &mut Fixed("x"),
-            &mut ApprovalMode::Deny,
+            &mut HumanChannel::Deny,
         );
         let Ok(Outcome::Failed(failure)) = outcome else {
             panic!("expected a failed run, got {outcome:?}");
@@ -1019,7 +1019,7 @@ mod tests {
         let (outcome, _, _) = exchange(
             &["{not json".to_string()],
             &mut Fixed("x"),
-            &mut ApprovalMode::Deny,
+            &mut HumanChannel::Deny,
         );
         let Err(HostError::Protocol(message)) = outcome else {
             panic!("expected a protocol error, got {outcome:?}");
@@ -1030,7 +1030,7 @@ mod tests {
     #[test]
     fn a_command_that_cannot_start_says_what_it_tried_to_run() {
         let mut command = Command::new("ingot-no-such-program-exists");
-        let mut approval = ApprovalMode::Deny;
+        let mut approval = HumanChannel::Deny;
         let mut provider = Fixed("x");
         let mut supervisor = Supervisor {
             config: config(),

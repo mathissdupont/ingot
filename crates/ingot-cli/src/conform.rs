@@ -468,7 +468,7 @@ pub fn read_request(path: &Path) -> Result<Request> {
 /// Lines, write the artifacts, and exit non-zero if the run failed.
 pub fn adapt(path: &Path) -> Result<u8> {
     use ingot_ir::AgentIr;
-    use ingot_runtime::{run as run_agent, ApprovalMode, Cassette, RunOptions};
+    use ingot_runtime::{run as run_agent, Cassette, HumanChannel, RunOptions};
 
     let request = read_request(path)?;
 
@@ -500,7 +500,7 @@ pub fn adapt(path: &Path) -> Result<u8> {
             inputs: request.inputs.clone(),
             // A conformance run is unattended, and an approval nobody can grant
             // is a denial. Any case that needs one says so in its expectation.
-            approval: ApprovalMode::Deny,
+            approval: HumanChannel::Deny,
             max_steps: 1_000,
             pricing: Default::default(),
         },

@@ -26,7 +26,7 @@ pub mod node;
 pub use node::{Node, NodeKind, RefScope, SourceSpan, TemplatePart, Value};
 
 /// Version of the IR schema this crate emits and understands.
-pub const IR_VERSION: &str = "0.2";
+pub const IR_VERSION: &str = "0.3";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

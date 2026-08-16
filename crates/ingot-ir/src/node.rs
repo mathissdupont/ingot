@@ -31,6 +31,14 @@ pub enum NodeKind {
     /// Human approval checkpoint, inserted by the compiler from policy.
     #[serde(rename = "approval")]
     Approval,
+    /// A question put to a person, whose answer the flow reads.
+    ///
+    /// Distinct from [`NodeKind::Approval`], which the compiler inserts and
+    /// which answers yes or no about an effect. This one the program writes, and
+    /// its answer is a value. See
+    /// [RFC-0020](../../../rfcs/0020-a-person-in-the-loop.md).
+    #[serde(rename = "consult")]
+    Consult,
     /// Deterministic validation of a value.
     #[serde(rename = "verify")]
     Verify,
@@ -58,6 +66,7 @@ impl NodeKind {
             NodeKind::Parallel => "parallel",
             NodeKind::Loop => "loop",
             NodeKind::Approval => "approval",
+            NodeKind::Consult => "consult",
             NodeKind::Verify => "verify",
             NodeKind::StateRead => "state.read",
             NodeKind::StateWrite => "state.write",
@@ -70,7 +79,7 @@ impl NodeKind {
     pub fn consumes_step(self) -> bool {
         matches!(
             self,
-            NodeKind::LlmCall | NodeKind::ToolCall | NodeKind::AgentCall
+            NodeKind::LlmCall | NodeKind::ToolCall | NodeKind::AgentCall | NodeKind::Consult
         )
     }
 }

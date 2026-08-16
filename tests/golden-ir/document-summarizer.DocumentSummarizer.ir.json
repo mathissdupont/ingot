@@ -1,5 +1,5 @@
 {
-  "irVersion": "0.2",
+  "irVersion": "0.3",
   "language": "0.1",
   "agent": "heptapus.examples.summarizer.DocumentSummarizer",
   "doc": "The smallest end-to-end agent: typed input, one model call, one artifact.\n\nExercises: inputs, prompt interpolation, budgets, a default-deny policy and\nartifact emission. No tools, so it needs no capability grants at all.",

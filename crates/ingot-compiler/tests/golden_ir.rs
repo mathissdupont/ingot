@@ -231,6 +231,7 @@ const ALL_NODE_KINDS: &[NodeKind] = &[
     NodeKind::Parallel,
     NodeKind::Loop,
     NodeKind::Approval,
+    NodeKind::Consult,
     NodeKind::Verify,
     NodeKind::StateRead,
     NodeKind::StateWrite,

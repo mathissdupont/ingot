@@ -493,7 +493,7 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    /// Build the node for an `ask`, `call` or `parallel map` expression.
+    /// Build the node for an `ask`, `consult`, `call` or `parallel map` expression.
     fn lower_call_like(
         &mut self,
         level: &mut Vec<usize>,
@@ -507,6 +507,31 @@ impl<'a> Lowerer<'a> {
                 node.binding = binding;
                 node.response_type = Some(result.text());
                 node.effects = vec!["model_access".to_string()];
+
+                let mut named: Vec<Argument> = Vec::new();
+                for arg in args {
+                    let lowered = self.lower_value(level, &arg.value);
+                    match &arg.name {
+                        None => node.prompt = Some(lowered),
+                        Some(name) => named.push(Argument {
+                            name: name.text.clone(),
+                            value: lowered,
+                        }),
+                    }
+                }
+                named.sort_by(|a, b| a.name.cmp(&b.name));
+                node.args = named;
+                Some(node)
+            }
+            Expr::Consult { args, span } => {
+                let mut node = Node::new(String::new(), NodeKind::Consult);
+                node.source_span = Some(self.source_span(*span));
+                node.binding = binding;
+                // A person types text or picks from a list, so the answer is
+                // always a string. Recorded on the node all the same, because a
+                // runner reads the type from the artifact rather than knowing it.
+                node.response_type = Some("string".to_string());
+                node.effects = vec!["human".to_string()];
 
                 let mut named: Vec<Argument> = Vec::new();
                 for arg in args {
@@ -666,7 +691,10 @@ impl<'a> Lowerer<'a> {
             },
             Expr::Error { .. } => Value::Unknown,
             // Handled above by `produces_node`.
-            Expr::Ask { .. } | Expr::Call { .. } | Expr::ParallelMap { .. } => Value::Unknown,
+            Expr::Ask { .. }
+            | Expr::Consult { .. }
+            | Expr::Call { .. }
+            | Expr::ParallelMap { .. } => Value::Unknown,
         }
     }
 
@@ -957,6 +985,6 @@ fn ref_scope(scope: StateScope) -> Option<RefScope> {
 fn produces_node(expr: &Expr) -> bool {
     matches!(
         expr,
-        Expr::Ask { .. } | Expr::Call { .. } | Expr::ParallelMap { .. }
+        Expr::Ask { .. } | Expr::Consult { .. } | Expr::Call { .. } | Expr::ParallelMap { .. }
     )
 }

@@ -20,6 +20,8 @@ pub enum PolicySubject {
     ExternalWrite,
     /// Written `secrets` in source, because the rule reads better in the plural.
     Secrets,
+    /// Whether this agent may put a question to a person.
+    Human,
 }
 
 impl PolicySubject {
@@ -30,6 +32,7 @@ impl PolicySubject {
             "filesystem_write" => PolicySubject::FilesystemWrite,
             "external_write" => PolicySubject::ExternalWrite,
             "secrets" => PolicySubject::Secrets,
+            "human" => PolicySubject::Human,
             _ => return None,
         };
         Some(subject)
@@ -42,6 +45,7 @@ impl PolicySubject {
             PolicySubject::FilesystemWrite => "filesystem_write",
             PolicySubject::ExternalWrite => "external_write",
             PolicySubject::Secrets => "secrets",
+            PolicySubject::Human => "human",
         }
     }
 
@@ -52,6 +56,7 @@ impl PolicySubject {
             PolicySubject::FilesystemWrite => Effect::FilesystemWrite,
             PolicySubject::ExternalWrite => Effect::ExternalWrite,
             PolicySubject::Secrets => Effect::SecretAccess,
+            PolicySubject::Human => Effect::Human,
         }
     }
 
@@ -63,6 +68,7 @@ impl PolicySubject {
             Effect::FilesystemWrite => PolicySubject::FilesystemWrite,
             Effect::ExternalWrite => PolicySubject::ExternalWrite,
             Effect::SecretAccess => PolicySubject::Secrets,
+            Effect::Human => PolicySubject::Human,
             Effect::ModelAccess => return None,
         };
         Some(subject)
@@ -84,13 +90,25 @@ impl PolicySubject {
         }
     }
 
-    pub fn all() -> [PolicySubject; 5] {
+    /// Whether `require approval` means anything for this subject.
+    ///
+    /// False for `human`, and the reason is not a rule anybody has to remember:
+    /// an approval gate in front of a question is a question in front of a
+    /// question, and the person answering the first is the person who would
+    /// answer the second. See
+    /// [RFC-0020](../../../rfcs/0020-a-person-in-the-loop.md).
+    pub fn accepts_approval(self) -> bool {
+        !matches!(self, PolicySubject::Human)
+    }
+
+    pub fn all() -> [PolicySubject; 6] {
         [
             PolicySubject::Network,
             PolicySubject::FilesystemRead,
             PolicySubject::FilesystemWrite,
             PolicySubject::ExternalWrite,
             PolicySubject::Secrets,
+            PolicySubject::Human,
         ]
     }
 }

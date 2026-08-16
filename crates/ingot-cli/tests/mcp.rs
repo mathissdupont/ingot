@@ -639,7 +639,9 @@ fn a_tool_using_agent_can_be_tested_offline_after_one_recording() {
     let written: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&cassette).expect("a cassette"))
             .expect("canonical json");
-    assert_eq!(written["cassetteVersion"], "0.2");
+    // 0.3 adds `consultations`, so this recording — which has none — is the
+    // same document 0.2 wrote with one more empty list omitted.
+    assert_eq!(written["cassetteVersion"], "0.3");
     let calls = written["toolCalls"]
         .as_array()
         .expect("recorded tool calls");

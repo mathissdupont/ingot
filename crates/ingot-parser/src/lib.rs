@@ -15,7 +15,7 @@ use ingot_syntax::*;
 mod strings;
 
 /// Language versions this compiler implements.
-pub const SUPPORTED_LANGUAGE_VERSIONS: &[(u32, u32)] = &[(0, 1), (0, 2)];
+pub const SUPPORTED_LANGUAGE_VERSIONS: &[(u32, u32)] = &[(0, 1), (0, 2), (0, 3)];
 
 #[derive(Debug)]
 pub struct ParseResult {
@@ -385,6 +385,21 @@ impl<'a> Parser<'a> {
                          reports it as `notPerformed`",
                     )
                     .with_help("change the file header to `language 0.2`"),
+                );
+            }
+        }
+        if !language_supports_v0_3(program.language) {
+            if let Some(span) = first_consult_span(&program) {
+                self.error(
+                    Diagnostic::error(
+                        codes::UNSUPPORTED_LANGUAGE_VERSION,
+                        "`consult` requires language 0.3 or newer",
+                    )
+                    .with_primary(span, "not available in this language version")
+                    .with_note(
+                        "`consult` is a keyword from 0.3 onwards, so a program that used it as                          an ordinary name still compiles under the version it declares",
+                    )
+                    .with_help("change the file header to `language 0.3`"),
                 );
             }
         }
@@ -1683,6 +1698,7 @@ impl<'a> Parser<'a> {
             TokenKind::Keyword(keyword) => matches!(
                 keyword,
                 Keyword::Ask
+                    | Keyword::Consult
                     | Keyword::Call
                     | Keyword::Parallel
                     | Keyword::State
@@ -1852,6 +1868,14 @@ impl<'a> Parser<'a> {
                 let args = self.parse_args();
                 Expr::Ask {
                     result,
+                    args,
+                    span: start.merge(self.previous_span()),
+                }
+            }
+            TokenKind::Keyword(Keyword::Consult) => {
+                self.bump();
+                let args = self.parse_args();
+                Expr::Consult {
                     args,
                     span: start.merge(self.previous_span()),
                 }
@@ -2028,9 +2052,21 @@ fn starts_statement(keyword: Keyword) -> bool {
             | Keyword::Loop
             | Keyword::Call
             | Keyword::Ask
+            | Keyword::Consult
             | Keyword::Parallel
             | Keyword::State
             | Keyword::Memory
+    )
+}
+
+fn language_supports_v0_3(version: Option<LanguageVersion>) -> bool {
+    matches!(
+        version,
+        Some(LanguageVersion {
+            major: 0,
+            minor: 3..,
+            ..
+        })
     )
 }
 
@@ -2056,6 +2092,60 @@ fn first_persistent_span(program: &Program) -> Option<Span> {
     })
 }
 
+/// The first `consult` anywhere in the program, if there is one.
+///
+/// Walks statements rather than types, because a `consult` can be nested inside
+/// a branch, a loop or a fan-out body — and a gate that only looked at the top
+/// level would let the deeper ones through under a version that does not have
+/// the keyword.
+fn first_consult_span(program: &Program) -> Option<Span> {
+    fn from_expr(expr: &Expr) -> Option<Span> {
+        match expr {
+            Expr::Consult { span, .. } => Some(*span),
+            Expr::ParallelMap { source, body, .. } => {
+                from_expr(source).or_else(|| body.iter().find_map(from_stmt))
+            }
+            Expr::Ask { args, .. } | Expr::Call { args, .. } | Expr::FunctionCall { args, .. } => {
+                args.iter().find_map(|arg| from_expr(&arg.value))
+            }
+            Expr::Builtin { args, .. } => args.iter().find_map(from_expr),
+            Expr::Unary { operand, .. } => from_expr(operand),
+            Expr::Binary { lhs, rhs, .. } => from_expr(lhs).or_else(|| from_expr(rhs)),
+            Expr::List { items, .. } => items.iter().find_map(from_expr),
+            _ => None,
+        }
+    }
+
+    fn from_stmt(stmt: &Stmt) -> Option<Span> {
+        match stmt {
+            Stmt::Bind { value, .. } | Stmt::Expr { value, .. } => from_expr(value),
+            Stmt::StateWrite { value, .. } => from_expr(value),
+            Stmt::Emit { value, .. } => from_expr(value),
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+                ..
+            } => from_expr(condition)
+                .or_else(|| then_branch.iter().find_map(from_stmt))
+                .or_else(|| {
+                    else_branch
+                        .as_ref()
+                        .and_then(|body| body.iter().find_map(from_stmt))
+                }),
+            Stmt::Loop { body, .. } => body.iter().find_map(from_stmt),
+            _ => None,
+        }
+    }
+
+    program.agents.iter().find_map(|agent| {
+        agent
+            .flow
+            .as_ref()
+            .and_then(|flow| flow.statements.iter().find_map(from_stmt))
+    })
+}
+
 fn first_v0_2_type_span(program: &Program) -> Option<Span> {
     fn from_type(ty: &TypeExpr) -> Option<Span> {
         match ty {
@@ -2074,7 +2164,9 @@ fn first_v0_2_type_span(program: &Program) -> Option<Span> {
             Expr::Ask { result, args, .. } => {
                 from_type(result).or_else(|| args.iter().find_map(|arg| from_expr(&arg.value)))
             }
-            Expr::Call { args, .. } => args.iter().find_map(|arg| from_expr(&arg.value)),
+            Expr::Call { args, .. } | Expr::Consult { args, .. } => {
+                args.iter().find_map(|arg| from_expr(&arg.value))
+            }
             Expr::ParallelMap { source, body, .. } => {
                 from_expr(source).or_else(|| from_statements(body))
             }

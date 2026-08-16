@@ -811,6 +811,7 @@ fn add_expr_symbols(map: &SourceMap, expr: &Expr, symbols: &mut Vec<EditorSymbol
             add_type_reference(map, result, symbols);
             add_arg_symbols(map, args, symbols);
         }
+        Expr::Consult { args, .. } => add_arg_symbols(map, args, symbols),
         Expr::Call { callee, args, span } => {
             symbols.push(symbol_from_dotted(
                 map,

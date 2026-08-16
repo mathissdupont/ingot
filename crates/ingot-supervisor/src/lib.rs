@@ -25,7 +25,7 @@
 //!
 //! The interpreter does not know it is contained, and must not learn.
 //! [`guest::GuestProvider`] is an ordinary [`ingot_runtime::ModelProvider`]; the
-//! approval handler is an ordinary [`ingot_runtime::ApprovalHandler`]. Nothing in
+//! approval handler is an ordinary [`ingot_runtime::Interlocutor`]. Nothing in
 //! `ingot-runtime` changed to make a contained run possible, which is the test of
 //! whether the boundary is really a deployment concern — and a backend that
 //! contains runs some other way replaces this crate and nothing else, the same

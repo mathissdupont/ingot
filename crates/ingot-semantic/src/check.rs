@@ -1294,8 +1294,26 @@ impl<'a> Checker<'a> {
                         qualifier.as_ref().map(|q| q.text.clone()),
                     )
                 }
-                PolicyAction::RequireApproval { .. } => {
-                    (PolicyDecision::RequireApproval, Vec::new(), None)
+                PolicyAction::RequireApproval { span } => {
+                    // An approval gate in front of a question is a question in
+                    // front of a question, and the person answering the first is
+                    // the person who would answer the second.
+                    if !subject.accepts_approval() {
+                        self.error(
+                            Diagnostic::error(
+                                codes::INAPPLICABLE_POLICY_ACTION,
+                                format!("`{subject}` cannot require approval"),
+                            )
+                            .with_primary(*span, "not an action this subject accepts")
+                            .with_note(
+                                "an approval gate in front of a question is a question in front                                  of a question, answered by the same person",
+                            )
+                            .with_help(format!("write `{subject} allow` or `{subject} deny`")),
+                        );
+                        (PolicyDecision::Deny, Vec::new(), None)
+                    } else {
+                        (PolicyDecision::RequireApproval, Vec::new(), None)
+                    }
                 }
             };
 
@@ -1859,6 +1877,32 @@ impl<'a> Checker<'a> {
                 self.check_ask_args(ctx, args, *span, policy);
                 (ty, effects)
             }
+            Expr::Consult { args, span } => {
+                // Refused for the reason `emit`, `checkpoint` and a state write
+                // are refused: iterations run concurrently. Questions to a
+                // person are worse than order-dependent — the order is
+                // *observable to the person*, who would see several arrive at
+                // once with no way to know which branch each belongs to.
+                if ctx.parallel_depth > 0 {
+                    self.error(
+                        Diagnostic::error(
+                            codes::INVALID_IN_PARALLEL,
+                            "`consult` inside `parallel map` is not allowed",
+                        )
+                        .with_primary(*span, "iterations run concurrently")
+                        .with_help(
+                            "ask once before the map, or collect what it returns and ask afterwards",
+                        ),
+                    );
+                }
+                self.check_consult_args(ctx, args, *span, policy);
+                let effects: EffectSet = [Effect::Human].into_iter().collect();
+                // Default-deny, like every other effect. This is the whole
+                // reason `human` is one: *can this artifact run unattended?*
+                // becomes a question answered by reading the policy.
+                self.check_effects_against_policy(&effects, "consult", *span, policy);
+                (Ty::String, effects)
+            }
             Expr::Call { callee, args, span } => self.infer_call(ctx, callee, args, *span, policy),
             Expr::ParallelMap {
                 source,
@@ -2337,6 +2381,159 @@ impl<'a> Checker<'a> {
                     .with_primary(path.span, format!("`{}` is `{ty}`", path.text()))
                     .with_help(
                         "pass binary values as tool arguments instead of interpolating them",
+                    ),
+                );
+            }
+        }
+    }
+
+    /// Check the arguments of a `consult`.
+    ///
+    /// One positional argument, the question. Two named ones: `context`, which
+    /// works exactly as it does on `ask`, and `choices`, which is what a person
+    /// picks from.
+    ///
+    /// `context` is not decoration. A person's answer can depend on something
+    /// they saw earlier, and if that dependency is real while the recording's
+    /// digest does not cover it, two runs deserving different answers would
+    /// replay the first into the second. So the rule `ask` already keeps
+    /// applies: whatever determined the answer is an argument, and every
+    /// argument is in the digest.
+    fn check_consult_args(
+        &mut self,
+        ctx: &mut FlowCtx,
+        args: &[Arg],
+        span: Span,
+        policy: &BTreeMap<PolicySubject, PolicyRuleInfo>,
+    ) {
+        let mut question_seen = false;
+        let mut named_seen: HashMap<String, Span> = HashMap::new();
+
+        for arg in args {
+            let arg_ty = self.check_expr(ctx, &arg.value, policy);
+            match &arg.name {
+                None => {
+                    if question_seen {
+                        self.error(
+                            Diagnostic::error(
+                                codes::ARGUMENT_COUNT_MISMATCH,
+                                "`consult` takes exactly one positional argument, the question",
+                            )
+                            .with_primary(arg.span, "unexpected extra positional argument")
+                            .with_help(
+                                "pass what the person needs to see as `context:`, and what they                                  may answer as `choices:`",
+                            ),
+                        );
+                        continue;
+                    }
+                    question_seen = true;
+                    if !arg_ty.is_assignable_to(&Ty::String) {
+                        self.error(
+                            Diagnostic::error(
+                                codes::TYPE_MISMATCH,
+                                format!("a question must be a `string`, found `{arg_ty}`"),
+                            )
+                            .with_primary(arg.value.span(), "expected a string"),
+                        );
+                    }
+                }
+                Some(name) => {
+                    if let Some(previous) = named_seen.get(&name.text).copied() {
+                        self.error(
+                            Diagnostic::error(
+                                codes::UNKNOWN_ARGUMENT,
+                                format!("argument `{}` is given twice", name.text),
+                            )
+                            .with_primary(name.span, "duplicate argument")
+                            .with_secondary(previous, "first given here"),
+                        );
+                        continue;
+                    }
+                    named_seen.insert(name.text.clone(), name.span);
+
+                    match name.text.as_str() {
+                        "choices" => self.check_choices(&arg.value),
+                        "context" => {
+                            if !arg_ty.is_renderable() && !arg_ty.is_unknown() {
+                                self.error(
+                                    Diagnostic::error(
+                                        codes::TYPE_MISMATCH,
+                                        format!("`{arg_ty}` cannot be shown to a person"),
+                                    )
+                                    .with_primary(arg.value.span(), "not renderable"),
+                                );
+                            }
+                        }
+                        other => {
+                            let known = ["choices", "context"];
+                            let mut diagnostic = Diagnostic::error(
+                                codes::UNKNOWN_ARGUMENT,
+                                format!("`consult` has no argument named `{other}`"),
+                            )
+                            .with_primary(name.span, "unknown argument")
+                            .with_note(format!("named arguments: {}", known.join(", ")));
+                            if let Some(suggestion) =
+                                closest_match(other, &known.map(str::to_string))
+                            {
+                                diagnostic =
+                                    diagnostic.with_help(format!("did you mean `{suggestion}`?"));
+                            }
+                            self.error(diagnostic);
+                        }
+                    }
+                }
+            }
+        }
+
+        if !question_seen {
+            self.error(
+                Diagnostic::error(codes::MISSING_ARGUMENT, "`consult` needs a question")
+                    .with_primary(span, "no question to put to anybody")
+                    .with_help("pass the question first, e.g. `consult(\"Which framing?\")`"),
+            );
+        }
+    }
+
+    /// `choices` must be a list of string literals.
+    ///
+    /// Literals rather than values, and it is not fussiness. The possible
+    /// answers being in the source before anybody is asked is what lets a
+    /// reviewer see everything a recording could contain — so the choice form
+    /// cannot leak something that was not already committed. A computed list
+    /// would give that up while looking identical.
+    fn check_choices(&mut self, value: &Expr) {
+        let Expr::List { items, span } = value else {
+            self.error(
+                Diagnostic::error(
+                    codes::CHOICES_NOT_LITERAL,
+                    "`choices` must be a list of string literals",
+                )
+                .with_primary(value.span(), "expected a list written here")
+                .with_help("e.g. `choices: [\"technical\", \"executive\"]`"),
+            );
+            return;
+        };
+        if items.is_empty() {
+            self.error(
+                Diagnostic::error(
+                    codes::CHOICES_NOT_LITERAL,
+                    "`choices` is empty, so there is nothing a person could answer",
+                )
+                .with_primary(*span, "no choices")
+                .with_help("list the answers, or drop `choices:` to accept free text"),
+            );
+            return;
+        }
+        for item in items {
+            if !matches!(item, Expr::Str(_)) {
+                self.error(
+                    Diagnostic::error(
+                        codes::CHOICES_NOT_LITERAL,
+                        "every choice must be a string literal",
+                    )
+                    .with_primary(item.span(), "not a literal")
+                    .with_note(
+                        "the answers have to be in the source before anybody is asked, so that                          what a recording can contain is reviewable",
                     ),
                 );
             }
@@ -2872,7 +3069,7 @@ fn collect_agent_calls(
                     visit_expr(&arg.value, signatures, out);
                 }
             }
-            Expr::Ask { args, .. } => {
+            Expr::Ask { args, .. } | Expr::Consult { args, .. } => {
                 for arg in args {
                     visit_expr(&arg.value, signatures, out);
                 }
@@ -3004,9 +3201,10 @@ fn first_impure_expr(expr: &Expr, allow_helper_call: bool) -> Option<Span> {
                 Some(*span)
             }
         }
-        Expr::Ask { span, .. } | Expr::Call { span, .. } | Expr::ParallelMap { span, .. } => {
-            Some(*span)
-        }
+        Expr::Ask { span, .. }
+        | Expr::Consult { span, .. }
+        | Expr::Call { span, .. }
+        | Expr::ParallelMap { span, .. } => Some(*span),
         Expr::List { items, .. } => items
             .iter()
             .find_map(|item| first_impure_expr(item, allow_helper_call)),
@@ -3045,7 +3243,7 @@ fn definitely_emits(statements: &[Stmt], output: &str) -> bool {
 fn min_steps(statements: &[Stmt]) -> i64 {
     fn expr_steps(expr: &Expr) -> i64 {
         match expr {
-            Expr::Ask { args, .. } => {
+            Expr::Ask { args, .. } | Expr::Consult { args, .. } => {
                 1 + args.iter().map(|arg| expr_steps(&arg.value)).sum::<i64>()
             }
             Expr::Call { args, .. } => {
