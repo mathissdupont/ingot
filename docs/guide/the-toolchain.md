@@ -324,6 +324,7 @@ Those three need no configuring. **Anything else you name yourself:**
 name = "local"          # the vendor half of `model exact "local/…"`
 kind = "openai"         # the protocol it speaks, not the company
 base-url = "http://localhost:11434/v1/chat/completions"
+timeout-seconds = 900   # this one answers from a CPU, slowly
 # no api-key-env: a server on your own machine usually wants no auth
 
 [[model.provider]]
@@ -347,6 +348,59 @@ editing a single agent.
 | `openai` | anything speaking Chat Completions | the full endpoint |
 | `anthropic` | Anthropic, and gateways fronting it | the full endpoint |
 | `google` | Gemini | the API base — this protocol puts the model and the method in the path |
+
+### How long a model may take
+
+`timeout-seconds` bounds one request to that provider. Absent, it is **180
+seconds**, which is what the three built-in providers use.
+
+That number is generous for a hosted API and short for a model on your own
+machine: an 8B model answering from a CPU-resident cache takes minutes for one
+call, and a larger one on modest hardware always will. It is beside `base-url`
+because it is the same kind of statement — how long a service takes to answer is
+a property of that service.
+
+```toml
+[[model.provider]]
+name = "local"
+kind = "openai"
+base-url = "http://localhost:11434/v1/chat/completions"
+timeout-seconds = 900   # 0 waits indefinitely, as it does in `[run]`
+```
+
+When the machine is slow rather than one endpoint on it, say so once:
+
+```bash
+export INGOT_MODEL_TIMEOUT_SECONDS=900
+```
+
+That reaches the built-in providers, and it reaches a program written by
+`ingot build --target python` — which has no manifest to read, so the
+environment is the only surface it has. A `timeout-seconds` on a declaration
+beats it, because a declaration is about one endpoint and the variable is about
+a machine. Same precedence `INGOT_OPENAI_BASE_URL` already has.
+
+A value that is not a whole number of seconds is **refused**, on both backends.
+Ignoring `15m` would leave you believing you had raised a ceiling on a run where
+you had not, and the only evidence would be the timeout you were trying to
+avoid.
+
+Two more things worth knowing:
+
+- **A request that runs out of time is not retried.** A refused connection is a
+  machine that might answer if asked again; a slow endpoint asked the same
+  question is slow again, and retrying would quietly make your number mean four
+  times itself. It is the rule `[mcp] timeout-seconds` already follows.
+- **The artifact cannot state one, deliberately.** A `budget` travels with the
+  program because a step count means the same thing everywhere. A wall clock
+  does not: an artifact carrying a ceiling would finish on one machine and fail
+  on another, with nothing in the program to explain it. So it lives with the
+  deployment, beside the prices and the catalogue.
+
+To give a **built-in** provider its own wait rather than the machine's, declare
+it: a declaration takes over a built-in name, so `name = "anthropic"` with an
+`api-key-env` and a `timeout-seconds` reaches the same service on your own
+terms.
 
 ### Asking for a capability instead of a model
 

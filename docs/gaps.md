@@ -52,7 +52,6 @@ to you*.
 | [GAP-037](#gap-037) | A remote tool server cannot be used under a boundary | Refused | a channel for a tool call out of a contained run |
 | [GAP-038](#gap-038) | No backend outside this repository has ever run the suite | Unproven | somebody else's backend, and what they hit |
 | [GAP-039](#gap-039) | No agent outside this repository is known to run | Unproven | a program somebody depends on, and its friction |
-| [GAP-040](#gap-040) | A model call's timeout is fixed at 180 seconds | Absent | a place to say otherwise, and a decision about where it belongs |
 
 ---
 
@@ -479,44 +478,6 @@ deliberately, which is the case this entry exists to warn.
 
 ---
 
-
-### GAP-040
-
-**A model call's timeout is fixed at 180 seconds, and an operator cannot say
-otherwise.**
-
-[`DEFAULT_TIMEOUT`](../crates/ingot-runtime/src/http.rs) is a `const`, shared by
-all three protocols. There is no manifest field, no environment variable and no
-flag. `[mcp] timeout-seconds` governs tool servers and `run.timeout-seconds`
-governs a contained run; neither touches the model call.
-
-*Nothing here misleads.* A call that runs long fails with `provider transport
-failed: timeout: global`, which is accurate and names the thing that happened.
-This is Absent rather than Degraded because the capability does not exist, not
-because it exists and falls short.
-
-*Who it is wrong for.* 180 seconds is generous for a hosted API and short for a
-model on your own machine. An 8B model answering from a CPU-resident KV cache
-takes minutes for one call, and a larger one on modest hardware always will —
-which is the deployment [`[[model.provider]]`](../crates/ingot-runtime/src/catalogue.rs)
-exists to serve, and the one the 0.5.2 catalogue fix had just unblocked. Found
-by hitting it: the second run of a report-writing agent against a local Ollama
-server timed out at the first `llm.call` with a longer prompt than the first
-run had used.
-
-*What closing it needs.* Not much code, and one decision. The natural home is
-`[[model.provider]]`, beside `base-url` — a timeout is a fact about an endpoint
-in the same way a URL is, and the three built-in providers can keep the constant
-as their default. What has to be decided is whether the artifact may state one
-too: a `budget` bounds what a run may spend, and a wall-clock ceiling is
-arguably the same kind of statement. The argument against is that it is not
-reproducible — the same artifact would finish on one machine and fail on
-another, which is the divergence this project refuses everywhere else. That
-argument looks right, and it is why this is an entry rather than a patch.
-
-*Recorded in.* [`crates/ingot-runtime/src/http.rs`](../crates/ingot-runtime/src/http.rs).
-
-
 ## Unproven
 
 A claim the project makes that nothing yet demonstrates. Not a limitation — a
@@ -594,6 +555,93 @@ that closes this is somebody depending on one.
 When a gap closes it moves here with the release that closed it, and its section
 stays where a link can find it. Identifiers are never reused: a link to GAP-007
 must keep meaning what it meant.
+
+### GAP-040
+
+**A model call's timeout was fixed at 180 seconds, and an operator could not say
+otherwise.**
+*Closed 2026-08-16.*
+
+`DEFAULT_TIMEOUT` was a `const` shared by all three protocols, with no manifest
+field, no environment variable and no flag behind it. Generous for a hosted API
+and short for a model on your own machine — the deployment `[[model.provider]]`
+exists to serve, and the one the 0.5.2 catalogue fix had just unblocked.
+
+*What closed it.* `timeout-seconds` on a `[[model.provider]]`, beside
+`base-url`, because it is the same kind of statement: how long a service takes
+to answer is a property of that service. `0` waits indefinitely — the word
+already means that in `[run] timeout-seconds`, and one word meaning two things
+across one manifest is worse than the risk of somebody writing it by accident.
+
+*And a second place to say it, which the first draft of this closure got
+wrong.* A declaration cannot reach everywhere the wait is needed, so
+`INGOT_MODEL_TIMEOUT_SECONDS` says it for a whole machine: it answers for the
+built-in providers, and for a program written by `ingot build --target python`.
+A declaration beats it, because a declaration is about one endpoint and the
+variable is about a machine — the precedence `INGOT_OPENAI_BASE_URL` already
+has. A value that is not a whole number of seconds is refused on both backends,
+because ignoring `15m` would leave an operator believing a ceiling had been
+raised on a run where it had not.
+
+That correction is worth recording as a correction. This entry was first closed
+on the manifest field alone, reasoning that a generated Python program reads no
+manifest so no manifest field could reach it — which is true and beside the
+point. `base-url` *does* reach that program, through `INGOT_OPENAI_BASE_URL`,
+and pointing it at a local server is a supported arrangement. So the ceiling was
+not absent from the generated program by principle; it was the one piece of
+configuration that program had no way to receive at all, which is this entry's
+own sentence in a second place.
+
+*The decision this entry existed to force, made.* **An artifact may not state a
+timeout.** A `budget` travels with the program because a step count and a token
+count mean the same thing on every machine. A wall clock does not: the same
+artifact would finish here and fail there, with nothing in the program to
+explain the difference. So the ceiling lives with the deployment, beside the
+prices and the catalogue, for the reason those are there too. This entry had
+already written the argument against and called it right; building it changed
+nothing about that half.
+
+*What building it corrected, and it is the interesting half.* A stated ceiling
+was being **multiplied by four**. A timeout arrived as an ordinary transport
+failure, and transport failures are retried three times, so `timeout-seconds =
+900` would have meant an hour of waiting for a number an operator wrote to mean
+fifteen minutes. A retry is right for a refused connection — a machine that
+might answer if asked again — and wrong for an endpoint that is there and slow,
+which asked the same question is slow again. So a request that runs out of time
+is now final, which is the rule `[mcp] timeout-seconds` already followed for a
+tool call.
+
+That changes the default too: a wedged endpoint fails after 180 seconds rather
+than after roughly twelve minutes. It makes the constant's own comment — *short
+enough that a wedged connection does not hold a run open indefinitely* — true,
+which it had not been.
+
+*The other correction was smaller and structural.* The constant had to move.
+`http.rs` is behind a feature gate and a build with no HTTP support still reads,
+validates and prints manifests, so the default now lives beside the field that
+overrides it and the transport re-exports it. One number, one definition.
+
+*A bug found on the way, and it was in the generated program.* `urlopen` raises
+a **read** deadline bare — as `TimeoutError`, not wrapped in a `URLError` — and
+the prelude's `_post` caught only `HTTPError` and `URLError`. So a model call
+that ran long in a generated Python program escaped both handlers and ended it
+in a Python traceback rather than in a named failure, on the one path where the
+program's whole reason to exist is being readable. `_post_sse` was unaffected,
+because it already caught `OSError` as well. Measured rather than reasoned
+about, and now a test.
+
+*What it deliberately does not do.* A declared provider still does not reach a
+generated program — that program has no manifest, so `base-url`, `api-key-env`,
+the prices and the catalogue all stay where they are, reachable only by the
+variables the program already reads. Nothing diverges that a test could see: a
+retry is not an event, and neither is a wait.
+
+*Recorded in.* [The toolchain guide](guide/the-toolchain.md#how-long-a-model-may-take),
+[`crates/ingot-runtime/src/catalogue.rs`](../crates/ingot-runtime/src/catalogue.rs),
+[`crates/ingot-runtime/src/http.rs`](../crates/ingot-runtime/src/http.rs),
+`crates/ingot-backend-python/src/prelude.py`,
+`crates/ingot-runtime/tests/timeout_wire.rs`,
+`crates/ingot-cli/tests/prelude_timeout.rs`.
 
 ### GAP-041
 

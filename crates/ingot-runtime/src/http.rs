@@ -1,9 +1,14 @@
 //! The HTTP call every network provider makes.
 //!
 //! Shared so that "how Ingot talks to a model service" is decided once: the
-//! same timeout, the same retry rule, the same mapping from a status code to a
-//! [`ProviderError`]. A second provider that retried differently would make two
-//! artifacts behave differently for reasons the artifact never mentions.
+//! same retry rule, the same default wait, the same mapping from a status code
+//! to a [`ProviderError`]. A second provider that retried differently would
+//! make two artifacts behave differently for reasons the artifact never
+//! mentions.
+//!
+//! The wait itself is per-endpoint, because it is the one of those that is a
+//! fact about the service rather than about Ingot — see `timeout-seconds` on a
+//! [`crate::catalogue::ProviderConfig`].
 //!
 //! Compiled only when a network provider is.
 
@@ -14,19 +19,28 @@ use serde_json::Value;
 
 use crate::provider::ProviderError;
 
-/// Long enough for a slow reasoning model, short enough that a wedged
-/// connection does not hold a run open indefinitely.
-pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(180);
+/// The wait a provider gets when its declaration does not state one.
+///
+/// Defined beside the field that overrides it rather than here, because a build
+/// with no HTTP support still reads and prints manifests — and one number with
+/// two definitions is how they come to disagree.
+pub use crate::catalogue::DEFAULT_TIMEOUT;
+
 pub const DEFAULT_MAX_RETRIES: u32 = 3;
 
 /// POST a JSON body and read a JSON reply, retrying what is worth retrying.
+///
+/// `timeout` bounds each attempt, and running out of it ends the call rather
+/// than starting another one — a stated ceiling has to be the wait an operator
+/// gets, not that wait times the retry count. `None` is no bound at all, which
+/// is what `timeout-seconds = 0` asks for.
 ///
 /// `headers` carries authentication, so it never appears in an error message.
 pub fn post_json(
     url: &str,
     headers: &[(&str, &str)],
     body: &Value,
-    timeout: Duration,
+    timeout: Option<Duration>,
     max_retries: u32,
 ) -> Result<Value, ProviderError> {
     let mut attempt = 0;
@@ -35,7 +49,7 @@ pub fn post_json(
         attempt += 1;
         let mut request = ureq::post(url)
             .config()
-            .timeout_global(Some(timeout))
+            .timeout_global(timeout)
             .build()
             .header("content-type", "application/json");
         for (name, value) in headers {
@@ -69,7 +83,7 @@ pub fn post_json(
                 });
             }
             Err(error) => {
-                if attempt <= max_retries {
+                if attempt <= max_retries && !is_timeout(&error) {
                     std::thread::sleep(backoff(attempt));
                     continue;
                 }
@@ -77,6 +91,19 @@ pub fn post_json(
             }
         }
     }
+}
+
+/// Whether an attempt ran out of the time it was given.
+///
+/// **Not retried, unlike every other transport failure.** A refused connection
+/// or a reset is a machine that might answer if asked again; a request that ran
+/// out of time is an endpoint that is there and is slow, and asking it the same
+/// question again is slow again. Retrying would also multiply the ceiling by
+/// the retry count, so `timeout-seconds = 900` would mean an hour — and the
+/// number an operator writes has to be the wait they get. It is the rule
+/// `[mcp] timeout-seconds` already follows for a tool call.
+fn is_timeout(error: &ureq::Error) -> bool {
+    matches!(error, ureq::Error::Timeout(_))
 }
 
 /// POST a JSON body and read a `text/event-stream` reply, one event at a time.
@@ -94,7 +121,7 @@ pub fn post_sse(
     url: &str,
     headers: &[(&str, &str)],
     body: &Value,
-    timeout: Duration,
+    timeout: Option<Duration>,
     max_retries: u32,
     on_event: &mut dyn FnMut(&str, &Value),
 ) -> Result<(), ProviderError> {
@@ -104,7 +131,7 @@ pub fn post_sse(
         attempt += 1;
         let mut request = ureq::post(url)
             .config()
-            .timeout_global(Some(timeout))
+            .timeout_global(timeout)
             .build()
             .header("content-type", "application/json")
             .header("accept", "text/event-stream");
@@ -144,7 +171,7 @@ pub fn post_sse(
                 });
             }
             Err(error) => {
-                if attempt <= max_retries {
+                if attempt <= max_retries && !is_timeout(&error) {
                     std::thread::sleep(backoff(attempt));
                     continue;
                 }

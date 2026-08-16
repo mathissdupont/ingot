@@ -11,6 +11,7 @@
 //! name = "local"                 # the vendor half of `model exact "local/…"`
 //! kind = "openai"                # the wire protocol it speaks
 //! base-url = "http://localhost:11434/v1/chat/completions"
+//! timeout-seconds = 900          # this one answers from a CPU, slowly
 //!
 //! [[model.provider]]
 //! name = "azure"
@@ -62,8 +63,31 @@
 //! into a manifest, for the same reason there is none in `[[mcp.server]]`: a
 //! manifest is committed. A provider with no `api-key-env` sends no
 //! authentication at all, which is what a local server usually wants.
+//!
+//! # How long an endpoint may take
+//!
+//! `timeout-seconds` bounds a request to this provider, and running out of it
+//! ends the call rather than starting another one. It is here, beside
+//! `base-url`, because it is the same kind of statement: how long a service
+//! takes to answer is a property of that service, and the number that suits a
+//! hosted API is nowhere near the one that suits an 8B model answering from a
+//! CPU on the machine you are sitting at.
+//!
+//! **The artifact may not state one, and that is deliberate.** A `budget`
+//! bounds what a run may spend and travels with the program, because a step
+//! count and a token count mean the same thing everywhere. A wall clock does
+//! not: an artifact carrying `timeout-seconds` would finish on one machine and
+//! fail on another, with nothing in the program to explain the difference. So
+//! it lives with the deployment, like a price and like a catalogue entry.
+//!
+//! A machine whose models are all slow says so once, with
+//! [`TIMEOUT_ENV`]. A declaration beats it, the built-in providers take it, and
+//! a program written by `ingot build --target python` reads the same variable —
+//! that program has no manifest to read, and the ceiling was the one piece of
+//! configuration it had no way to receive at all.
 
 use std::collections::BTreeSet;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -121,6 +145,68 @@ impl ProviderKind {
     }
 }
 
+/// How long a request to a model service may take when nothing says otherwise.
+///
+/// Long enough for a slow reasoning model, short enough that a wedged
+/// connection does not hold a run open indefinitely. It is a default rather
+/// than the rule — a declaration or [`TIMEOUT_ENV`] replaces it — and it is what
+/// a hosted API was chosen for.
+pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(180);
+
+/// The variable an operator sets when the models on this machine are slow.
+///
+/// It exists because a declaration cannot reach everywhere the wait is needed.
+/// A program written by `ingot build --target python` is self-contained and
+/// reads no manifest, and the environment is the surface it already takes
+/// `INGOT_OPENAI_BASE_URL` from — so one name serves both backends, and the
+/// same machine is configured once however its agents are run.
+pub const TIMEOUT_ENV: &str = "INGOT_MODEL_TIMEOUT_SECONDS";
+
+/// The wait a provider gets: what it declared, else what the machine says, else
+/// the default.
+///
+/// A declaration wins because it is the more specific statement — the variable
+/// is a blanket answer about a machine, and a `[[model.provider]]` is about one
+/// endpoint on it. The same precedence `INGOT_OPENAI_BASE_URL` already has,
+/// which reaches the built-in provider and never a declared one.
+pub fn resolve_timeout(declared: Option<u64>) -> Result<Option<Duration>, String> {
+    let seconds = match declared {
+        Some(seconds) => Some(seconds),
+        None => timeout_from_env()?,
+    };
+    Ok(match seconds {
+        // Indefinitely, as the word already means in `[run] timeout-seconds`.
+        Some(0) => None,
+        Some(seconds) => Some(Duration::from_secs(seconds)),
+        None => Some(DEFAULT_TIMEOUT),
+    })
+}
+
+/// What [`TIMEOUT_ENV`] says, or why it says nothing usable.
+///
+/// A value that is not a number is **refused** rather than ignored. Ignoring it
+/// would leave an operator believing they had raised a ceiling on a run where
+/// they had not, and the only evidence would be the timeout they were trying to
+/// avoid.
+fn timeout_from_env() -> Result<Option<u64>, String> {
+    let Some(raw) = std::env::var_os(TIMEOUT_ENV) else {
+        return Ok(None);
+    };
+    let raw = raw.to_string_lossy();
+    let text = raw.trim();
+    // Exported-but-empty is a shell accident, not a request. Same reading
+    // `base_url_from_env` gives it.
+    if text.is_empty() {
+        return Ok(None);
+    }
+    text.parse::<u64>().map(Some).map_err(|_| {
+        format!(
+            "{TIMEOUT_ENV} is `{text}`, which is not a whole number of seconds\n  \
+             set it to a count of seconds, or to `0` to wait indefinitely"
+        )
+    })
+}
+
 /// One service the operator declared.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
@@ -136,6 +222,26 @@ pub struct ProviderConfig {
     /// which is what a local server usually wants.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_key_env: Option<String>,
+    /// How long one request to this endpoint may take, in seconds.
+    ///
+    /// Absent falls back to [`TIMEOUT_ENV`] and then to [`DEFAULT_TIMEOUT`].
+    /// `0` waits indefinitely — the same word means the same thing in
+    /// `[run] timeout-seconds` — and is a choice rather than a default, because
+    /// the ceiling exists so a wedged connection cannot hold a run open
+    /// forever.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_seconds: Option<u64>,
+}
+
+impl ProviderConfig {
+    /// The ceiling on one request, or `None` for no ceiling at all.
+    ///
+    /// It is the wait an operator gets, not a wait per attempt: a request that
+    /// runs out of time ends the call rather than being asked again, so the
+    /// number here is not silently multiplied by the retry count.
+    pub fn timeout(&self) -> Result<Option<Duration>, String> {
+        resolve_timeout(self.timeout_seconds)
+    }
 }
 
 /// The `[model]` section of a manifest.
@@ -455,6 +561,7 @@ pub fn build(
                 Ok(Box::new(
                     provider
                         .with_base_url(config.base_url.clone())
+                        .with_timeout(config.timeout().map_err(ProviderError::Configuration)?)
                         .with_model(model_override)
                         .with_effort(effort)
                         .with_catalogue(catalogue)
@@ -483,6 +590,7 @@ pub fn build(
                 Ok(Box::new(
                     crate::anthropic::AnthropicProvider::with_key(key)
                         .with_base_url(config.base_url.clone())
+                        .with_timeout(config.timeout().map_err(ProviderError::Configuration)?)
                         .with_model(model_override)
                         .with_effort(effort)
                         .with_catalogue(catalogue)
@@ -511,6 +619,7 @@ pub fn build(
                 Ok(Box::new(
                     crate::google::GoogleProvider::with_key(key)
                         .with_base_url(config.base_url.clone())
+                        .with_timeout(config.timeout().map_err(ProviderError::Configuration)?)
                         .with_model(model_override)
                         .with_effort(effort)
                         .with_catalogue(catalogue)
@@ -541,6 +650,7 @@ mod tests {
             kind: ProviderKind::Openai,
             base_url: "http://localhost:11434/v1/chat/completions".to_string(),
             api_key_env: None,
+            timeout_seconds: None,
         }
     }
 
@@ -752,6 +862,86 @@ mod tests {
             error.contains("anthropic, google, local, openai"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn a_declared_wait_replaces_the_default() {
+        // The case this field exists for: a model on your own machine, where
+        // 180 seconds is one long prompt away from being too short. A stated
+        // number short-circuits before the environment is consulted, which is
+        // why this test does not race the one below.
+        let mut slow = provider("local");
+        slow.timeout_seconds = Some(900);
+        assert_eq!(slow.timeout(), Ok(Some(Duration::from_secs(900))));
+    }
+
+    #[test]
+    fn zero_waits_indefinitely_rather_than_failing_at_once() {
+        // The same word means the same thing in `[run] timeout-seconds`, and
+        // reading it as `Duration::ZERO` would fail every call instantly --
+        // which is the one interpretation nobody could have wanted.
+        let mut patient = provider("local");
+        patient.timeout_seconds = Some(0);
+        assert_eq!(patient.timeout(), Ok(None));
+    }
+
+    #[test]
+    fn a_wait_is_read_off_the_manifest_in_seconds() {
+        let config: ModelConfig = toml::from_str(
+            r#"
+            [[provider]]
+            name = "local"
+            kind = "openai"
+            base-url = "http://localhost:11434/v1/chat/completions"
+            timeout-seconds = 600
+            "#,
+        )
+        .expect("must parse");
+        assert_eq!(config.providers[0].timeout_seconds, Some(600));
+        assert_eq!(
+            config.providers[0].timeout(),
+            Ok(Some(Duration::from_secs(600)))
+        );
+        assert!(config.validate(BUILT_IN).is_ok());
+    }
+
+    /// Every case that touches [`TIMEOUT_ENV`], in one test.
+    ///
+    /// A process has one environment, so splitting these across tests that run
+    /// in parallel would make them read each other's variable. One test that
+    /// sets and clears is the cheap way to keep them honest.
+    #[test]
+    fn the_machine_answers_where_a_declaration_does_not() {
+        let silent = provider("local");
+        let mut stated = provider("local");
+        stated.timeout_seconds = Some(30);
+
+        std::env::remove_var(TIMEOUT_ENV);
+        assert_eq!(silent.timeout(), Ok(Some(DEFAULT_TIMEOUT)));
+        assert_eq!(resolve_timeout(None), Ok(Some(DEFAULT_TIMEOUT)));
+
+        std::env::set_var(TIMEOUT_ENV, "900");
+        assert_eq!(silent.timeout(), Ok(Some(Duration::from_secs(900))));
+        // A declaration is about one endpoint and the variable is about a
+        // machine, so the narrower statement wins.
+        assert_eq!(stated.timeout(), Ok(Some(Duration::from_secs(30))));
+
+        std::env::set_var(TIMEOUT_ENV, "0");
+        assert_eq!(silent.timeout(), Ok(None));
+
+        // A shell accident, not a request to wait no time.
+        std::env::set_var(TIMEOUT_ENV, "  ");
+        assert_eq!(silent.timeout(), Ok(Some(DEFAULT_TIMEOUT)));
+
+        // Refused rather than ignored: an operator who mistyped it would
+        // otherwise believe a ceiling was raised on a run where it was not.
+        std::env::set_var(TIMEOUT_ENV, "15m");
+        let error = silent.timeout().expect_err("`15m` is not seconds");
+        assert!(error.contains(TIMEOUT_ENV), "{error}");
+        assert!(error.contains("15m"), "{error}");
+        assert!(error.contains("wait indefinitely"), "{error}");
+
+        std::env::remove_var(TIMEOUT_ENV);
     }
 
     #[test]
