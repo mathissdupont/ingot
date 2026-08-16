@@ -101,6 +101,46 @@ Connecting a model service is still something you do by hand: the page shows the
 field to type a credential into. See
 [RFC-0015](../../rfcs/0015-ingot-studio.md).
 
+### The canvas
+
+The **Canvas** tab draws an agent's flow as blocks and lets you change it: a
+prompt, a tool name, a policy rule. It is a two-way view of the file and it
+cannot become the source of truth, because of one rule:
+
+> The canvas never produces a file. It produces a **byte range and a
+> replacement**, and everything outside that range is untouched by construction.
+
+Three things follow, and they are why this is not the no-code editor that would
+have made your `.ing` an export:
+
+- **Nothing outside the edited span can be lost.** Not a comment, not a
+  construct the canvas cannot draw, not a blank line you left deliberately —
+  because nothing outside it is written.
+- **The canvas is never right about correctness.** It proposes an edit and
+  `ingot check` decides, so a bug in it is a compile error you can read rather
+  than a program that quietly changed meaning.
+- **It may be partial.** A construct it has no drawing for is shown as source,
+  read-only, in the position it occupies. A surface that owned the model would
+  have to represent everything or lose it.
+
+You cannot drag an edge, and the canvas does not pretend you can. An edge is not
+stored anywhere: there is one from A to B when B mentions a name A binds, which
+is a fact *about* the text. To make a step read a different value you change
+which name it reads, and the arrow moves because the text did.
+
+Every gesture is shown as a diff of the lines it will change **before** it
+changes them, and a leaf is committed when you leave the field rather than as
+you type. If the file changed under the view — an editor saved, `ingot fmt` ran,
+a branch switched — the edit is refused with *"this file changed since the
+canvas read it; reload"* rather than applied to bytes it was not computed
+against.
+
+The policy block is edited the same way. Granting a capability from the page is
+deliberate: it is compiled like any other edit, so a tool whose declared reach no
+longer sits inside the policy is still `ING4009`. The canvas cannot write its way
+past a check, because all it can do is write source. See
+[RFC-0016](../../rfcs/0016-the-canvas.md).
+
 ## Authoring with a model
 
 `ingot new` turns a workflow description into a project. Without `--provider` it

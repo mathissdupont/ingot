@@ -261,6 +261,45 @@ button.action:disabled { opacity: 0.5; cursor: progress; }
 
 .add { display: flex; gap: 8px; }
 
+/* The canvas. A block is a statement; the stripe says what kind, and a block
+   the canvas cannot draw is shown as source rather than hidden. */
+.block {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  background: var(--surface);
+}
+.block.readonly { background: var(--surface-sunk); border-style: dashed; }
+.block .what { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.block .leaf { display: block; margin-top: 8px; }
+.block .leaf > span { display: block; font-size: 12px; color: var(--muted); margin-bottom: 3px; }
+.block .leaf textarea, .block .leaf input {
+  width: 100%;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  color: var(--ink);
+  box-sizing: border-box;
+}
+.block .kids { margin-left: 14px; border-left: 2px solid var(--line); padding-left: 12px; margin-top: 8px; }
+.edges { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+
+/* What will be written, before it is written. */
+.proposed {
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 12px 14px;
+  margin-bottom: 12px;
+  background: var(--surface-sunk);
+}
+.proposed pre { margin: 8px 0 0; font-family: var(--mono); font-size: 12px; white-space: pre-wrap; }
+.proposed .del { color: var(--fail); }
+.proposed .ins { color: var(--ok); }
+
 /* A run stopped in front of an effect, waiting for a person. It is the only
    thing on this page that blocks something, so it is the only thing that
    borrows the warning colour for a whole block rather than a chip. */
@@ -384,7 +423,9 @@ const state = {
   view: "projects",     // projects | project | machine
   projects: [],
   path: null,           // the selected project
-  tab: "overview",      // overview | runs | boundary
+  tab: "overview",      // overview | canvas | runs | boundary
+  canvas: null,         // the drawn flow, and the source it was drawn from
+  proposed: null,       // an edit the person has been shown and not yet applied
   runId: null,
   detail: null,
   runs: null,
@@ -428,6 +469,9 @@ async function load() {
       // panel offers the agents the artifact declares and a field per input it
       // takes, which is the artifact's own signature and not a guess at one.
       if (!state.detail) state.detail = await api("project?" + q({ path: state.path }));
+      if (state.tab === "canvas" && !state.canvas) {
+        state.canvas = await api("canvas?" + q({ path: state.path }));
+      }
       if (state.tab === "runs") {
         if (state.runId) state.run = await api("run?" + q({ path: state.path, id: state.runId }));
         else await refreshRuns();
@@ -588,16 +632,18 @@ function renderProject(inner) {
   const project = state.projects.find((candidate) => candidate.path === state.path);
   inner.appendChild(head(project ? (project.name || state.path) : state.path, project && project.description, state.path));
 
-  const tabs = el("div", { class: "tabs" }, ["overview", "runs", "boundary"].map((name) =>
+  const TAB_NAMES = { overview: "Overview", canvas: "Canvas", runs: "Runs", boundary: "Boundary" };
+  const tabs = el("div", { class: "tabs" }, ["overview", "canvas", "runs", "boundary"].map((name) =>
     el("button", {
       class: "tab",
       "aria-current": String(state.tab === name),
-      text: name === "overview" ? "Overview" : name === "runs" ? "Runs" : "Boundary",
-      onclick: () => show("project", { tab: name, runId: null, run: null }),
+      text: TAB_NAMES[name],
+      onclick: () => show("project", { tab: name, runId: null, run: null, proposed: null }),
     })));
   inner.appendChild(tabs);
 
   if (state.tab === "runs") return renderRuns(inner);
+  if (state.tab === "canvas") return renderCanvas(inner);
   if (!state.detail) return inner.appendChild(el("div", { class: "empty", text: "Reading the project…" }));
   if (state.tab === "boundary") return renderBoundary(inner, state.detail);
   renderOverview(inner, state.detail);
@@ -777,6 +823,167 @@ function startPanel() {
   state.form = node;
   state.formFor = state.path;
   return node;
+}
+
+
+// --- the canvas -------------------------------------------------------------
+//
+// A two-way view of the file, and never a second source of truth: every gesture
+// here produces a byte range and a replacement, and the file decides what it
+// means. See RFC-0016.
+
+const BLOCK_LABEL = {
+  modelCall: "asks a model",
+  question: "asks a person",
+  toolCall: "calls a tool",
+  memoryWrite: "writes working memory",
+  check: "checks",
+  marker: "checkpoint",
+  output: "emits",
+  container: "if / loop",
+  fanOut: "fan-out",
+  unreadable: "unreadable",
+  unknown: "not drawn",
+};
+
+/// The lines an edit touches, before and after.
+///
+/// Shown for every gesture, because applying an edit without showing it is the
+/// one thing this surface must not do. Cheap here and nowhere else: the canvas
+/// already has the exact range and the exact replacement.
+function previewOf(source, edit) {
+  const lineStart = source.lastIndexOf("\n", edit.startByte - 1) + 1;
+  let lineEnd = source.indexOf("\n", edit.endByte);
+  if (lineEnd === -1) lineEnd = source.length;
+  const before = source.slice(lineStart, lineEnd);
+  const after = source.slice(lineStart, edit.startByte) + edit.newText + source.slice(edit.endByte, lineEnd);
+  return { before, after };
+}
+
+function propose(edit) {
+  state.proposed = edit;
+  render();
+}
+
+async function applyProposed() {
+  const edit = state.proposed;
+  if (!edit) return;
+  try {
+    const answer = await api("canvas?" + q({ path: state.path }), {
+      method: "POST",
+      headers: { "X-Ingot-Token": TOKEN, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        startByte: edit.startByte,
+        endByte: edit.endByte,
+        expected: edit.expected,
+        newText: edit.newText,
+      }),
+    });
+    state.canvas = answer;
+    state.proposed = null;
+    // The file changed, so everything read from it is stale.
+    state.detail = null;
+  } catch (error) {
+    state.error = String(error.message || error);
+  }
+  render();
+}
+
+function renderProposed(inner, source) {
+  if (!state.proposed) return;
+  const { before, after } = previewOf(source, state.proposed);
+  inner.appendChild(el("div", { class: "proposed" }, [
+    el("b", { text: "This is what will be written" }),
+    el("pre", {}, [
+      el("span", { class: "del", text: "- " + before + "\n" }),
+      el("span", { class: "ins", text: "+ " + after }),
+    ]),
+    el("div", { class: "answer", style: "display:flex;gap:8px;margin-top:10px" }, [
+      el("button", { class: "action", text: "Write it", onclick: applyProposed }),
+      el("button", { class: "action quiet", text: "Leave it", onclick: () => { state.proposed = null; render(); } }),
+    ]),
+  ]));
+}
+
+function leafField(source, leaf) {
+  const multiline = leaf.kind === "text" && leaf.text.length > 48;
+  const field = el(multiline ? "textarea" : "input", {
+    value: leaf.text,
+    rows: multiline ? 3 : null,
+    spellcheck: "false",
+    // Committed on blur. Per keystroke would recompile under the caret; an
+    // explicit save button would also be forgotten.
+    onblur: (event) => {
+      const next = event.target.value;
+      if (next === leaf.text) return;
+      propose({
+        startByte: leaf.span.startByte,
+        endByte: leaf.span.endByte,
+        expected: leaf.text,
+        newText: next,
+      });
+    },
+  });
+  if (multiline) field.textContent = leaf.text;
+  return el("label", { class: "leaf" }, [el("span", { text: leaf.role }), field]);
+}
+
+function renderBlock(source, block) {
+  if (!block.editable) {
+    return el("div", { class: "block readonly" }, [
+      el("div", { class: "what", text: BLOCK_LABEL[block.kind] || block.kind }),
+      // Shown as source, in place, so the order stays legible and it is obvious
+      // what has to be opened in an editor.
+      el("pre", { class: "block", style: "margin-top:6px", text: block.source }),
+    ]);
+  }
+  return el("div", { class: "block" }, [
+    el("div", { class: "what", text: BLOCK_LABEL[block.kind] || block.kind }),
+    block.binding ? el("div", { class: "sub", text: "binds " + block.binding }) : null,
+    ...block.leaves.map((leaf) => leafField(source, leaf)),
+    block.children.length
+      ? el("div", { class: "kids" }, block.children.map((child) => renderBlock(source, child)))
+      : null,
+  ]);
+}
+
+function renderCanvas(inner) {
+  if (!state.canvas) return inner.appendChild(el("div", { class: "empty", text: "Drawing the flow…" }));
+  const drawn = state.canvas.canvas;
+  if (!drawn) return inner.appendChild(el("div", { class: "empty", text: "This project declares no agent with a flow to draw." }));
+  const source = state.canvas.source || "";
+
+  renderProposed(inner, source);
+
+  const notes = state.canvas.diagnostics || [];
+  if (notes.length) {
+    inner.appendChild(card("What the compiler says", rows(notes.map((note) =>
+      el("div", { class: "row" }, [
+        el("span", { class: "chip " + (note.severity === "error" ? "fail" : note.severity === "warning" ? "warn" : "idle"), text: note.code }),
+        el("div", { class: "grow" }, [
+          el("div", { text: note.message }),
+          el("div", { class: "where", text: note.location }),
+        ]),
+      ])), "")));
+  }
+
+  inner.appendChild(card(drawn.agent + " — flow",
+    el("div", { style: "padding:12px 16px" }, drawn.blocks.map((block) => renderBlock(source, block)))));
+
+  if (drawn.edges.length) {
+    inner.appendChild(card("What reads what",
+      el("div", { class: "edges", style: "padding:12px 16px" },
+        drawn.edges.map((edge) => el("div", { text: edge.from + " → " + edge.to + "   " + edge.name })))));
+  }
+
+  if (drawn.policy.length) {
+    inner.appendChild(card("Policy",
+      el("div", { style: "padding:12px 16px" }, drawn.policy.map((rule) =>
+        el("div", { class: "block" }, [
+          el("div", { class: "what", text: rule.subject }),
+          ...rule.leaves.filter((leaf) => leaf.role === "action").map((leaf) => leafField(source, leaf)),
+        ])))));
+  }
 }
 
 const LAUNCH_CHIP = { running: "warn", exited: "pass", failed: "fail" };

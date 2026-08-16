@@ -35,9 +35,10 @@ use std::sync::Arc;
 use anyhow::{bail, Context, Result};
 use ingot_compiler::compile_path;
 use ingot_diagnostics::Severity;
+use ingot_language_service::canvas::{apply as apply_edit, canvas_of, CanvasEdit};
 use ingot_language_service::LanguageService;
 use ingot_studio::{Answers, Head, Method, Reply, Studio};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::launch;
@@ -108,6 +109,8 @@ impl Answers for Routes {
             (Method::Post, "projects") => with_path(request, |path| bookmark(path, true)),
             (Method::Delete, "projects") => with_path(request, |path| bookmark(path, false)),
             (Method::Get, "project") => with_path(request, project),
+            (Method::Get, "canvas") => with_path(request, |path| canvas(request, path)),
+            (Method::Post, "canvas") => with_path(request, |path| edit_canvas(path, body)),
             (Method::Get, "runs") => with_path(request, |path| self.run_list(path)),
             (Method::Get, "run") => with_id(request, run_detail),
             (Method::Delete, "run") => with_id(request, |path, id| self.run_delete(path, id)),
@@ -435,6 +438,123 @@ struct PlanView {
     enforced: bool,
     /// The plan as `ingot sandbox` prints it, so the two cannot drift.
     rendered: String,
+}
+
+// --- the canvas -------------------------------------------------------------
+
+/// What the page sends back to change a file.
+///
+/// `expected` is what makes this safe to accept from a page that read the file
+/// some time ago. See [RFC-0016](../../../rfcs/0016-the-canvas.md).
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct EditRequest {
+    start_byte: u32,
+    end_byte: u32,
+    expected: String,
+    new_text: String,
+}
+
+/// Render one agent's flow as a canvas.
+///
+/// **The route names no file.** It renders the project's entry, resolved the way
+/// every other route resolves it, so a page cannot ask this studio to read or
+/// write something outside the project by naming a path.
+fn canvas(request: &Head, path: &Path) -> Result<String> {
+    let target = resolve_target(Some(path))?;
+    let source = std::fs::read_to_string(&target.entry)
+        .with_context(|| format!("reading {}", target.entry.display()))?;
+    let compilation = compile_path(&target.entry)
+        .with_context(|| format!("reading {}", target.entry.display()))?;
+
+    let agent = request.param("agent");
+    let Some(drawn) = canvas_of(&compilation.sources, &compilation.program, &source, agent) else {
+        bail!("this project declares no agent with a flow to draw");
+    };
+
+    Ok(serde_json::to_string(&json!({
+        "schemaVersion": STUDIO_SCHEMA_VERSION,
+        "file": target.entry.display().to_string(),
+        // The whole file, so the page can show a gesture as a diff of the lines
+        // it will change *before* it changes them. Cheap here and nowhere else:
+        // the canvas already has the exact range and the exact replacement,
+        // because that is all an edit is.
+        "source": source,
+        "canvas": drawn,
+        "agents": compilation
+            .program
+            .agents
+            .iter()
+            .map(|decl| decl.name.text.clone())
+            .collect::<Vec<_>>(),
+        "diagnostics": notes(&target.entry)?,
+    }))?)
+}
+
+/// Apply one edit and hand back what the file became.
+///
+/// The order is the point: apply, write, then **compile**. The canvas is never
+/// authoritative about correctness — it proposes an edit and `ingot check`
+/// decides, so a bug here is a diagnostic rather than a corrupted program.
+fn edit_canvas(path: &Path, body: &[u8]) -> Result<String> {
+    let target = resolve_target(Some(path))?;
+    let request: EditRequest = serde_json::from_slice(body).context("reading the edit")?;
+    let source = std::fs::read_to_string(&target.entry)
+        .with_context(|| format!("reading {}", target.entry.display()))?;
+
+    let edited = apply_edit(
+        &source,
+        &CanvasEdit {
+            start_byte: request.start_byte,
+            end_byte: request.end_byte,
+            expected: request.expected,
+            new_text: request.new_text,
+        },
+    )
+    .map_err(|refused| anyhow::anyhow!("{refused}"))?;
+
+    std::fs::write(&target.entry, &edited)
+        .with_context(|| format!("writing {}", target.entry.display()))?;
+
+    // Re-rendered from the file that is now on disk rather than from the string
+    // in hand, so the page's next gesture is computed against what a compiler
+    // would read.
+    let compilation = compile_path(&target.entry)
+        .with_context(|| format!("reading {}", target.entry.display()))?;
+    let drawn = canvas_of(&compilation.sources, &compilation.program, &edited, None);
+
+    Ok(serde_json::to_string(&json!({
+        "schemaVersion": STUDIO_SCHEMA_VERSION,
+        "file": target.entry.display().to_string(),
+        "source": edited,
+        "canvas": drawn,
+        "diagnostics": notes(&target.entry)?,
+    }))?)
+}
+
+/// The diagnostics for one file, in the shape the page already renders.
+fn notes(entry: &Path) -> Result<Vec<EditorNote>> {
+    let service = LanguageService::new();
+    Ok(service
+        .check_file(entry)?
+        .diagnostics
+        .iter()
+        .map(|diagnostic| EditorNote {
+            code: diagnostic.code.clone(),
+            severity: match diagnostic.severity {
+                Severity::Error => "error",
+                Severity::Warning => "warning",
+                Severity::Note => "note",
+            },
+            message: diagnostic.message.clone(),
+            location: format!(
+                "{}:{}:{}",
+                diagnostic.range.file,
+                diagnostic.range.range.start.line + 1,
+                diagnostic.range.range.start.character + 1
+            ),
+        })
+        .collect())
 }
 
 fn project(path: &Path) -> Result<String> {
