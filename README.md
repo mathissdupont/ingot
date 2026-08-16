@@ -99,6 +99,44 @@ decide whether it is any good. The problem was never that a model cannot write
 Python. It is that nothing checks the Python. A model writing Ingot gets refused
 when it grants itself a capability the policy denies.
 
+## A person in the loop, without losing the run
+
+An agent can stop and ask:
+
+```ingot
+framing = consult(
+  "Which framing should the report take?",
+  choices: ["technical", "executive", "narrative"]
+)
+emit report = ask<markdown>("Write about ${topic} as ${framing}.")
+```
+
+The answer is an ordinary `string` the flow reads. Two things keep that from
+costing what it usually costs:
+
+**It is an effect.** `consult` needs `human allow` in the policy, so **"can this
+artifact run unattended?" is a question you answer by reading it** rather than by
+starting it and finding out. CI denies `human`, and an artifact that needs a
+person fails at the gate naming the question instead of hanging on a pipe.
+
+**It is recorded.** A person is a third source of answers, beside the model and
+the tools — recorded in its own list and replayed the same way, so an agent with
+a human in it still has an offline test:
+
+```bash
+ingot run . --record tests/cassettes/framing.json --approvals stdin --events json
+ingot run . --provider replay --cassette tests/cassettes/framing.json   # asks nobody
+```
+
+Change the question and the replay refuses, exactly as an edited prompt does —
+and the message says re-recording means asking somebody again, rather than
+implying it is free. `--yes` approves gates and **cannot** answer a question:
+there is no safe side to guess.
+
+The same channel carries an approval, so `ingot studio` can run an agent that
+needs a person — one gate at a time, with the effect and the reason shown before
+anything happens. See [RFC-0020](rfcs/0020-a-person-in-the-loop.md).
+
 ## What a checked artifact is for
 
 Because the artifact states its capabilities, its ceiling and its identity in a
@@ -139,8 +177,9 @@ execution engine. [`docs/vision.md`](docs/vision.md) is the full picture.
 
 Status: **pre-1.0 and moving.** The compiler front end is complete, a reference
 interpreter runs Agent IR against Anthropic, OpenAI and Gemini, a second backend
-emits self-contained Python 3, and the `policy` block is enforced by a real
-container boundary. The language, the Agent IR and the artifact format can still
+emits self-contained Python 3, the `policy` block is enforced by a real
+container boundary, and an agent can put a question to a person and read the
+answer without giving up a reproducible run. The language, the Agent IR and the artifact format can still
 change between releases. The [gap register](docs/gaps.md) lists every known
 limitation; the [changelog](CHANGELOG.md) says what landed when.
 
@@ -273,6 +312,7 @@ export CARGO_TARGET_DIR=/c/build/ingot
 | `ingot run [--input k=v]` | execute the agent |
 | `ingot run --sandbox` | execute it with each tool server inside a boundary |
 | `ingot run --contained` | execute the agent itself inside a boundary |
+| `ingot run --approvals stdin --events json` | let whatever started the run answer its gates and questions, one at a time |
 | `ingot image build [SOURCE]` | build the version-matched local image used by contained runs |
 | `ingot test` | replay recorded cassettes, tool results included |
 | `ingot doctor [--json]` | report source, provider, MCP and container readiness without starting them |
@@ -354,9 +394,19 @@ Start here:
 
 ## Specifications
 
+Each version is normative for what it defines and inherits the one before it.
+
+* [Language 0.3](specs/language/v0.3.md) — `consult` and the `human` effect
+* [Language 0.2](specs/language/v0.2.md) — imports, optionals and unions, pure
+  helpers, a capability's reach, verifier bodies, persistent memory
 * [Language 0.1](specs/language/v0.1.md) — syntax and static semantics
-* [Agent IR 0.2](specs/ir/v0.2.md) — the backend contract with portable node source spans
+* [Agent IR 0.3](specs/ir/v0.3.md) — the `consult` node and the `human` effect
+* [Agent IR 0.2](specs/ir/v0.2.md) — portable node source spans, `verify` conditions
 * [Agent IR 0.1](specs/ir/v0.1.md) — the original backend contract
+* [Runtime 0.5](specs/runtime/v0.5.md) — resumption and persistent memory
+* [Runtime 0.4](specs/runtime/v0.4.md) — what a `verify` does, and what a failure ends
+* [Runtime 0.3](specs/runtime/v0.3.md) — streaming
+* [Runtime 0.2](specs/runtime/v0.2.md) — the run record
 * [Runtime 0.1](specs/runtime/v0.1.md) — what executing an artifact means
 * [MCP binding 0.2](specs/tools/mcp-v0.2.md) — how a declared tool is served
 * [`agent-ir.schema.json`](specs/ir/agent-ir.schema.json) — machine-readable schema
@@ -414,13 +464,14 @@ Every known limitation has an identifier and an entry in the
 not done, and what closing it would take. Read it before relying on anything
 here.
 
-The three worth knowing before you write an agent:
+The ones worth knowing before you write an agent:
 
 | | |
 |---|---|
-| [GAP-030](docs/gaps.md#gap-030) | `verify` cannot be executed by anything. The run reports it as `notPerformed` rather than claiming a pass, so nothing misleads — but nothing checks either. |
 | [GAP-010](docs/gaps.md#gap-010) | `parallel map` runs its iterations one after another. The result is identical; only the wall clock differs. |
-| [GAP-017](docs/gaps.md#gap-017) | The differential tests are not yet a packaged conformance suite or backend author guide. |
+| [GAP-040](docs/gaps.md#gap-040) | A model call times out after 180 seconds and nothing can say otherwise. Generous for a hosted API, short for a large model on your own machine. |
+| [GAP-011](docs/gaps.md#gap-011) | Imports are project-local. There is no package model, so source is shared by copying it. |
+| [GAP-039](docs/gaps.md#gap-039) | **No agent outside this repository is known to run.** Every `.ing` program here was written to exercise the compiler. The friction that would stop you is probably not on this list, because nobody has hit it yet. |
 
 Nothing in the register is **unenforced** — the class for a limitation that
 looks like a guarantee and is not. Every entry either says what it did not do,
