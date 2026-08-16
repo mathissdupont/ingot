@@ -1,6 +1,6 @@
 # RFC-0016: The canvas, a two-way view of a flow
 
-- Status: **Accepted**; the model and the edits implemented 2026-08-16, the surface pending
+- Status: **Accepted**, implemented 2026-08-16
 - Created: 2026-08-11
 - Affects: `ingot-studio`, `ingot-language-service`, CLI
 - Builds on: [RFC-0015](0015-ingot-studio.md)

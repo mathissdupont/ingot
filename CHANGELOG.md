@@ -66,7 +66,19 @@ code is `ING2001`, or `ING2009` when the reader is a string interpolation, which
 is how a prompt reads a binding. A conformance test written from the RFC alone
 would have asserted a code that cannot occur.
 
-The surface that uses this is not built yet, so the studio is still read-only.
+**The studio has a Canvas tab**, and with it RFC-0016 is complete. It draws an
+agent's flow as blocks, offers a field per leaf, and shows every gesture as a
+diff of the lines it will change *before* it changes them — applying an edit
+without showing it is the one thing the surface must not do.
+
+The route names no file. It renders and writes the project's entry, resolved the
+way every other route resolves it, so a page cannot ask this studio to touch
+something outside the project by naming a path. An edit carries the text it
+expects to find, and a stale one is refused rather than applied.
+
+The order on the way back is the point: apply, write, then **compile**. The
+canvas is never authoritative about correctness, so what returns to the page is
+the file's own diagnostics.
 
 **An agent can put a question to a person and read the answer** (language, IR,
 runtime, CLI) — [GAP-042](docs/gaps.md#gap-042) **closed**, and with it all of

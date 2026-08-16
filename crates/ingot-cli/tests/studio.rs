@@ -933,3 +933,224 @@ fn answering_a_process_this_studio_did_not_start_is_refused() {
     assert_eq!(status, 400, "{body}");
     assert!(body.contains("did not start"), "{body}");
 }
+
+// --- the canvas -------------------------------------------------------------
+//
+// [RFC-0016](../../../rfcs/0016-the-canvas.md) in one sentence: an editing
+// surface that can never be the source of truth, because all it can produce is
+// a byte range and a replacement.
+
+/// A project whose flow has something to draw and something to preserve.
+fn canvas_project(dir: &Path) {
+    std::fs::write(
+        dir.join("main.ing"),
+        "language 0.1\n\
+         agent Note(topic: string) -> note<markdown> {\n\
+         \x20 model requires { structured_output }\n\
+         \x20 budget { steps <= 4 }\n\
+         \x20 policy { network deny }\n\
+         \x20 flow {\n\
+         \x20   // This line is not in the tree, and must survive anyway.\n\
+         \x20   draft = ask<markdown>(\"One line about ${topic}.\")\n\
+         \x20   emit note = draft\n\
+         \x20 }\n\
+         }\n",
+    )
+    .expect("writing the source");
+    std::fs::write(
+        dir.join("ingot.toml"),
+        "[project]\nname = \"note\"\nversion = \"0.1.0\"\n\n\
+         [build]\nentry = \"main.ing\"\nout-dir = \"target/ingot\"\n",
+    )
+    .expect("writing the manifest");
+}
+
+fn drawn(studio: &Serving, dir: &Path) -> Value {
+    studio.get(&format!("/api/canvas?path={}", encoded(dir)))
+}
+
+/// The leaf of the first block whose source contains `needle`.
+fn leaf_of(canvas: &Value, needle: &str, role: &str) -> Value {
+    let blocks = canvas["canvas"]["blocks"].as_array().expect("blocks");
+    let block = blocks
+        .iter()
+        .find(|block| {
+            block["source"]
+                .as_str()
+                .unwrap_or_default()
+                .contains(needle)
+        })
+        .unwrap_or_else(|| panic!("no block containing `{needle}` in {canvas}"));
+    block["leaves"]
+        .as_array()
+        .expect("leaves")
+        .iter()
+        .find(|leaf| leaf["role"] == role)
+        .unwrap_or_else(|| panic!("no `{role}` leaf on {block}"))
+        .clone()
+}
+
+/// The body of an edit, with `expected` and `newText` encoded as JSON strings.
+fn edit_body(leaf: &Value, new_text: &str) -> String {
+    format!(
+        r#"{{"startByte":{},"endByte":{},"expected":{},"newText":{}}}"#,
+        leaf["span"]["startByte"],
+        leaf["span"]["endByte"],
+        serde_json::to_string(leaf["text"].as_str().expect("leaf text")).unwrap(),
+        serde_json::to_string(new_text).unwrap(),
+    )
+}
+
+#[test]
+fn the_canvas_draws_the_flow_and_derives_its_edges() {
+    let dir = TempDir::new("studio-canvas");
+    canvas_project(dir.path());
+    let studio = Serving::start("canvas");
+    studio.post(&format!("/api/projects?path={}", encoded(dir.path())));
+
+    let canvas = drawn(&studio, dir.path());
+    let blocks = canvas["canvas"]["blocks"].as_array().expect("blocks");
+    assert_eq!(blocks.len(), 2, "{canvas}");
+    assert_eq!(blocks[0]["kind"], "modelCall");
+    assert_eq!(blocks[1]["kind"], "output");
+
+    // An edge is a fact about the text, not something the page stores.
+    let edges = canvas["canvas"]["edges"].as_array().expect("edges");
+    assert_eq!(edges.len(), 1, "{canvas}");
+    assert_eq!(edges[0]["name"], "draft");
+
+    // And the move unit reaches back over the comment the tree cannot see.
+    assert!(
+        blocks[0]["moveUnit"]["startByte"].as_u64() < blocks[0]["span"]["startByte"].as_u64(),
+        "{canvas}"
+    );
+}
+
+#[test]
+fn an_edit_through_the_page_changes_the_file_and_nothing_around_it() {
+    let dir = TempDir::new("studio-canvas-edit");
+    canvas_project(dir.path());
+    let studio = Serving::start("canvas-edit");
+    studio.post(&format!("/api/projects?path={}", encoded(dir.path())));
+
+    let canvas = drawn(&studio, dir.path());
+    let prompt = leaf_of(&canvas, "draft = ask", "prompt");
+
+    let (status, body) = studio.send_json(
+        "POST",
+        &format!("/api/canvas?path={}", encoded(dir.path())),
+        &edit_body(&prompt, "\"Two lines about ${topic}.\""),
+    );
+    assert_eq!(status, 200, "{body}");
+
+    let after = std::fs::read_to_string(dir.path().join("main.ing")).expect("the source");
+    assert!(after.contains("Two lines about"), "{after}");
+    assert!(
+        after.contains("// This line is not in the tree, and must survive anyway."),
+        "a comment outside the edited span must survive:\n{after}"
+    );
+    assert!(after.contains("emit note = draft"), "{after}");
+    assert!(after.starts_with("language 0.1"), "{after}");
+}
+
+#[test]
+fn an_edit_computed_against_bytes_that_have_since_changed_is_refused() {
+    // The one way this design can lose somebody's work, turned into a message.
+    let dir = TempDir::new("studio-canvas-stale");
+    canvas_project(dir.path());
+    let studio = Serving::start("canvas-stale");
+    studio.post(&format!("/api/projects?path={}", encoded(dir.path())));
+
+    let canvas = drawn(&studio, dir.path());
+    let prompt = leaf_of(&canvas, "draft = ask", "prompt");
+
+    // Somebody else saved the file between the render and the gesture.
+    let source = std::fs::read_to_string(dir.path().join("main.ing")).expect("the source");
+    let moved_on = source.replace("One line", "An entirely different line");
+    std::fs::write(dir.path().join("main.ing"), &moved_on).expect("the other save");
+
+    let (status, body) = studio.send_json(
+        "POST",
+        &format!("/api/canvas?path={}", encoded(dir.path())),
+        &edit_body(&prompt, "\"x\""),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert!(
+        body.contains("reload"),
+        "the message says what to do: {body}"
+    );
+
+    let now = std::fs::read_to_string(dir.path().join("main.ing")).expect("the source");
+    assert_eq!(now, moved_on, "a refused edit changes nothing");
+}
+
+#[test]
+fn the_page_cannot_invent_a_field_on_an_edit() {
+    let dir = TempDir::new("studio-canvas-field");
+    canvas_project(dir.path());
+    let studio = Serving::start("canvas-field");
+    studio.post(&format!("/api/projects?path={}", encoded(dir.path())));
+
+    let (status, body) = studio.send_json(
+        "POST",
+        &format!("/api/canvas?path={}", encoded(dir.path())),
+        r#"{"startByte":0,"endByte":0,"expected":"","newText":"","file":"../../secrets"}"#,
+    );
+    assert_eq!(status, 400, "{body}");
+}
+
+#[test]
+fn an_edit_that_breaks_the_program_is_applied_and_reported_by_the_compiler() {
+    // The canvas is never authoritative about correctness. It proposes an edit;
+    // `ingot check` decides. A bug here is a diagnostic, not a corrupted file.
+    let dir = TempDir::new("studio-canvas-broken");
+    canvas_project(dir.path());
+    let studio = Serving::start("canvas-broken");
+    studio.post(&format!("/api/projects?path={}", encoded(dir.path())));
+
+    let canvas = drawn(&studio, dir.path());
+    let prompt = leaf_of(&canvas, "draft = ask", "prompt");
+
+    let (status, body) = studio.send_json(
+        "POST",
+        &format!("/api/canvas?path={}", encoded(dir.path())),
+        &edit_body(&prompt, "\"About ${topci}.\""),
+    );
+    assert_eq!(status, 200, "{body}");
+
+    let answer: Value = serde_json::from_str(&body).expect("a JSON reply");
+    let codes: Vec<&str> = answer["diagnostics"]
+        .as_array()
+        .expect("diagnostics")
+        .iter()
+        .filter_map(|note| note["code"].as_str())
+        .collect();
+    assert!(
+        !codes.is_empty(),
+        "a typo in a placeholder is a diagnostic the page shows: {body}"
+    );
+}
+
+#[test]
+fn the_page_and_the_canvas_route_cannot_drift_apart() {
+    // A surface wired to a route that no longer exists fails silently in a
+    // browser and passes every test that only exercises the server. This is the
+    // one assertion that ties the two halves together.
+    let studio = Serving::start("canvas-wiring");
+    let (status, page) = studio.request("GET", "/");
+    assert_eq!(status, 200);
+
+    assert!(
+        page.contains("canvas?"),
+        "the page must call the canvas route"
+    );
+    assert!(
+        page.contains("renderCanvas"),
+        "the page must have a canvas view"
+    );
+    // And the gesture it must never skip.
+    assert!(
+        page.contains("This is what will be written"),
+        "every gesture is shown as a diff before it is applied"
+    );
+}
