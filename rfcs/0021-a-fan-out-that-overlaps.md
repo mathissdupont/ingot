@@ -1,12 +1,13 @@
 # RFC-0021: A fan-out that overlaps
 
-- Status: **Draft**
+- Status: **Accepted**, implemented 2026-08-17
 - Created: 2026-08-17
 - Affects: runtime spec, CLI, `ingot-runtime`
 - Closes: [GAP-010](../docs/gaps.md#gap-010)
+- Opens: [GAP-043](../docs/gaps.md#gap-043)
 - Builds on: [RFC-0002](0002-runtime-execution-model.md),
   [RFC-0013](0013-streaming.md)
-- Would specify: Runtime 0.6
+- Specifies: [Runtime 0.6](../specs/runtime/v0.6.md)
 
 ## Problem
 
@@ -493,22 +494,26 @@ argument that kept `timeout-seconds` out of the artifact.
 
 ## Conformance tests
 
-- [ ] `a_fan_out_produces_the_same_values_as_a_sequential_one`
-- [ ] `the_event_stream_of_a_fan_out_is_byte_identical_to_the_sequential_one`
-- [ ] `the_event_streams_agree_on_kind_and_order` (existing; must keep passing
+- [x] `a_fan_out_produces_the_same_values_as_a_sequential_one`
+- [x] `the_event_stream_of_a_fan_out_is_byte_identical_to_the_sequential_one`
+- [x] `the_event_streams_agree_on_kind_and_order` (existing; must keep passing
       unchanged against a sequential Python backend)
-- [ ] `a_run_without_a_provider_factory_executes_a_fan_out_sequentially`
-- [ ] `a_replayed_fan_out_takes_its_rows_in_order`
-- [ ] `two_iterations_over_identical_items_get_the_rows_recorded_for_them`
+- [x] `a_run_without_a_provider_factory_executes_a_fan_out_sequentially`
+- [x] `a_replayed_fan_out_takes_its_rows_in_order`
+- [x] `two_iterations_over_identical_items_get_the_rows_recorded_for_them`
       (the case the digest rule got wrong: same digest, different recorded
       values, and the collected list must be the recorded one every time)
-- [ ] `a_cassette_recorded_from_a_fan_out_is_byte_identical_run_to_run`
-- [ ] `a_failing_iteration_lets_the_others_finish`
-- [ ] `the_reported_failure_is_the_first_in_index_order_not_in_time`
-- [ ] `a_budget_trips_at_the_same_total_and_names_the_same_iteration`
-- [ ] `max_concurrency_of_one_is_sequential_execution`
-- [ ] `a_fan_out_over_a_thousand_items_opens_no_more_than_the_ceiling`
-- [ ] `no_deltas_are_shown_from_inside_a_fan_out`
-- [ ] `a_contained_run_executes_a_fan_out_sequentially`
-- [ ] `a_body_that_needs_a_person_executes_sequentially`
-- [ ] `a_body_that_calls_a_tool_executes_sequentially`
+- [x] `a_cassette_recorded_from_a_fan_out_is_byte_identical_run_to_run`
+- [x] `a_failing_iteration_lets_the_others_finish`
+- [x] `the_reported_failure_is_the_first_in_index_order_not_in_time`
+- [x] `a_budget_trips_at_the_same_total_and_names_the_same_iteration`
+- [x] `max_concurrency_of_one_is_sequential_execution`
+- [x] `a_fan_out_over_a_thousand_items_opens_no_more_than_the_ceiling`
+- [x] `no_deltas_are_shown_from_inside_a_fan_out`
+- [x] `a_contained_run_executes_a_fan_out_sequentially` — covered by
+      `a_run_without_a_provider_factory_executes_a_fan_out_sequentially`
+      rather than by a container: the guest supplies no factory, which is
+      the whole of the mechanism. A test that started a box would be
+      testing the box.
+- [x] `a_body_that_needs_a_person_executes_sequentially`
+- [x] `a_body_that_calls_a_tool_executes_sequentially`

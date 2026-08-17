@@ -2644,3 +2644,113 @@ fn a_body_that_needs_a_person_executes_sequentially() {
         "a body that can stop for a person must not overlap"
     );
 }
+
+/// Record a fan-out over `items`, answering positionally.
+///
+/// A recording run has one cassette being written, so it has a ceiling of one and
+/// a positional script is exactly right for it — which is the arrangement these
+/// tests are about.
+fn record_fan_out(items: serde_json::Value, answers: Vec<serde_json::Value>) -> Cassette {
+    let ir = fan_out_mapper();
+    let mut provider = RecordingProvider::new(ScriptedProvider::new(answers), ir.agent.clone());
+    let mut tools = DenyAllTools;
+    let mut sink = CollectingSink::default();
+    let registry = BTreeMap::new();
+    run(
+        &ir,
+        &registry,
+        &mut provider,
+        &mut tools,
+        &mut sink,
+        RunOptions {
+            inputs: [("items".to_string(), items)].into(),
+            ..RunOptions::default()
+        },
+    )
+    .expect("the recording run should succeed");
+    provider.finish()
+}
+
+fn replay_fan_out(
+    cassette: Cassette,
+    items: serde_json::Value,
+) -> Result<crate::RunReport, RunError> {
+    let ir = fan_out_mapper();
+    let mut provider = ReplayProvider::new(cassette);
+    let mut tools = DenyAllTools;
+    let mut sink = CollectingSink::default();
+    let registry = BTreeMap::new();
+    run(
+        &ir,
+        &registry,
+        &mut provider,
+        &mut tools,
+        &mut sink,
+        RunOptions {
+            inputs: [("items".to_string(), items)].into(),
+            // A cassette is one tape with one position in it, so a replayed run
+            // has a ceiling of one however generous this is.
+            fan_out: FanOut {
+                providers: None,
+                ceiling: 8,
+            },
+            ..RunOptions::default()
+        },
+    )
+}
+
+#[test]
+fn a_replayed_fan_out_takes_its_rows_in_order() {
+    let cassette = record_fan_out(
+        json!(["a", "b", "c"]),
+        vec![json!("first"), json!("second"), json!("third")],
+    );
+    let report =
+        replay_fan_out(cassette, json!(["a", "b", "c"])).expect("a recorded fan-out should replay");
+    assert_eq!(
+        report.outputs["out"].value,
+        json!(["first", "second", "third"])
+    );
+}
+
+#[test]
+fn two_iterations_over_identical_items_get_the_rows_recorded_for_them() {
+    // The case that killed RFC-0021's digest-matching rule, kept as a test so it
+    // cannot come back. Two identical elements ask identical questions, so their
+    // recorded rows carry **one digest** -- but the answers a live model gave them
+    // need not be equal. Matching by "the first unconsumed row whose digest
+    // matches" would hand them out by arrival order, and the collected list would
+    // be `["foo", "bar"]` or `["bar", "foo"]` depending on the schedule.
+    let cassette = record_fan_out(json!(["x", "x"]), vec![json!("foo"), json!("bar")]);
+
+    assert_eq!(
+        cassette.interactions[0].request_digest, cassette.interactions[1].request_digest,
+        "identical elements ask identical questions, which is the whole difficulty"
+    );
+    assert_ne!(
+        cassette.interactions[0].value, cassette.interactions[1].value,
+        "and a model may answer the same question two ways, which is the other half"
+    );
+
+    // Replayed repeatedly: the answer is the recorded one every time, because the
+    // row an iteration gets is decided by position and a replayed fan-out has a
+    // ceiling of one.
+    for attempt in 0..8 {
+        let report = replay_fan_out(cassette.clone(), json!(["x", "x"]))
+            .expect("a recorded fan-out should replay");
+        assert_eq!(
+            report.outputs["out"].value,
+            json!(["foo", "bar"]),
+            "attempt {attempt} disagreed with the recording"
+        );
+    }
+}
+
+#[test]
+fn a_cassette_recorded_from_a_fan_out_is_byte_identical_run_to_run() {
+    // A cassette nobody can diff is a cassette nobody reviews.
+    let answers = vec![json!("first"), json!("second"), json!("third")];
+    let once = record_fan_out(json!(["a", "b", "c"]), answers.clone());
+    let twice = record_fan_out(json!(["a", "b", "c"]), answers);
+    assert_eq!(once.to_canonical_json(), twice.to_canonical_json());
+}
