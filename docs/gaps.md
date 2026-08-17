@@ -311,7 +311,14 @@ believes the shorter sentence.
 under replay. It is the cheap version, and it makes an artifact behave one way in
 a test and another in production — the divergence this project exists to refuse.
 
+*Designed, not yet built.* [RFC-0021](../rfcs/0021-a-fan-out-that-overlaps.md) is
+the longer sentence this entry asked for. It found the price to be lower in one
+place than stated here — every cassette row already carries a digest, so matching
+by digest instead of by position needs no new cassette format — and higher in
+another: three traits take `&mut self` and none is `Send`, not one.
+
 *Recorded in.* [Runtime 0.1 §5.1](../specs/runtime/v0.1.md),
+[RFC-0021](../rfcs/0021-a-fan-out-that-overlaps.md),
 `crates/ingot-cli/tests/differential.rs`.
 
 ## Absent
