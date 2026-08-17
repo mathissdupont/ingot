@@ -219,6 +219,28 @@ pub trait ModelProvider {
     }
 }
 
+/// A source of fresh providers, one per concurrent iteration of a fan-out.
+///
+/// [`ModelProvider::complete`] takes `&mut self`, and that is kept rather than
+/// worked around: an implementer is never called twice at once, because every
+/// overlapping iteration is handed **its own instance**. The instance has to come
+/// from somewhere, and [`crate::run`] never sees a
+/// [`ProviderConfig`](crate::catalogue::ProviderConfig) — so whoever built the
+/// first provider supplies the means to build the rest.
+///
+/// **Absent, a fan-out has a ceiling of one.** A run that cannot make a second
+/// provider has exactly one source of answers, and one source is a lock. That is
+/// not a special case bolted on for cassettes: a replayed run has one tape and a
+/// contained run has one pair of pipes, and neither can produce a factory, so
+/// both come out sequential without anything having to name them. See
+/// [RFC-0021](../../../rfcs/0021-a-fan-out-that-overlaps.md).
+///
+/// `Send` is required of what it produces, because that is what crosses into the
+/// iteration's thread. `Send + Sync` is required of the closure itself, because
+/// every thread in the fan-out calls it.
+pub type ProviderFactory =
+    Box<dyn Fn() -> Result<Box<dyn ModelProvider + Send>, ProviderError> + Send + Sync>;
+
 /// Lets a boxed provider be used wherever a provider is expected — including as
 /// the inner provider of a [`crate::RecordingProvider`], which is how the CLI
 /// wraps a recorder around a provider it chose at runtime.

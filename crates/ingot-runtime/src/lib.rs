@@ -74,9 +74,10 @@ pub use cassette::{
 };
 pub use catalogue::{ModelConfig, ProviderConfig, ProviderKind};
 pub use events::{Artifact, CollectingSink, EventSink, NullSink, RunEvent, TeeSink, VerifyOutcome};
-pub use interp::{run, AgentRegistry, RunOptions};
+pub use interp::{run, AgentRegistry, FanOut, RunOptions};
 pub use provider::{
-    CompletionRequest, CompletionResponse, ModelProvider, ModelSelection, ProviderError, Usage,
+    CompletionRequest, CompletionResponse, ModelProvider, ModelSelection, ProviderError,
+    ProviderFactory, Usage,
 };
 pub use router::RoutingProvider;
 pub use snapshot::{artifact_digest, Resumption, SnapshotError};

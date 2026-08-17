@@ -14,8 +14,8 @@ use ingot_mcp::{AgentTools, McpConfig, McpToolHost};
 use ingot_runtime::cassette::{Consultation, RecordingInterlocutor, ReplayInterlocutor};
 use ingot_runtime::{
     run as run_agent, AgentRegistry, ApprovalRequest, Artifact, Cassette, ConsultError,
-    ConsultRequest, DenyAllTools, EventSink, HumanChannel, Interlocutor, ModelConfig,
-    ModelProvider, RecordingProvider, RecordingTools, ReplayProvider,
+    ConsultRequest, DenyAllTools, EventSink, FanOut, HumanChannel, Interlocutor, ModelConfig,
+    ModelProvider, ProviderError, RecordingProvider, RecordingTools, ReplayProvider,
     ReplayToolHost as ReplayTools, RoutingProvider, RunError, RunEvent, RunOptions, RunReport,
     ToolHost,
 };
@@ -254,7 +254,9 @@ pub fn project_cassette(root: &Path) -> Result<PathBuf> {
 }
 
 /// Build the provider a command asked for.
-pub fn build_model_provider(selection: &ProviderSelection) -> Result<Box<dyn ModelProvider>> {
+pub fn build_model_provider(
+    selection: &ProviderSelection,
+) -> Result<Box<dyn ModelProvider + Send>> {
     match selection.choice {
         ProviderChoice::Replay => {
             let Some(path) = &selection.cassette else {
@@ -490,6 +492,7 @@ pub fn execute(compilation: &Compilation, config: &RunConfig) -> Result<u8> {
             stop_at: config.stop_at.clone(),
             resume,
             pricing: config.models.pricing(),
+            fan_out: fan_out(config),
         },
     );
 
@@ -1424,13 +1427,13 @@ impl Tools {
 
 /// A provider plus, optionally, the recorder wrapped around it.
 pub(crate) enum Provider {
-    Plain(Box<dyn ModelProvider>),
-    Recording(RecordingProvider<Box<dyn ModelProvider>>),
+    Plain(Box<dyn ModelProvider + Send>),
+    Recording(RecordingProvider<Box<dyn ModelProvider + Send>>),
 }
 
 impl Provider {
     /// Wrap a provider, recording its exchanges under `agent` when asked.
-    pub(crate) fn new(inner: Box<dyn ModelProvider>, record: bool, agent: &str) -> Provider {
+    pub(crate) fn new(inner: Box<dyn ModelProvider + Send>, record: bool, agent: &str) -> Provider {
         if record {
             Provider::Recording(RecordingProvider::new(inner, agent))
         } else {
@@ -1469,6 +1472,40 @@ fn build_provider(
     } else {
         Provider::Plain(inner)
     })
+}
+
+/// Whether a `parallel map` in this run may overlap, and how many iterations.
+///
+/// The interesting half is whether there is anything to build a **second**
+/// provider from. Two arrangements have exactly one source of answers, and a run
+/// in either of them gets a ceiling of one:
+///
+/// * **a replay** has one tape, with one position in it;
+/// * **a recording** has one cassette being written, and a cassette somebody can
+///   review is written in index order — which needs per-iteration buffers this
+///   change does not have yet.
+///
+/// Neither is a special case for cassettes. One source of answers is a lock, and
+/// a lock is sequential execution with extra steps — the shape
+/// [RFC-0021](../../../rfcs/0021-a-fan-out-that-overlaps.md) states once and
+/// applies everywhere, including to a contained run, whose provider is a channel
+/// and which therefore reaches this the same way by never asking.
+fn fan_out(config: &RunConfig) -> FanOut {
+    if config.record.is_some() || config.provider == ProviderChoice::Replay {
+        return FanOut::default();
+    }
+    let selection = config.selection();
+    FanOut::new(
+        Box::new(move || {
+            // A provider that will not build is reported at the node that asked
+            // for it, like any other provider failure. `anyhow`'s chain is
+            // flattened with `:#` because `ProviderError` carries a message
+            // rather than a source to walk.
+            build_model_provider(&selection)
+                .map_err(|error| ProviderError::Configuration(format!("{error:#}")))
+        }),
+        config.models.fan_out_ceiling(),
+    )
 }
 
 /// Vendors that need no declaring, when a key for them is exported.
@@ -1531,7 +1568,9 @@ pub fn google_key_is_set() -> bool {
 /// the artifact asks for it, and then the router says so by name. A declared
 /// provider replaces a built-in of the same name, so `[[model.provider]] name =
 /// "openai"` points the familiar name somewhere else.
-fn available(selection: &ProviderSelection) -> Result<Vec<(String, Box<dyn ModelProvider>)>> {
+fn available(
+    selection: &ProviderSelection,
+) -> Result<Vec<(String, Box<dyn ModelProvider + Send>)>> {
     selection
         .models
         .validate(BUILT_IN_PROVIDERS)
@@ -1548,7 +1587,7 @@ fn available(selection: &ProviderSelection) -> Result<Vec<(String, Box<dyn Model
     // warning-free: a Docker build log full of noise is a Docker build log
     // nobody reads.
     #[allow(unused_mut)]
-    let mut providers: Vec<(String, Box<dyn ModelProvider>)> = Vec::new();
+    let mut providers: Vec<(String, Box<dyn ModelProvider + Send>)> = Vec::new();
 
     #[cfg(feature = "anthropic")]
     if !declared.contains("anthropic") && std::env::var_os("ANTHROPIC_API_KEY").is_some() {
@@ -1631,7 +1670,7 @@ fn available(selection: &ProviderSelection) -> Result<Vec<(String, Box<dyn Model
 /// The point of the default: an artifact that says `model exact "openai/…"`
 /// should just run, without the operator having to repeat that on the command
 /// line — and must never be answered by a vendor it did not name.
-fn auto(selection: &ProviderSelection) -> Result<Box<dyn ModelProvider>> {
+fn auto(selection: &ProviderSelection) -> Result<Box<dyn ModelProvider + Send>> {
     let mut providers = available(selection)?;
     if providers.is_empty() {
         bail!(
@@ -1666,7 +1705,7 @@ fn auto(selection: &ProviderSelection) -> Result<Box<dyn ModelProvider>> {
     Ok(Box::new(router))
 }
 
-fn anthropic(selection: &ProviderSelection) -> Result<Box<dyn ModelProvider>> {
+fn anthropic(selection: &ProviderSelection) -> Result<Box<dyn ModelProvider + Send>> {
     #[cfg(feature = "anthropic")]
     {
         Ok(Box::new(
@@ -1688,7 +1727,7 @@ fn anthropic(selection: &ProviderSelection) -> Result<Box<dyn ModelProvider>> {
     }
 }
 
-fn openai(selection: &ProviderSelection) -> Result<Box<dyn ModelProvider>> {
+fn openai(selection: &ProviderSelection) -> Result<Box<dyn ModelProvider + Send>> {
     #[cfg(feature = "openai")]
     {
         Ok(Box::new(
@@ -1710,7 +1749,7 @@ fn openai(selection: &ProviderSelection) -> Result<Box<dyn ModelProvider>> {
     }
 }
 
-fn google(selection: &ProviderSelection) -> Result<Box<dyn ModelProvider>> {
+fn google(selection: &ProviderSelection) -> Result<Box<dyn ModelProvider + Send>> {
     #[cfg(feature = "google")]
     {
         Ok(Box::new(
@@ -1866,6 +1905,10 @@ pub fn test(compilation: &Compilation, config: &TestConfig) -> Result<u8> {
                 // property `ingot test` can hold the agent to rather than a
                 // line nothing checks.
                 pricing: config.pricing.clone(),
+                // A test replays, so there is one tape and a fan-out has a
+                // ceiling of one. Not stated as a rule about tests: it is the
+                // absence of anything to build a second provider from.
+                fan_out: FanOut::default(),
             },
         );
 

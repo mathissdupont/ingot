@@ -7,19 +7,31 @@
 //!   approvals are enforced here from the artifact's own data, not trusted
 //!   because a compiler once looked at the source. Whoever runs an artifact is
 //!   often not whoever built it.
-//! * **`parallel` runs sequentially.** The compiler guarantees a map body
-//!   contains no state write, no emission and no checkpoint, so iterations
-//!   cannot observe each other and sequential execution yields the same result.
-//!   The IR node names an opportunity for concurrency, not an obligation.
+//! * **`parallel` overlaps only what can be duplicated.** The compiler
+//!   guarantees a map body contains no state write, no emission and no
+//!   checkpoint, so iterations cannot observe each other. Where a run can make a
+//!   second model provider, they run on separate threads; where it cannot — a
+//!   cassette is one tape, a contained run is one pair of pipes, a person is one
+//!   operator, a tool server is one child process — the fan-out has a ceiling of
+//!   one and runs as it always did. Either way the result and the event stream
+//!   are the same ones, because each iteration's events and charges are recorded
+//!   in a private trace and replayed into the run in **index order**. See
+//!   [`FanOut`] and [RFC-0021](../../../rfcs/0021-a-fan-out-that-overlaps.md).
 
-use std::collections::BTreeMap;
+use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet};
+use std::rc::Rc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
 
 use ingot_ir::{AgentIr, Decision, Node, NodeKind, RefScope, TemplatePart, Value as IrValue};
 use serde_json::{json, Value};
 
 use crate::events::{Artifact, EventSink, RunEvent, VerifyOutcome};
 use crate::price::{parse_micros, Pricing, Spend};
-use crate::provider::{CompletionRequest, ModelProvider, ModelSelection, ProviderError, Usage};
+use crate::provider::{
+    CompletionRequest, ModelProvider, ModelSelection, ProviderError, ProviderFactory, Usage,
+};
 use crate::schema;
 use crate::snapshot::{self, Resumption};
 use crate::tools::{
@@ -73,6 +85,12 @@ pub struct RunOptions {
     /// [Runtime 0.1 §8](../../../specs/runtime/v0.1.md) says a backend that
     /// cannot price a request must not pretend to.
     pub pricing: Pricing,
+    /// Whether iterations of a `parallel map` may overlap, and how many.
+    ///
+    /// Default is a ceiling of one, which is what every caller before
+    /// [RFC-0021](../../../rfcs/0021-a-fan-out-that-overlaps.md) got and what
+    /// every caller that supplies no factory keeps getting.
+    pub fan_out: FanOut,
 }
 
 impl Default for RunOptions {
@@ -85,12 +103,113 @@ impl Default for RunOptions {
             stop_at: None,
             resume: None,
             pricing: Pricing::default(),
+            fan_out: FanOut::default(),
+        }
+    }
+}
+
+/// What a fan-out needs in order to overlap.
+///
+/// Both halves have to be present for anything to happen concurrently, and the
+/// interesting one is `providers`: without a way to make a second provider there
+/// is one source of answers, one source is a lock, and a lock is sequential
+/// execution with extra steps. See [`ProviderFactory`].
+#[derive(Default)]
+pub struct FanOut {
+    /// A way to make one provider per overlapping iteration.
+    ///
+    /// `None` — the default — is a ceiling of one however large `ceiling` is.
+    pub providers: Option<ProviderFactory>,
+    /// How many iterations may have a call in flight, from
+    /// `[model] max-concurrency`.
+    ///
+    /// Zero and one both mean sequential. See
+    /// [`ModelConfig::fan_out_ceiling`](crate::catalogue::ModelConfig::fan_out_ceiling),
+    /// which is where a manifest's number is turned into this one.
+    pub ceiling: u32,
+}
+
+impl FanOut {
+    /// A fan-out that overlaps up to `ceiling` iterations, building a provider
+    /// for each with `factory`.
+    pub fn new(factory: ProviderFactory, ceiling: u32) -> FanOut {
+        FanOut {
+            providers: Some(factory),
+            ceiling,
         }
     }
 }
 
 /// Other agents this run may call.
 pub type AgentRegistry = BTreeMap<String, AgentIr>;
+
+/// What one iteration of an overlapping fan-out did, in the order it did it.
+///
+/// Events and charges go in **one** list rather than two, because the enclosing
+/// run has to reproduce them interleaved. A fan-out that trips a budget must emit
+/// exactly the events a sequential run would have emitted before it tripped, and
+/// no more — and that is only expressible if the trace remembers that the third
+/// event came after the second charge.
+enum Trace {
+    Event(RunEvent),
+    /// A step was charged at this node.
+    Step {
+        node: String,
+    },
+    /// A model answered, so tokens and cost are owed for it.
+    Usage {
+        node: String,
+        model: String,
+        usage: Usage,
+    },
+    /// A sub-agent finished, and its steps and tokens are owed at its call node
+    /// as one lump — which is exactly what a sequential run does with them.
+    Nested {
+        node: String,
+        steps: u32,
+        usage: Usage,
+    },
+}
+
+/// The sink an overlapping iteration writes into.
+///
+/// Shares the trace with the iteration's [`Interp`], which is why it holds an
+/// `Rc<RefCell<_>>`: an iteration is one thread doing one thing at a time, so
+/// this is the honest representation of the sharing rather than a compromise —
+/// the same reading [`crate::RecordingInterlocutor`] takes. Nothing here crosses
+/// a thread boundary; only the finished `Vec<Trace>` does.
+struct TraceSink(Rc<RefCell<Vec<Trace>>>);
+
+impl EventSink for TraceSink {
+    fn emit(&mut self, event: RunEvent) {
+        self.0.borrow_mut().push(Trace::Event(event));
+    }
+
+    /// Deltas are dropped inside a fan-out, deliberately.
+    ///
+    /// Eight concurrent answers interleaved line by line on one terminal is not a
+    /// feature, and prefixing each fragment with its index would make it
+    /// identifiable without making it readable. A delta is not an event
+    /// ([Runtime 0.3 §2](../../../specs/runtime/v0.3.md)) — never recorded, never
+    /// replayed, never asserted on — so this costs nothing but what a watcher
+    /// sees, which is the only basis it should be decided on. A provider that
+    /// streams still keeps the larger output ceiling; it streams into this.
+    fn delta(&mut self, _node: &str, _text: &str) {}
+
+    /// Nothing showed, so there is nothing to strike.
+    fn settled(&mut self, _node: &str, _kept: bool) {}
+}
+
+/// One finished iteration, waiting to be replayed into the run in index order.
+struct Iteration {
+    trace: Vec<Trace>,
+    /// The element's contribution, or why it has none.
+    outcome: Result<Value, RunError>,
+    /// Counters a snapshot would need, added to the run's in index order.
+    model_calls: u32,
+    tool_calls: u32,
+    consultations: u32,
+}
 
 struct Interp<'a> {
     ir: &'a AgentIr,
@@ -127,6 +246,24 @@ struct Interp<'a> {
     model_calls: u32,
     consultations: u32,
     tool_calls: u32,
+
+    /// A way to make one provider per overlapping iteration, and the ceiling on
+    /// how many. `None` is a ceiling of one.
+    ///
+    /// An iteration's own interpreter gets `None`, which is what makes a
+    /// `parallel` inside a `parallel` share the run's ceiling rather than
+    /// multiplying it: the inner fan-out has nothing to build providers with, so
+    /// it runs sequentially without a rule having to say so.
+    providers: Option<&'a ProviderFactory>,
+    ceiling: u32,
+
+    /// Where this interpreter records what it did, when it is one iteration of an
+    /// overlapping fan-out.
+    ///
+    /// Its counters are local and its sink is a buffer, so the enclosing run
+    /// charges and emits these afterwards in index order. `None` for every other
+    /// run, which charges and emits as it goes.
+    trace: Option<Rc<RefCell<Vec<Trace>>>>,
 }
 
 /// Execute an agent.
@@ -146,6 +283,7 @@ pub fn run(
         stop_at,
         resume,
         pricing,
+        fan_out,
     } = options;
     run_nested(
         ir,
@@ -159,7 +297,129 @@ pub fn run(
         memory,
         Interruption { stop_at, resume },
         &pricing,
+        Overlap {
+            providers: fan_out.providers.as_ref(),
+            ceiling: fan_out.ceiling,
+            trace: None,
+        },
     )
+}
+
+/// One iteration of an overlapping fan-out, on its own thread.
+///
+/// A free function rather than a method because there is no `&mut self` to have:
+/// several of these run at once against the same enclosing run. Everything it
+/// touches belongs to its worker — the worker's provider, its own bindings, its
+/// own counters, its own trace — so nothing here is shared and nothing is locked.
+/// `provider` is the worker's, reused across the iterations that worker claims,
+/// which is what keeps the connection pools bounded by the ceiling rather than by
+/// the item count.
+///
+/// It returns rather than fails. An iteration's error is its element's
+/// contribution, and the fan-out decides what to do with it once every iteration
+/// has finished and they can be considered in index order.
+#[allow(clippy::too_many_arguments)]
+fn run_iteration(
+    ir: &AgentIr,
+    registry: &AgentRegistry,
+    node: &Node,
+    binder: &str,
+    item: Value,
+    index: usize,
+    total: usize,
+    last_body_node: Option<&str>,
+    bindings: &BTreeMap<String, Value>,
+    state: &BTreeMap<String, Value>,
+    memory: &BTreeMap<String, Value>,
+    pricing: &Pricing,
+    step_headroom: u32,
+    provider: &mut dyn ModelProvider,
+) -> Iteration {
+    let trace = Rc::new(RefCell::new(Vec::new()));
+    let mut sink = TraceSink(Rc::clone(&trace));
+    // First, so that splicing this trace puts the iteration's own event exactly
+    // where the sequential path emits it: before the body runs.
+    sink.emit(RunEvent::MapIteration {
+        node: node.id.clone(),
+        index,
+        total,
+    });
+
+    let finish = |trace: &Rc<RefCell<Vec<Trace>>>, outcome, calls: (u32, u32, u32)| Iteration {
+        trace: std::mem::take(&mut *trace.borrow_mut()),
+        outcome,
+        model_calls: calls.0,
+        tool_calls: calls.1,
+        consultations: calls.2,
+    };
+
+    // Neither of these is meant to be reached: a body that would touch a tool
+    // server or a person has a ceiling of one, by `fan_out_ceiling`. They are here
+    // so that a body which reaches one anyway fails loudly instead of quietly
+    // doing something else.
+    let mut tools = crate::tools::DenyAllTools;
+    let mut approval = HumanChannel::Deny;
+
+    let mut iteration_bindings = bindings.clone();
+    iteration_bindings.insert(binder.to_string(), item);
+
+    let mut interp = Interp {
+        ir,
+        registry,
+        provider,
+        tools: &mut tools,
+        sink: &mut sink,
+        approval: &mut approval,
+        bindings: iteration_bindings,
+        state: state.clone(),
+        memory: memory.clone(),
+        // Nothing an iteration produces reaches these. An emission is refused
+        // here (`ING6005`) and a state write with it, so an iteration that
+        // somehow made one would have it discarded -- which is why
+        // `body_holds_something_singular` looks for both and takes the
+        // sequential path when it finds one.
+        outputs: BTreeMap::new(),
+        // Counters start at nothing and are bounded by what is left of the run's
+        // step budget. The enclosing run charges the real ones from the trace, in
+        // index order, once every iteration has finished.
+        steps: 0,
+        max_steps: step_headroom,
+        usage: Usage::default(),
+        pricing: pricing.clone(),
+        spend: Spend::default(),
+        // An iteration is never stopped at: a `checkpoint` cannot appear in a
+        // `parallel` body, and a stop is a property of the run an operator asked
+        // for.
+        stop_at: None,
+        stopped: None,
+        run_inputs: BTreeMap::new(),
+        model_calls: 0,
+        consultations: 0,
+        tool_calls: 0,
+        // No factory, which is what makes a `parallel` inside a `parallel` share
+        // the run's ceiling rather than multiply it.
+        providers: None,
+        ceiling: 1,
+        trace: Some(Rc::clone(&trace)),
+    };
+
+    let outcome = match interp.run_region(node.body.as_deref()) {
+        Ok(()) => interp.iteration_value(node, last_body_node),
+        Err(error) => Err(error),
+    };
+    let calls = (interp.model_calls, interp.tool_calls, interp.consultations);
+    finish(&trace, outcome, calls)
+}
+
+/// What one interpreter knows about overlapping, handed down a run.
+///
+/// Separate from [`FanOut`] because a sub-agent and a fan-out iteration inherit
+/// different parts of it: a sub-agent keeps the factory and records nothing of
+/// its own, an iteration keeps a trace and no factory.
+struct Overlap<'a> {
+    providers: Option<&'a ProviderFactory>,
+    ceiling: u32,
+    trace: Option<Rc<RefCell<Vec<Trace>>>>,
 }
 
 /// The body of a run, with the approval mode **borrowed** rather than owned.
@@ -189,6 +449,9 @@ fn run_nested(
     // Prices are a property of the deployment, not of an agent, so a sub-agent
     // is charged with the same ones its caller was.
     pricing: &Pricing,
+    // Whether a `parallel map` in this run may overlap, and where this run
+    // records what it did.
+    overlap: Overlap<'_>,
 ) -> Result<RunReport, RunError> {
     check_ir_version(ir)?;
 
@@ -340,6 +603,9 @@ fn run_nested(
             .as_ref()
             .map(|snapshot| snapshot.tool_calls)
             .unwrap_or(0),
+        providers: overlap.providers,
+        ceiling: overlap.ceiling,
+        trace: overlap.trace,
     };
 
     let result = interp.run_region(entry.as_deref());
@@ -511,6 +777,11 @@ impl Interp<'_> {
     // --- budgets ----------------------------------------------------------
 
     fn charge_step(&mut self, node: &Node) -> Result<(), RunError> {
+        if let Some(trace) = &self.trace {
+            trace.borrow_mut().push(Trace::Step {
+                node: node.id.clone(),
+            });
+        }
         self.steps += 1;
         if self.steps > self.max_steps {
             return Err(RunError::BudgetExceeded {
@@ -520,6 +791,22 @@ impl Interp<'_> {
             });
         }
         Ok(())
+    }
+
+    /// Charge what a model answer costs: tokens, then money.
+    ///
+    /// One place rather than two call sites, so an overlapping iteration records
+    /// the pair exactly where a sequential run charges it.
+    fn charge_usage(&mut self, node: &Node, model: &str, usage: Usage) -> Result<(), RunError> {
+        if let Some(trace) = &self.trace {
+            trace.borrow_mut().push(Trace::Usage {
+                node: node.id.clone(),
+                model: model.to_string(),
+                usage,
+            });
+        }
+        self.charge_tokens(node, usage)?;
+        self.charge_cost(node, model, usage)
     }
 
     /// Charge what a call cost, and stop when the artifact's ceiling is passed.
@@ -704,8 +991,7 @@ impl Interp<'_> {
             response_type,
             usage: response.usage,
         });
-        self.charge_tokens(node, response.usage)?;
-        self.charge_cost(node, &response.model, response.usage)?;
+        self.charge_usage(node, &response.model, response.usage)?;
         self.bind(node, response.value);
         Ok(())
     }
@@ -830,6 +1116,15 @@ impl Interp<'_> {
             // caller could hold or continue.
             Interruption::default(),
             &self.pricing,
+            // The factory carries down: a sub-agent's own fan-out may overlap for
+            // the same reason its caller's may. The trace does not — a sub-agent
+            // reports its steps and tokens as a total, and `Trace::Nested` charges
+            // that total at this node, so recording them twice would double them.
+            Overlap {
+                providers: self.providers,
+                ceiling: self.ceiling,
+                trace: None,
+            },
         )
         .map_err(|error| RunError::SubAgent {
             node: node.id.clone(),
@@ -837,6 +1132,13 @@ impl Interp<'_> {
             source: Box::new(error),
         })?;
 
+        if let Some(trace) = &self.trace {
+            trace.borrow_mut().push(Trace::Nested {
+                node: node.id.clone(),
+                steps: report.steps,
+                usage: report.usage,
+            });
+        }
         self.steps += report.steps;
         self.charge_tokens(node, report.usage)?;
 
@@ -874,10 +1176,10 @@ impl Interp<'_> {
         self.run_region(arm)
     }
 
-    /// Run a `parallel` body once per element, sequentially.
+    /// Run a `parallel` body once per element, overlapping where it can.
     ///
-    /// See the module documentation: the compiler guarantees iterations are
-    /// independent, so this produces the same result as concurrent execution.
+    /// Both paths produce the same values and the same events. See
+    /// [`Interp::fan_out_ceiling`] for what decides between them.
     fn run_parallel(&mut self, node: &Node) -> Result<(), RunError> {
         let source = node
             .source
@@ -899,53 +1201,326 @@ impl Interp<'_> {
             .transpose()?
             .flatten();
 
+        // One element cannot overlap with anything, and nor can none.
+        let ceiling = if items.len() > 1 {
+            self.fan_out_ceiling(node)
+        } else {
+            1
+        };
+
+        let shadowed = self.bindings.remove(&binder);
+        let collected = if ceiling > 1 {
+            self.overlapping_iterations(node, &binder, items, last_body_node.as_deref(), ceiling)
+        } else {
+            self.one_iteration_at_a_time(node, &binder, items, last_body_node.as_deref())
+        };
+
+        // Restored whether the iterations succeeded or not: the binder is a name
+        // this region introduced, and leaving it bound would leak it into
+        // whatever handles the failure.
+        self.bindings.remove(&binder);
+        if let Some(shadowed) = shadowed {
+            self.bindings.insert(binder, shadowed);
+        }
+        self.bind(node, Value::Array(collected?));
+        Ok(())
+    }
+
+    /// The path a run takes when its fan-out has a ceiling of one.
+    ///
+    /// Unchanged from before there was another path, including the partial list a
+    /// stop leaves behind: a `--stop-at` unwinds every enclosing region without
+    /// running another node, and a fan-out that was interrupted collected only
+    /// what it got to.
+    fn one_iteration_at_a_time(
+        &mut self,
+        node: &Node,
+        binder: &str,
+        items: Vec<Value>,
+        last_body_node: Option<&str>,
+    ) -> Result<Vec<Value>, RunError> {
         let total = items.len();
         let mut collected = Vec::with_capacity(total);
-        let shadowed = self.bindings.remove(&binder);
-
         for (index, item) in items.into_iter().enumerate() {
             self.sink.emit(RunEvent::MapIteration {
                 node: node.id.clone(),
                 index,
                 total,
             });
-            self.bindings.insert(binder.clone(), item);
+            self.bindings.insert(binder.to_string(), item);
             self.run_region(node.body.as_deref())?;
             if self.stopped.is_some() {
                 break;
             }
+            collected.push(self.iteration_value(node, last_body_node)?);
+        }
+        Ok(collected)
+    }
 
-            // The value of an iteration is the result of the last node in the
-            // body — the rule the IR specification states.
-            //
-            // A last node with no binding has no result, so an artifact that
-            // ends a map body with one is malformed. It used to collect `null`
-            // per element instead, which is a list of the right length and the
-            // wrong contents: the failure surfaced wherever the list was
-            // eventually used, a long way from the node that caused it.
-            let value = match &last_body_node {
-                Some(id) => {
-                    let last = self.node(id)?.clone();
-                    match &last.binding {
-                        Some(name) => self.bindings.get(name).cloned().unwrap_or(Value::Null),
-                        None => {
-                            return Err(RunError::MalformedIr(format!(
-                                "`{}` ends its body at `{id}`, which binds nothing, so an                                  iteration has no value to collect",
-                                node.id
-                            )))
+    /// The value of one iteration: the result of the last node in the body, the
+    /// rule the IR specification states.
+    ///
+    /// A last node with no binding has no result, so an artifact that ends a map
+    /// body with one is malformed. It used to collect `null` per element instead,
+    /// which is a list of the right length and the wrong contents: the failure
+    /// surfaced wherever the list was eventually used, a long way from the node
+    /// that caused it.
+    fn iteration_value(
+        &self,
+        node: &Node,
+        last_body_node: Option<&str>,
+    ) -> Result<Value, RunError> {
+        let Some(id) = last_body_node else {
+            return Ok(Value::Null);
+        };
+        match &self.node(id)?.binding {
+            Some(name) => Ok(self.bindings.get(name).cloned().unwrap_or(Value::Null)),
+            None => Err(RunError::MalformedIr(format!(
+                "`{}` ends its body at `{id}`, which binds nothing, so an iteration has no \
+                 value to collect",
+                node.id
+            ))),
+        }
+    }
+
+    /// How many iterations of this fan-out may have a call in flight.
+    ///
+    /// One unless **every** source of answers the body touches can be duplicated.
+    /// Two of the four need no looking for — a run with no
+    /// [`ProviderFactory`] has one provider, and an operator who wrote
+    /// `max-concurrency = 1` has said what they want — and the other two are read
+    /// from the artifact by [`Interp::body_holds_something_singular`].
+    fn fan_out_ceiling(&self, node: &Node) -> u32 {
+        if self.providers.is_none() || self.ceiling <= 1 {
+            return 1;
+        }
+        if self.body_holds_something_singular(node) {
+            return 1;
+        }
+        self.ceiling
+    }
+
+    /// Whether the body reaches something a run has only one of, or something a
+    /// checked artifact would not have put there.
+    ///
+    /// Three of these exist once: a **tool server** is a child process, started
+    /// once and handshaken once, and possibly started `--allow-write`; an
+    /// **approval** and a **consultation** both reach one person, and the order
+    /// they are asked in is observable to them — which is the argument `ING6005`
+    /// already makes about `consult`, applied to the gate a policy inserts rather
+    /// than the one an author writes. A policy that requires approval for an
+    /// effect makes the compiler put an `Approval` node ahead of the call, so a
+    /// body that will stop for somebody says so in the IR before the run starts.
+    ///
+    /// The other three — a state write, an emission, a checkpoint — cannot appear
+    /// here in a checked artifact (`ING6005`). They are looked for anyway, because
+    /// an unchecked one has to behave exactly as it does today rather than
+    /// differently: a write reaching a clone of the state and being discarded is a
+    /// worse answer than a write that happens.
+    ///
+    /// Descends into sub-agents, because a callee's tool call is still a tool
+    /// call. A cycle cannot occur in a checked artifact and is survived anyway.
+    fn body_holds_something_singular(&self, node: &Node) -> bool {
+        let mut visited_agents = BTreeSet::new();
+        self.region_holds_something_singular(self.ir, node.body.as_deref(), &mut visited_agents)
+    }
+
+    fn region_holds_something_singular(
+        &self,
+        ir: &AgentIr,
+        entry: Option<&str>,
+        visited_agents: &mut BTreeSet<String>,
+    ) -> bool {
+        let mut pending: Vec<String> = entry.map(str::to_string).into_iter().collect();
+        let mut visited: BTreeSet<String> = BTreeSet::new();
+        while let Some(id) = pending.pop() {
+            if !visited.insert(id.clone()) {
+                continue;
+            }
+            let Some(node) = ir.node(&id) else {
+                // A dangling id is malformed, and the run says so where it
+                // reaches it. Not a reason to overlap on a guess.
+                return true;
+            };
+            match node.kind {
+                NodeKind::ToolCall
+                | NodeKind::Approval
+                | NodeKind::Consult
+                | NodeKind::StateWrite
+                | NodeKind::ArtifactEmit
+                | NodeKind::Checkpoint => return true,
+                NodeKind::AgentCall => {
+                    let Some(name) = &node.agent else {
+                        return true;
+                    };
+                    if visited_agents.insert(name.clone()) {
+                        let Some(callee) = self.registry.get(name) else {
+                            return true;
+                        };
+                        if self.region_holds_something_singular(
+                            callee,
+                            callee.entry.as_deref(),
+                            visited_agents,
+                        ) {
+                            return true;
                         }
                     }
                 }
-                None => Value::Null,
-            };
-            collected.push(value);
+                _ => {}
+            }
+            pending.extend(node.next.clone());
+            pending.extend(node.then.clone());
+            pending.extend(node.otherwise.clone());
+            pending.extend(node.body.clone());
+        }
+        false
+    }
+
+    /// Run the iterations on their own threads, then replay what each did into
+    /// the run in **index order**.
+    ///
+    /// Nothing is shared and nothing is locked but the slot each finished
+    /// iteration is dropped into. That is the point of the ceiling: a source that
+    /// could not be duplicated would have to be locked, and a lock is this
+    /// function's sequential twin with extra steps.
+    fn overlapping_iterations(
+        &mut self,
+        node: &Node,
+        binder: &str,
+        items: Vec<Value>,
+        last_body_node: Option<&str>,
+        ceiling: u32,
+    ) -> Result<Vec<Value>, RunError> {
+        let Some(factory) = self.providers else {
+            // `fan_out_ceiling` returns one without a factory, so this cannot
+            // happen; doing the sequential thing beats asserting about it.
+            return self.one_iteration_at_a_time(node, binder, items, last_body_node);
+        };
+
+        let total = items.len();
+        let workers = (ceiling as usize).min(total);
+        // What is left of the run's step budget, so no single iteration can
+        // outspend the run — the same bound a sub-agent gets.
+        let headroom = self.max_steps.saturating_sub(self.steps).max(1);
+
+        // One provider per **worker**, not per iteration. A thousand items under a
+        // ceiling of four is four connection pools rather than a thousand, which
+        // is the whole reason the ceiling is worth having: the pools are what a
+        // per-iteration instance costs, and the ceiling is what bounds them.
+        //
+        // Built before anything runs, so a provider that will not build is a
+        // fan-out that fails having spent nothing, at the node that would have
+        // used it. A worker reuses its instance across the iterations it claims,
+        // one at a time, so exclusive access stays literally true.
+        let mut providers = Vec::with_capacity(workers);
+        for _ in 0..workers {
+            providers.push(factory().map_err(|source| RunError::Provider {
+                node: node.id.clone(),
+                source,
+            })?);
         }
 
-        self.bindings.remove(&binder);
-        if let Some(shadowed) = shadowed {
-            self.bindings.insert(binder, shadowed);
+        // Everything an iteration reads. A `parallel` body holds no state write,
+        // no emission and no checkpoint, so these are handed over as clones and
+        // never merged back.
+        let ir = self.ir;
+        let registry = self.registry;
+        let bindings = &self.bindings;
+        let state = &self.state;
+        let memory = &self.memory;
+        let pricing = &self.pricing;
+        let items = &items;
+
+        let claimed = AtomicUsize::new(0);
+        let outcomes: Mutex<Vec<Option<Iteration>>> =
+            Mutex::new((0..total).map(|_| None).collect());
+        let next = &claimed;
+        let slots = &outcomes;
+
+        std::thread::scope(|scope| {
+            for mut provider in providers {
+                scope.spawn(move || loop {
+                    let index = next.fetch_add(1, Ordering::Relaxed);
+                    if index >= total {
+                        break;
+                    }
+                    let iteration = run_iteration(
+                        ir,
+                        registry,
+                        node,
+                        binder,
+                        items[index].clone(),
+                        index,
+                        total,
+                        last_body_node,
+                        bindings,
+                        state,
+                        memory,
+                        pricing,
+                        headroom,
+                        &mut *provider,
+                    );
+                    // Poisoning means another iteration panicked, which the scope
+                    // is about to re-raise. Taking the lock anyway leaves that
+                    // panic as the one reported rather than this one.
+                    let mut slots = slots
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    slots[index] = Some(iteration);
+                });
+            }
+        });
+
+        let finished = outcomes
+            .into_inner()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        let mut collected = Vec::with_capacity(total);
+        for (index, iteration) in finished.into_iter().enumerate() {
+            let Some(iteration) = iteration else {
+                return Err(RunError::MalformedIr(format!(
+                    "`{}` iteration {index} produced nothing",
+                    node.id
+                )));
+            };
+            // Charging and emitting happen here, on this thread, in this order.
+            // A budget therefore trips at the total sequential execution would
+            // have reached, at the node it would have reached it, having emitted
+            // the events it would have emitted and no others.
+            self.replay(iteration.trace)?;
+            self.model_calls += iteration.model_calls;
+            self.tool_calls += iteration.tool_calls;
+            self.consultations += iteration.consultations;
+            // The first failure in index order, not the first in time: which
+            // error an operator is shown must not depend on which socket answered
+            // first. Every iteration has already run to completion by now, so
+            // nothing is being cancelled here -- the cost of a failing fan-out is
+            // the whole fan-out, and it does not depend on the schedule either.
+            collected.push(iteration.outcome?);
         }
-        self.bind(node, Value::Array(collected));
+        Ok(collected)
+    }
+
+    /// Charge and emit what one iteration did, in the order it did it.
+    fn replay(&mut self, trace: Vec<Trace>) -> Result<(), RunError> {
+        for entry in trace {
+            match entry {
+                Trace::Event(event) => self.sink.emit(event),
+                Trace::Step { node } => {
+                    let node = self.node(&node)?.clone();
+                    self.charge_step(&node)?;
+                }
+                Trace::Usage { node, model, usage } => {
+                    let node = self.node(&node)?.clone();
+                    self.charge_usage(&node, &model, usage)?;
+                }
+                Trace::Nested { node, steps, usage } => {
+                    let node = self.node(&node)?.clone();
+                    self.steps += steps;
+                    self.charge_tokens(&node, usage)?;
+                }
+            }
+        }
         Ok(())
     }
 

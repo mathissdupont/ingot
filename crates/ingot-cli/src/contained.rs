@@ -463,6 +463,11 @@ pub fn exec() -> Result<u8> {
             // contained run reports its cost budget as uncharged rather than
             // charging it against prices it was not given.
             pricing: Default::default(),
+            // No factory, so a fan-out inside the box has a ceiling of one. The
+            // provider here *is* the supervisor channel -- request and reply over
+            // one pair of pipes -- so there is nothing a second instance could
+            // be, and the sequential answer falls out rather than being decided.
+            fan_out: Default::default(),
         },
     );
 

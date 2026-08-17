@@ -16,10 +16,15 @@ use crate::provider::{
 };
 
 /// Dispatches on the `vendor/` prefix of a pinned model reference.
+///
+/// The routes are `Send` because a router is what a live run usually holds, and a
+/// fan-out builds one per overlapping iteration — see
+/// [`ProviderFactory`](crate::provider::ProviderFactory). Nothing here is called
+/// from two threads at once; each thread has its own router.
 pub struct RoutingProvider {
-    routes: BTreeMap<String, Box<dyn ModelProvider>>,
+    routes: BTreeMap<String, Box<dyn ModelProvider + Send>>,
     /// Used when the artifact pins nothing, or pins a vendor with no route.
-    fallback: Option<Box<dyn ModelProvider>>,
+    fallback: Option<Box<dyn ModelProvider + Send>>,
     fallback_name: String,
     /// The name reported for the last call, so a run log names the provider
     /// that actually answered rather than "router".
@@ -37,7 +42,11 @@ impl RoutingProvider {
     }
 
     /// Register the provider for a vendor prefix.
-    pub fn with(mut self, vendor: impl Into<String>, provider: Box<dyn ModelProvider>) -> Self {
+    pub fn with(
+        mut self,
+        vendor: impl Into<String>,
+        provider: Box<dyn ModelProvider + Send>,
+    ) -> Self {
         self.routes.insert(vendor.into(), provider);
         self
     }
@@ -47,7 +56,11 @@ impl RoutingProvider {
     /// `vendor` is the operator's label for it, which is not the same as the
     /// provider's own name: a service called `local` may well speak the OpenAI
     /// protocol, and an artifact that pins `local/…` means the label.
-    pub fn or_else(mut self, vendor: impl Into<String>, provider: Box<dyn ModelProvider>) -> Self {
+    pub fn or_else(
+        mut self,
+        vendor: impl Into<String>,
+        provider: Box<dyn ModelProvider + Send>,
+    ) -> Self {
         self.fallback_name = vendor.into();
         self.fallback = Some(provider);
         self
