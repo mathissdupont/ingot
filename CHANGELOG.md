@@ -44,6 +44,25 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
   Nothing shows deltas from inside a fan-out. Eight answers interleaved fragment
   by fragment on one terminal is not a live view of anything.
 
+  **The default of four is aimed at a hosted API, and on a local model it can be
+  too high.** Measured against one 8B model under Ollama on an 8 GB card, the same
+  fan-out took 19–21 s at `1` and 24 s at `4`: four concurrent requests need four
+  KV caches, and they did not fit beside the weights. The results were identical,
+  which is the property that matters — but the wall clock went the wrong way, and
+  [the guide](docs/guide/the-toolchain.md#how-many-calls-at-once) now says so and
+  says how to tell. It is also the clearest argument yet that this number belongs
+  to the deployment: the same agent wants `1` on that machine and `8` against a
+  hosted endpoint, and nothing in the program could say which.
+
+### Fixed
+
+- **The routing notice is printed once again.** `model calls go to local` was
+  emitted by every provider construction, so an overlapping fan-out printed it
+  once per worker. It describes a run's routing, not an instance, and five copies
+  of it told an operator only how many threads there were — the one thing about a
+  run that is deliberately not observable. Found by running a fan-out against a
+  local Ollama rather than by a test, which is why it is worth naming.
+
 ### Changed
 
 - **`ingot-runtime` (breaking, the crate only).** `catalogue::build` returns

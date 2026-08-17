@@ -169,6 +169,7 @@ impl RunConfig {
             models: self.models.clone(),
             replay_from: 0,
             strict_replay: true,
+            announce_routing: true,
         }
     }
 }
@@ -192,6 +193,16 @@ pub struct ProviderSelection {
     /// run has to start where the first stopped. Zero for a run that is not a
     /// resumption, and ignored by every provider that is not a replay.
     pub replay_from: usize,
+    /// Whether to print the one-line routing notice for this build.
+    ///
+    /// The notice says which service a **run's** calls go to, so it belongs to
+    /// the run and not to a provider instance. A fan-out builds one provider per
+    /// overlapping worker
+    /// ([RFC-0021](../../../rfcs/0021-a-fan-out-that-overlaps.md)), and those
+    /// builds are silent: printing the same line five times told an operator
+    /// nothing except how many threads there were, which is the one thing about a
+    /// run that is deliberately not observable.
+    pub announce_routing: bool,
     /// Whether a replayed interaction must match the request that recorded it.
     ///
     /// A run replays strictly: an edited prompt must fail loudly rather than be
@@ -1494,7 +1505,12 @@ fn fan_out(config: &RunConfig) -> FanOut {
     if config.record.is_some() || config.provider == ProviderChoice::Replay {
         return FanOut::default();
     }
-    let selection = config.selection();
+    let selection = ProviderSelection {
+        // Silent: the run announced its routing when it built its own provider,
+        // and a worker's build is the same routing again.
+        announce_routing: false,
+        ..config.selection()
+    };
     FanOut::new(
         Box::new(move || {
             // A provider that will not build is reported at the node that asked
@@ -1701,7 +1717,9 @@ fn auto(selection: &ProviderSelection) -> Result<Box<dyn ModelProvider + Send>> 
         router = router.with(vendor, provider);
     }
 
-    eprintln!("{}", router.describe());
+    if selection.announce_routing {
+        eprintln!("{}", router.describe());
+    }
     Ok(Box::new(router))
 }
 

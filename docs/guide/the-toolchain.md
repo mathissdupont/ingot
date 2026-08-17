@@ -411,11 +411,26 @@ terms.
 max-concurrency = 8     # 0 and 1 both mean one at a time
 ```
 
-Absent, it is **four**. Ten documents summarised by a thirty-second model call
-each is a little over a minute rather than five, and a fan-out over a thousand
-items still opens four connections rather than a thousand — each concurrent
-iteration gets its own provider, so the ceiling is also the number of connection
-pools your run holds.
+Absent, it is **four**. Against a service that answers four requests at once, ten
+documents summarised by a thirty-second call each is a little over a minute
+rather than five. A fan-out over a thousand items still opens four connections
+rather than a thousand: each concurrent iteration gets its own provider, so the
+ceiling is also the number of connection pools your run holds.
+
+**On a local model, raising it can make a run slower, and the default may already
+be too high.** Measured on one 8B model under Ollama on an 8 GB card: with
+`max-concurrency = 1` the same fan-out took 19–21 s, and with `4` it took 24 s.
+Nothing was wrong with either run — the results were byte-identical — but four
+concurrent requests need four KV caches, and on a card with about 2 GB free after
+the weights they do not fit. What the server does about that costs more than the
+overlap saves.
+
+So the number to reach for on a machine serving one model to one person is
+usually `1`, and this is the clearest case for why the ceiling is deployment
+configuration rather than something the artifact states: **the same agent wants
+`1` here and `8` against a hosted API,** and nothing in the program could tell
+you which. Measure it rather than assuming; `ollama ps` will tell you how much
+context the server actually kept and whether the weights are still on the GPU.
 
 It is under `[model]` rather than on one provider because a run routes to one
 provider at a time: the number bounds what your run asks for, not what an
