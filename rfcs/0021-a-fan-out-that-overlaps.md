@@ -106,12 +106,19 @@ child process that was started once, handshaken once, and may have been started
 starting eight copies of somebody else's program, and a write-capable server in
 eight instances is a different arrangement from the one the operator approved —
 the shape [GAP-035](../docs/gaps.md#gap-035) already warns about for memory
-stores. So the host is shared and its calls serialise behind a lock.
+stores.
 
-**The consequence, stated plainly.** A `parallel map` whose body is mostly
-`call` gains almost nothing. One whose body is mostly `ask` gains almost
-everything. This is a real limitation and it gets a register entry rather than
-a footnote — see *Opens*, below.
+**And in this RFC a body that calls a tool does not overlap at all.** Sharing the
+host behind a lock — so that a mixed body's `ask`s overlap while its `call`s
+queue — is better and is deliberately left for a second change: it needs `ToolHost`
+to gain `Send`, a proxy that locks per call, and per-iteration recording buffers so
+`--record` still writes one reviewable cassette. Taking the concession now keeps
+the first change to one trait's return type and no locks anywhere.
+
+**The consequence, stated plainly.** A `parallel map` whose body calls a tool
+gains nothing yet. One whose body only asks gains almost everything. This is a
+real limitation and it gets a register entry rather than a footnote — see *Opens*,
+below.
 
 ## The ceiling
 
@@ -139,6 +146,45 @@ an endpoint's capacity. If that turns out to be wrong — a deployment with a
 generous gateway and a stingy local server — moving it to the provider is
 additive and can happen later.
 
+## What reading the code changed
+
+This section was added when the RFC was picked up for implementation. Three of
+its claims did not survive contact with the code, and each is corrected in place
+below rather than left to be discovered by whoever built it.
+
+**Digest matching does not buy determinism.** The rule was: replay takes the
+first unconsumed row whose digest matches, and that is well defined even when two
+rows share a digest, "because which *answer* each iteration gets cannot change
+the result — the requests were identical". The requests are identical; **the
+recorded answers need not be.** A fan-out over `["X", "X"]` issues two identical
+requests, a live model answers `"foo"` and `"bar"`, and the recording holds two
+rows with one digest and two values. Replay them concurrently and the iteration
+that arrives first takes row 0, so the collected list is `[foo, bar]` or
+`[bar, foo]` depending on the schedule. That is the flake the rule existed to
+prevent. The RFC's own test list missed it:
+`two_iterations_with_identical_requests_each_get_an_answer` asserts that each
+gets *an* answer, never *which*.
+
+**And concurrency under replay was never real anyway.** One cassette is one tape
+with one position in it, so every replayed call serialises behind it — the
+per-iteration-instance trick that makes live calls overlap has nothing to
+duplicate. Concurrent replay and sequential replay therefore differ in exactly
+one respect, arrival order, which is the defect above, and they differ in no
+other: there is no socket to wait on, so the wall-clock win is zero. The rule is
+replaced by the ceiling below, and **the cassette format is not touched at all.**
+
+**The interpreter cannot reach `catalogue::build`.** "Each iteration gets its own
+instance, built from the same declaration by `catalogue::build`" has nothing to
+stand on: `run` is handed a `&mut dyn ModelProvider` and never sees a
+`ProviderConfig`. What is needed is a **factory**, and its absence turns out to
+be the honest signal for the ceiling — see *The contract change*.
+
+**A locked step counter is less deterministic than no lock.** Charging every
+iteration against one counter makes *which* iteration trips a budget depend on
+which thread got there first. Per-iteration counters summed in index order
+afterwards reproduce the sequential outcome exactly. See *Failure, and what it
+costs*.
+
 ## Determinism: three rules, none optional
 
 ### The event stream is spliced in index order
@@ -156,29 +202,47 @@ this feature. If it needs adjusting, the feature is wrong.
 The cost is a watcher's: nothing from inside a fan-out appears until the fan-out
 is done. That is what buys the property, and it is the honest trade.
 
-### Replay matches by digest
+### A fan-out overlaps only what can be duplicated
 
-`ReplayProvider`, `ReplayToolHost` and `ReplayConsultations` stop taking the
-next row by position and take **the first unconsumed row whose digest matches**.
+Overlap needs one thing from every source of answers an iteration touches: a
+second instance of it. **A source that exists once is a lock, and a lock is
+sequential execution with extra steps** — plus, as the digest rule found out, a
+schedule-dependent assignment of answers to iterations.
 
-This needs no new cassette format. Every row already carries the digest —
-`request_digest` on an interaction, `invocation_digest` on a tool call,
-`question_digest` on a consultation — because
-[RFC-0020](0020-a-person-in-the-loop.md) and its predecessors put them there to
-*verify* a position match. The change is which of the two is the key and which
-is the check. **Cassette 0.3 is unchanged, and an 0.2 cassette still replays.**
+So the rule is stated the other way round from how it is usually reached. Rather
+than a list of situations that get an exception, there is one question put to each
+source of answers, and four of them answer no:
 
-Two rows may legitimately carry the same digest: two iterations over identical
-items ask identical questions. "First unconsumed match" is well defined for
-that, and it is deterministic regardless of arrival order, because which
-*answer* each iteration gets cannot change the result — the requests were
-identical.
+| Source | Why there is only one | What the runtime looks at |
+|---|---|---|
+| A cassette | one tape, one position in it | the run was given no provider factory |
+| A contained run's supervisor | request/reply over one pair of pipes | the same — the guest's provider *is* the channel |
+| A person | there is one operator, and **the order they are asked in is observable to them** | the body holds an `approval` or a `consult` node |
+| A tool server | a child process, started once, handshaken once, possibly `--allow-write` | the body holds a `call` |
 
-What is lost is a diagnostic: today a mismatch can say *interaction 3 was
-recorded for a different prompt*. With digest lookup, a request that matches
-nothing must say *no recorded interaction matches this request*, and name the
-node. That is a slightly worse message for a strictly better property, and the
-message should list what the cassette does hold for that node.
+Each of those caps the fan-out at one iteration, which is sequential execution —
+what this project has been doing all along, and conforming while doing it.
+
+The first two need no detection at all: they *are* the absence of a factory, so
+they cost no code and cannot be got wrong. The third is read from the artifact,
+where the compiler has already put it — a policy that requires approval for an
+effect makes the compiler insert an `Approval` node ahead of the call, so a body
+that will stop for a person says so in the IR before the run starts. **This is why
+`Interlocutor` needs no `Send` bound and `HumanChannel` never crosses a thread.**
+It is also the same argument `ING6005` already makes about `consult`, applied to
+the gate a policy inserts rather than the one an author writes.
+
+The fourth is the expensive one, and it is a concession rather than a principle: a
+shared `ToolHost` behind a lock *would* let a body's `ask`s overlap while its
+`call`s serialised. That is strictly better, and it is left for a second change,
+because it needs `ToolHost` to gain `Send`, a locking proxy, and per-iteration
+recording buffers for `--record`. Until then a body that calls a tool runs
+sequentially, and the register says so rather than the release notes.
+
+**Nothing about a cassette changes.** Not the format, not the version, not the
+matching rule, not one diagnostic. `ReplayProvider`, `ReplayToolHost` and
+`ReplayInterlocutor` keep taking the next row by position, which is exactly right
+for a tape written in index order and played back by a run with a ceiling of one.
 
 ### A recording is written in index order
 
@@ -187,8 +251,14 @@ in index order, exactly as the event stream is spliced.
 
 Without this, the same run against the same inputs would produce a different
 file every time, and a cassette nobody can diff is a cassette nobody reviews.
-Digest matching would still replay it — that is the point of digest matching —
-but "it replays" is not the only thing a recorded file is for.
+It is also what makes position matching still correct on the replay side: a tape
+written in index order is a tape a sequential run plays back row for row. The two
+halves of that sentence are the reason this rule survived and the digest rule did
+not.
+
+Until a shared `ToolHost` lands, `--record` reaches this rule only for a body
+that makes no tool call. A body that makes one records sequentially, which is
+index order already.
 
 ## Failure, and what it costs
 
@@ -206,12 +276,25 @@ Taking the first failure *in index order* rather than in time is the same rule
 in a second place: which error an operator is shown must not depend on which
 socket answered first.
 
-**The budget.** `charge_step` and the token and cost counters move behind a
-lock. The pass/fail outcome does not change: a `parallel map` runs the same set
-of nodes in either schedule, so the same total is reached. What changes is how
-much of a fan-out has completed at the moment a budget trips — and since a
-failing run drains its in-flight work anyway, the spend is the whole fan-out
-either way. Deterministic, and stated.
+**The budget, and why it does not get a lock.** One shared counter behind a mutex
+is the obvious move and it is the wrong one: whichever thread reaches the ceiling
+first is the iteration that fails, so *which* iteration an operator is told about
+depends on the schedule. That is the failure this section just refused, arriving
+through the back door.
+
+Instead each iteration counts against **its own** counters, seeded with the run's
+remaining headroom so that no single iteration can outspend the run, exactly as a
+sub-agent already is
+(`self.max_steps.saturating_sub(self.steps).max(1)`). When every iteration has
+finished, the fan-out charges their totals **in index order** and fails at the
+first crossing. That is arithmetic replaying what sequential execution would have
+done, so the answer is not merely deterministic — it is the *same* answer,
+iteration for iteration.
+
+What a fan-out spends before it notices is the whole fan-out, because iterations
+are drained rather than cancelled. That was already true of the lock version, and
+it is the price the paragraph above pays for a bill that does not depend on a
+scheduler.
 
 ## The live channel
 
@@ -232,13 +315,34 @@ sink that discards.
 
 ## The contract change
 
-Three traits are involved and only one of them changes shape.
+Three traits are involved and **none of them changes shape.** What changes is
+that a run can be handed a way to make a second provider.
 
-**`ModelProvider` gains `Send` on the trait object, and nothing else.**
-`complete(&mut self, …)` stays exactly as it is. Each concurrent iteration is
-given **its own provider instance**, built from the same declaration by
-`catalogue::build`, so exclusive access remains literally true and no
-implementer has to reason about being called twice at once.
+**A run may carry a provider factory, and whether it does is the ceiling.**
+`complete(&mut self, …)` stays exactly as it is, and each concurrent iteration is
+given **its own provider instance**, so exclusive access remains literally true
+and no implementer has to reason about being called twice at once. The instance
+has to come from somewhere, and `run` never sees a `ProviderConfig` — so the
+caller that built the first provider supplies the means to build the rest:
+
+```rust
+/// A source of fresh providers, one per concurrent iteration.
+///
+/// Absent, a fan-out has a ceiling of one: a run that cannot make a second
+/// provider has exactly one source of answers, and one source is a lock.
+pub type ProviderFactory =
+    Box<dyn Fn() -> Result<Box<dyn ModelProvider + Send>, ProviderError> + Send + Sync>;
+```
+
+`RunOptions` gains one optional field holding that. **A caller who passes nothing
+gets today's behaviour exactly**, which is what makes replay, containment and
+every embedder correct without knowing this feature exists. The CLI supplies a
+factory when it built a live provider from the catalogue and withholds it when it
+built a `ReplayProvider` — not as a special case for cassettes, but because there
+is nothing to build a second of.
+
+`catalogue::build` gains `+ Send` on what it returns, so the factory can hand its
+product across a thread boundary:
 
 ```rust
 // before
@@ -248,12 +352,13 @@ fn build(...) -> Result<Box<dyn ModelProvider>, ProviderError>
 fn build(...) -> Result<Box<dyn ModelProvider + Send>, ProviderError>
 ```
 
-For somebody embedding `ingot-runtime`, that is a one-line change to a type
-annotation, and their existing `impl ModelProvider` compiles untouched unless it
-holds something genuinely thread-hostile. It is still a semver-breaking release
-of the crate, and this is the cheapest moment it will ever be: no backend
-outside this repository is known to exist
-([GAP-039](../docs/gaps.md#gap-039)). Doing it later means doing it to somebody.
+For somebody embedding `ingot-runtime` that is a one-line change to a type
+annotation, and an existing `impl ModelProvider` compiles untouched unless it
+holds something genuinely thread-hostile. It is still a semver-breaking release of
+the crate — the new `RunOptions` field breaks a struct literal too — and this is
+the cheapest moment it will ever be: no backend outside this repository is known
+to exist ([GAP-039](../docs/gaps.md#gap-039)). Doing it later means doing it to
+somebody.
 
 The cost is real and worth naming: N providers means N HTTP connection pools
 instead of one. At a ceiling of four to eight this is not interesting. It is
@@ -263,11 +368,11 @@ also why the ceiling is not optional.
 in-memory buffer; the run's real sink is touched only by the splicing step, on
 the calling thread. `EventSink` needs no change of any kind.
 
-**`ToolHost` and the recording/replay providers are shared behind a lock.** A
-tool host because it wraps a child process; a recorder because there is one
-cassette. Their traits do not change either — a `Mutex` supplies the exclusive
-access `&mut self` asks for. This is what makes tool calls serialise, which is
-the limitation stated above.
+**`ToolHost` and `HumanChannel` do not cross a thread boundary, so they need no
+bound.** A body that would touch either runs sequentially, by the rule above.
+Sharing the tool host behind a lock instead — which buys a mixed body its `ask`
+overlap — is the second change, and it is the one that would add `Send` to
+`ToolHost`.
 
 ## Security and policy impact
 
@@ -286,7 +391,7 @@ in the spec rather than discovered.
 ## Static bounds
 
 A `parallel map` executes its body once per element, which is exactly what it
-did before. Step counting is unchanged in total and moves behind a lock. Loop
+did before. Step counting reaches the same total, charged in index order. Loop
 bounds are unaffected: a `parallel` body may not contain a `checkpoint` or a
 state write, and a nested `parallel` inside a `parallel` shares the one run-wide
 ceiling rather than multiplying it.
@@ -296,12 +401,14 @@ ceiling rather than multiplying it.
 - **Language: unchanged.** No new syntax, no new keyword.
 - **IR: unchanged.** `Parallel` already carries everything needed. Artifacts
   compiled before this produce byte-identical IR and run identically.
-- **Cassette: unchanged, still 0.3.** Digest matching reads the fields that are
-  already there; 0.2 and 0.3 cassettes replay untouched.
+- **Cassette: not touched.** Not the format, not the version, not the matching
+  rule. A run that replays one has a ceiling of one, so position matching stays
+  correct for the reason it always was.
 - **Runtime spec: 0.6**, additive — §5.1 keeps its wording and gains the
-  splicing rule, the digest-matching rule and the contained-run ceiling.
-- **`ingot-runtime` the crate: breaking**, for the `+ Send` bound. The CLI and
-  every crate in this workspace are updated in the same change.
+  splicing rule, the ceiling and what caps it, and the index-order budget.
+- **`ingot-runtime` the crate: breaking**, for the `+ Send` bound on what
+  `catalogue::build` returns and for the new `RunOptions` field. The CLI and every
+  crate in this workspace are updated in the same change.
 - **`[model] max-concurrency`: new and optional.** A manifest without it behaves
   as it does today apart from the wall clock.
 - **The Python backend: unchanged, and still conforming.** It stays sequential,
@@ -313,12 +420,28 @@ ceiling rather than multiplying it.
 nothing is misleading. But `parallel map` is a word an author writes to mean
 something, and it currently means nothing.
 
-**Concurrency for live providers, sequential under replay.** The cheap version:
-leave `ingot test` alone by only going concurrent when there is no cassette.
-[GAP-010](../docs/gaps.md#gap-010) already names this and rules it out — it
-makes an artifact behave one way in a test and another in production, which is
-the divergence this project exists to refuse. It is listed here only so that the
-next person to think of it finds it already answered.
+**Concurrency for live providers, sequential under replay — now adopted, and it
+was on this list.** [GAP-010](../docs/gaps.md#gap-010) ruled it out as the cheap
+version, on the grounds that it makes an artifact behave one way in a test and
+another in production. Two things overturn that, and both were found in the code
+rather than argued from the armchair.
+
+The divergence is in the **schedule**, not the behaviour. Runtime 0.1 §5.1 says a
+`parallel` node marks an opportunity and that conformance asserts the result and
+never the schedule. The Python backend runs a fan-out sequentially in production
+and is conforming while doing it. A test that runs one sequentially cannot be the
+divergence this project exists to refuse, when a shipped backend doing the same
+thing is not.
+
+And the alternative on offer was not concurrent replay — it was *nondeterministic*
+concurrent replay, because one tape is one lock and the row a duplicate-digest
+request gets depends on which thread asked first. Between a schedule difference
+the spec declines to assert and a flake in `ingot test`, there is no contest.
+
+What GAP-010 was right about is the thing that would have made it cheap for the
+wrong reason: **this must not be a switch on "is there a cassette".** It is a
+consequence of a general rule about sources that exist once, and the cassette case
+falls out of it without being named.
 
 **Async instead of threads.** `ureq` is blocking, so this means replacing the
 HTTP layer, adding an async runtime to a crate that currently has one dependency
@@ -334,11 +457,19 @@ once", which is a harder contract to write correctly than the one it replaces.
 The break for an outside embedder is also much larger. Rejected for the smallest
 change that works.
 
-**Keeping position matching and sorting the recorded rows.** If a recording is
-written in index order anyway, could replay keep matching by position? Only if
-replay also *executes* in index order, which is sequential execution. The
-recording order and the execution order are different problems and both need
-their own answer.
+**Keeping position matching and sorting the recorded rows — also adopted, and for
+the reason this entry gave for rejecting it.** "Only if replay also *executes* in
+index order, which is sequential execution" was correct in every word. It was
+filed as an objection; it is the design. The entry stands as written and the
+conclusion drawn from it was the wrong way round.
+
+**Cassette 0.4, with each row naming the iteration it belongs to.** This is what
+concurrent replay would actually cost: an `iterationPath` on a row, matching by
+node and iteration and position within it, digest demoted to a check. It works, it
+is deterministic, and 0.3 cassettes would keep replaying by position. It was
+rejected because it buys a wall-clock win of zero — under replay there is no
+socket to wait on — in exchange for a format version, on the day 0.7.0 shipped
+saying that no format had moved.
 
 **A `limit` in the source: `parallel map items as x limit 4`.** Puts a
 deployment fact in the program, and would be wrong on the next machine. Same
@@ -346,11 +477,16 @@ argument that kept `timeout-seconds` out of the artifact.
 
 ## Opens
 
-- **Tool calls inside a fan-out serialise.** A new register entry, class
-  Degraded: the result is correct and only the wall clock is affected, exactly
-  as GAP-010 itself reads today. Closing it needs a decision about what a
-  concurrent `ToolHost` means for a child process and for an `--allow-write`
-  server.
+- **A fan-out whose body calls a tool does not overlap.** A new register entry,
+  class Degraded: the result is correct and only the wall clock is affected,
+  exactly as GAP-010 itself reads today. Closing it is the second change described
+  above — `Send` on `ToolHost`, a locking proxy, per-iteration recording buffers —
+  and it also wants a decision about what a concurrent host means for an
+  `--allow-write` server.
+- **A fan-out whose body can stop for a person does not overlap.** The same entry
+  covers it, and this half may never be worth closing: the order an operator is
+  asked in is observable to them, which is the argument `ING6005` already makes
+  about `consult`.
 - **A contained run keeps a ceiling of one.** Covered by the same entry as
   [GAP-031](../docs/gaps.md#gap-031)'s reasoning — the supervisor channel is
   request/reply — and stated in the spec rather than left to be discovered.
@@ -361,15 +497,18 @@ argument that kept `timeout-seconds` out of the artifact.
 - [ ] `the_event_stream_of_a_fan_out_is_byte_identical_to_the_sequential_one`
 - [ ] `the_event_streams_agree_on_kind_and_order` (existing; must keep passing
       unchanged against a sequential Python backend)
-- [ ] `a_replay_matches_by_digest_regardless_of_arrival_order`
-- [ ] `two_iterations_with_identical_requests_each_get_an_answer`
+- [ ] `a_run_without_a_provider_factory_executes_a_fan_out_sequentially`
+- [ ] `a_replayed_fan_out_takes_its_rows_in_order`
+- [ ] `two_iterations_over_identical_items_get_the_rows_recorded_for_them`
+      (the case the digest rule got wrong: same digest, different recorded
+      values, and the collected list must be the recorded one every time)
 - [ ] `a_cassette_recorded_from_a_fan_out_is_byte_identical_run_to_run`
-- [ ] `an_0_2_cassette_still_replays`  (existing; must keep passing)
 - [ ] `a_failing_iteration_lets_the_others_finish`
 - [ ] `the_reported_failure_is_the_first_in_index_order_not_in_time`
-- [ ] `a_budget_trips_at_the_same_total_under_either_schedule`
+- [ ] `a_budget_trips_at_the_same_total_and_names_the_same_iteration`
 - [ ] `max_concurrency_of_one_is_sequential_execution`
 - [ ] `a_fan_out_over_a_thousand_items_opens_no_more_than_the_ceiling`
 - [ ] `no_deltas_are_shown_from_inside_a_fan_out`
 - [ ] `a_contained_run_executes_a_fan_out_sequentially`
-- [ ] `a_tool_call_inside_a_fan_out_serialises`
+- [ ] `a_body_that_needs_a_person_executes_sequentially`
+- [ ] `a_body_that_calls_a_tool_executes_sequentially`
