@@ -8,6 +8,38 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-08-17
+
+The release where an operator can say how long a model may take.
+
+180 seconds was a `const` shared by all three protocols, with no manifest field,
+no environment variable and no flag behind it. Generous for a hosted API and
+short for a model on your own machine — which is the deployment the 0.5.2
+catalogue fix had just unblocked, so this is the number that was in the way of
+the people that fix was for. Found by hitting it: a report-writing agent against
+a local Ollama server timed out at its first `llm.call` with a longer prompt than
+the run before. Closes [GAP-040](docs/gaps.md#gap-040).
+
+The decision the gap existed to force: **an artifact may not state a wall-clock
+ceiling.** A `budget` travels with the program because a step count and a token
+count mean the same thing on every machine. A clock does not. So it lives with
+the deployment, beside the prices and the catalogue.
+
+Two things came out of building it that were not the feature. A stated ceiling
+was being **multiplied by four**, because a timeout arrived as an ordinary
+transport failure and those are retried three times; a timeout is now final, and
+a wedged endpoint fails at 180 seconds rather than at roughly twelve minutes.
+And a model call that ran long in a generated Python program was ending it in a
+traceback rather than a named failure.
+
+No format moved. Language 0.3, Agent IR 0.3 and cassette 0.3 are exactly as they
+were, every artifact compiles to byte-identical IR, and there is nothing to
+migrate.
+
+Also here, as design rather than code:
+[RFC-0021](rfcs/0021-a-fan-out-that-overlaps.md), the full price of
+[GAP-010](docs/gaps.md#gap-010).
+
 ### Added
 
 - **A model provider can say how long it may take.** `timeout-seconds` on a
@@ -1615,7 +1647,8 @@ Backends, packaging and the language server are not part of this release.
 - `Ingot` is a working name. Trademark, domain and registry clearance has not
   been carried out and requires legal review before any public release.
 
-[Unreleased]: https://github.com/mathissdupont/ingot/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/mathissdupont/ingot/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/mathissdupont/ingot/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/mathissdupont/ingot/compare/v0.5.2...v0.6.0
 [0.5.2]: https://github.com/mathissdupont/ingot/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/mathissdupont/ingot/compare/v0.5.0...v0.5.1
