@@ -52,7 +52,7 @@ to you*.
 | [GAP-038](#gap-038) | No backend outside this repository has ever run the suite | Unproven | somebody else's backend, and what they hit |
 | [GAP-039](#gap-039) | No agent outside this repository is known to run | Unproven | a program somebody depends on, and its friction |
 | [GAP-043](#gap-043) | A run that is recording does not overlap its fan-out | Degraded | per-iteration recording buffers, merged in index order |
-| [GAP-044](#gap-044) | A program cannot say what to do when something fails | Absent | an RFC that keeps the static bounds |
+| [GAP-044](#gap-044) | A program cannot say what to do when something fails | Absent | RFC-0022 narrows it; a general handler closes it |
 
 ---
 
@@ -416,8 +416,17 @@ system is complete enough for 1.0. It is recorded rather than fixed because the
 answer to "was this decided?" turned out to be "no", and an unrecorded decision is
 worse than a recorded gap.
 
+*Designed, not yet built.*
+[RFC-0022](../rfcs/0022-a-failure-an-iteration-can-absorb.md) takes the sixth
+question first and narrows this entry rather than closing it: `else` over a
+**pure** expression, which erases four of the five questions above instead of
+answering them, and explicitly refuses to absorb a policy denial, a budget trip, a
+refused approval or a failed `verify`. The general handler and the effectful
+fallback are what is left here.
+
 *Recorded in.* [Language 0.1 §6](../specs/language/v0.1.md),
-[`docs/guide/the-language.md`](guide/the-language.md).
+[`docs/guide/the-language.md`](guide/the-language.md),
+[RFC-0022](../rfcs/0022-a-failure-an-iteration-can-absorb.md).
 
 ### GAP-011
 
