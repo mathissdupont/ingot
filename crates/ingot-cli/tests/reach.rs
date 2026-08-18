@@ -106,12 +106,65 @@ fn a_run_that_cannot_keep_a_declared_reach_refuses_before_starting() {
     let log = stderr(&output);
     assert_ne!(code(&output), EXIT_OK, "{log}");
     assert!(log.contains("where its tools may reach"), "{log}");
-    assert!(log.contains("GAP-001"), "{log}");
+    // The remedy, and it has to be one an operator can act on. This used to say
+    // that bounding egress to a host needed a proxy no arrangement had -- true
+    // when it was written and false since 0.4.0, when GAP-001 closed.
+    assert!(log.contains("--sandbox"), "{log}");
+    assert!(
+        !log.contains("GAP-001"),
+        "the advice must not send somebody to a closed register entry:\n{log}"
+    );
     assert!(log.contains("feed.fetch"), "{log}");
     assert!(log.contains("--allow-unenforced-scopes"), "{log}");
     assert!(
         !log.contains("nonexistent.json"),
         "the cassette should never have been opened:\n{log}"
+    );
+}
+
+#[test]
+fn a_boundary_keeps_a_host_reach_so_the_check_does_not_refuse_it() {
+    // GAP-001 closed in 0.4.0: a contained server joins an `--internal` network
+    // whose only way out is the egress proxy, and the proxy refuses a host the
+    // policy does not grant. So a boundary keeps a host reach for the same reason
+    // it keeps a path reach, and this check must stop saying otherwise.
+    //
+    // It ran for two releases saying otherwise, which is why the assertion is
+    // about the *reason* the run stops rather than about it succeeding. This test
+    // needs no container: the reach check runs long before anything looks for a
+    // runtime, so on a machine with no Docker the run still gets past it and
+    // stops later, for a reason that names the runtime instead.
+    let dir = TempDir::new("reach-sandbox");
+    project(
+        dir.path(),
+        r#"!network("arxiv.org")"#,
+        r#"network allow ["arxiv.org"]"#,
+    );
+
+    let output = run_env(
+        &[
+            "run",
+            &dir.path().display().to_string(),
+            "--sandbox",
+            "--provider",
+            "replay",
+            "--cassette",
+            "nonexistent.json",
+            "--input",
+            "topic=compilers",
+        ],
+        &[],
+    );
+
+    let log = stderr(&output);
+    assert!(
+        !log.contains("where its tools may reach"),
+        "a boundary keeps a host reach, so the declared-reach check must not \
+         refuse a sandboxed run:\n{log}"
+    );
+    assert!(
+        !log.contains("--allow-unenforced-scopes"),
+        "and it must not ask an operator to acknowledge something that is kept:\n{log}"
     );
 }
 

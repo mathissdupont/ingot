@@ -291,17 +291,25 @@ pub fn build_model_provider(
     }
 }
 
-/// Effects this arrangement can actually bound to named values.
+/// Effects this arrangement can bound to named values **in kind**.
 ///
 /// A boundary derives its mounts from the policy, and the compiler has already
 /// checked that a tool's declared paths are inside it — so under a boundary, a
-/// declared path reach is kept. Egress is bounded by nothing anywhere yet, so
-/// `network` is on no list ([GAP-001](../../../docs/gaps.md#gap-001)). A run
-/// with no boundary at all keeps nothing, and says so rather than implying
-/// otherwise.
+/// declared path reach is kept. **The same is true of a host reach, and has been
+/// since 0.4.0:** [GAP-001](../../../docs/gaps.md#gap-001) closed, and a contained
+/// server joins an `--internal` network whose only way out is the egress proxy,
+/// which refuses a host the policy does not grant.
+///
+/// This answers *can this arrangement bound this kind of effect at all*, and
+/// deliberately not *will it, on this machine, right now*. The second question is
+/// settled later and better: the run detects whether the proxy image is present,
+/// passes that into the plans, prints exactly what is missing when it is not, and
+/// refuses on [`ingot_sandbox::SandboxPlan::is_fully_enforced`]. Answering it in
+/// two places is how `network` came to be refused here on the grounds that no
+/// arrangement existed, two releases after one did.
 fn boundable(config: &RunConfig) -> &'static [&'static str] {
     if config.sandbox || config.containment().is_some() {
-        &["filesystem_read", "filesystem_write"]
+        &["filesystem_read", "filesystem_write", "network"]
     } else {
         &[]
     }
@@ -325,7 +333,6 @@ fn check_declared_reach(
 ) -> Result<()> {
     let boundable = boundable(config);
     let mut unkept: Vec<String> = Vec::new();
-    let mut any_network = false;
 
     for agent in std::iter::once(ir).chain(registry.values()) {
         for tool in &agent.tools {
@@ -333,7 +340,6 @@ fn check_declared_reach(
                 if boundable.contains(&effect.as_str()) {
                     continue;
                 }
-                any_network |= effect == "network";
                 unkept.push(format!(
                     "  `{}` declares {effect}({})\n    in agent `{}`",
                     tool.name,
@@ -354,15 +360,13 @@ fn check_declared_reach(
     }
 
     if !config.allow_unenforced_scopes {
-        // Two different situations, and pointing at the wrong remedy is worse
-        // than pointing at none: a path reach is kept by a boundary that exists
-        // today, and a host reach is kept by nothing anywhere.
-        let advice = if any_network {
-            "bounding egress to a host needs a proxy no arrangement has yet (GAP-001)"
-        } else {
-            "this run has no boundary, so nothing bounds a tool to anything; \
-             run with --sandbox"
-        };
+        // One remedy now, because there is one. A path reach and a host reach are
+        // both kept by a boundary: the mounts come from the policy, and the egress
+        // proxy refuses a host the policy does not grant. This used to point a
+        // host reach at nothing, on the grounds that no arrangement existed --
+        // true when it was written and false since 0.4.0.
+        let advice = "this run has no boundary, so nothing bounds a tool to anything; \
+             run with --sandbox";
         bail!(
             "this program states where its tools may reach, and this run cannot keep it:\n{}\n\n  \
              {advice}\n  \
