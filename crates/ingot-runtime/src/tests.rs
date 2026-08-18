@@ -9,6 +9,9 @@
 //! backend would receive one.
 
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::Duration;
 
 use ingot_ir::{
     node::Argument, AgentIr, Budget, Decision, FieldType, ModelRequirement, Node, NodeKind,
@@ -18,11 +21,11 @@ use ingot_ir::{
 use serde_json::json;
 
 use crate::events::{CollectingSink, RunEvent};
-use crate::provider::Usage;
+use crate::provider::{CompletionRequest, CompletionResponse, Usage};
 use crate::tools::{HumanChannel, ScriptedApprovals, StaticToolHost};
 use crate::{
-    run, Cassette, DenyAllTools, RecordingProvider, ReplayProvider, RunError, RunOptions,
-    ScriptedProvider,
+    run, Cassette, DenyAllTools, FanOut, ModelProvider, ProviderError, RecordingProvider,
+    ReplayProvider, RunError, RunOptions, ScriptedProvider,
 };
 
 // --- artifact builders ----------------------------------------------------
@@ -2006,4 +2009,748 @@ fn a_map_body_that_ends_in_an_unbound_node_is_refused() {
     let text = error.to_string();
     assert!(text.contains("binds nothing"), "{text}");
     assert!(text.contains("n1"), "{text}");
+}
+
+// --- a fan-out that overlaps ----------------------------------------------
+//
+// RFC-0021. Almost every property here is a property of the *result and the
+// record*, never of the schedule: what they pin is that overlapping and not
+// overlapping produce the same run, and that a run only overlaps when every
+// source of answers its body touches can be duplicated.
+
+/// What answers a model call, shared by every provider instance in a fan-out.
+type Answer =
+    Arc<dyn Fn(&CompletionRequest) -> Result<CompletionResponse, ProviderError> + Send + Sync>;
+
+/// A provider built from a closure.
+///
+/// A [`ScriptedProvider`] cannot serve an overlapping fan-out: each iteration is
+/// handed its own instance, so a positional script would give every one of them
+/// the first answer. These answer from the request instead, which is also what
+/// makes an iteration's answer independent of the order the iterations ran in.
+struct Answering(Answer);
+
+impl ModelProvider for Answering {
+    fn name(&self) -> &str {
+        "answering"
+    }
+
+    fn complete(
+        &mut self,
+        request: &CompletionRequest,
+    ) -> Result<CompletionResponse, ProviderError> {
+        (self.0)(request)
+    }
+}
+
+/// Answers `<prompt>-done`, reporting the usage every test here charges by.
+fn echoing() -> Answer {
+    Arc::new(|request: &CompletionRequest| {
+        Ok(CompletionResponse {
+            value: json!(format!("{}-done", request.prompt)),
+            usage: Usage {
+                input_tokens: 10,
+                output_tokens: 5,
+                cache_read_tokens: 0,
+            },
+            model: "answering".to_string(),
+        })
+    })
+}
+
+/// Lets a test require that iterations really did overlap, without a sleep and
+/// without hanging when they did not.
+///
+/// Each arrival waits for `expected` of them. Sequential execution times out
+/// rather than deadlocking, and `peak` is what the assertion reads.
+struct Rendezvous {
+    inside: Mutex<usize>,
+    peak: AtomicUsize,
+    signal: Condvar,
+}
+
+impl Rendezvous {
+    fn new() -> Arc<Rendezvous> {
+        Arc::new(Rendezvous {
+            inside: Mutex::new(0),
+            peak: AtomicUsize::new(0),
+            signal: Condvar::new(),
+        })
+    }
+
+    fn arrive(&self, expected: usize) {
+        let mut inside = self.inside.lock().expect("no test panics holding this");
+        *inside += 1;
+        self.peak.fetch_max(*inside, Ordering::Relaxed);
+        self.signal.notify_all();
+        while *inside < expected {
+            let (guard, timeout) = self
+                .signal
+                .wait_timeout(inside, Duration::from_secs(10))
+                .expect("no test panics holding this");
+            inside = guard;
+            if timeout.timed_out() {
+                break;
+            }
+        }
+        *inside -= 1;
+    }
+
+    fn peak(&self) -> usize {
+        self.peak.load(Ordering::Relaxed)
+    }
+}
+
+/// What one run of a fan-out produced, and whether it overlapped.
+struct FanOutRun {
+    result: Result<crate::RunReport, RunError>,
+    events: Vec<RunEvent>,
+    /// Providers the fan-out built. **Zero means it never overlapped**: the
+    /// sequential path uses the one provider the run was given and asks the
+    /// factory for nothing.
+    providers_built: usize,
+}
+
+fn run_fan_out(
+    ir: &AgentIr,
+    inputs: BTreeMap<String, serde_json::Value>,
+    ceiling: u32,
+    max_steps: u32,
+    answer: Answer,
+) -> FanOutRun {
+    let built = Arc::new(AtomicUsize::new(0));
+    let mut provider = Answering(Arc::clone(&answer));
+    let mut tools = DenyAllTools;
+    let mut sink = CollectingSink::default();
+    let registry = BTreeMap::new();
+
+    let factory_answer = Arc::clone(&answer);
+    let factory_built = Arc::clone(&built);
+    let result = run(
+        ir,
+        &registry,
+        &mut provider,
+        &mut tools,
+        &mut sink,
+        RunOptions {
+            inputs,
+            max_steps,
+            fan_out: FanOut::new(
+                Box::new(move || {
+                    factory_built.fetch_add(1, Ordering::Relaxed);
+                    Ok(Box::new(Answering(Arc::clone(&factory_answer))))
+                }),
+                ceiling,
+            ),
+            ..RunOptions::default()
+        },
+    );
+
+    FanOutRun {
+        result,
+        events: sink.events,
+        providers_built: built.load(Ordering::Relaxed),
+    }
+}
+
+/// The artifact `parallel_map_visits_every_element` uses, except that the body's
+/// prompt interpolates the binder.
+///
+/// It has to: an overlapping iteration's answer must be derivable from its own
+/// element, or the test would be pinning the schedule rather than the result.
+fn fan_out_mapper() -> AgentIr {
+    let mut ir = base("test.Mapper");
+    ir.inputs.insert("items".into(), "string[]".into());
+    ir.outputs.insert("out".into(), "artifact<json>".into());
+    ir.entry = Some("n0".into());
+
+    let mut map = Node::new("n0", NodeKind::Parallel);
+    map.binding = Some("results".into());
+    map.mode = Some("map".into());
+    map.binder = Some("item".into());
+    map.source = Some(IrValue::Ref {
+        scope: RefScope::Input,
+        path: vec!["items".into()],
+    });
+    map.body = Some("n1".into());
+    map.next = Some("n2".into());
+
+    let mut ask = llm("n1", Some("one"), "", "markdown", None);
+    ask.prompt = Some(IrValue::Template {
+        parts: vec![TemplatePart::Value {
+            value: IrValue::Ref {
+                scope: RefScope::Binding,
+                path: vec!["item".into()],
+            },
+            ty: "string".into(),
+        }],
+    });
+
+    ir.nodes = vec![map, ask, emit("n2", "out", "results", None)];
+    ir
+}
+
+fn three_items() -> BTreeMap<String, serde_json::Value> {
+    [("items".to_string(), json!(["a", "b", "c"]))].into()
+}
+
+/// Replace the map body's entry, keeping the ask as the body's last node so an
+/// iteration's value still comes from a model answer.
+fn body_starts_at(ir: &mut AgentIr, entry: &str) {
+    let map = ir
+        .nodes
+        .iter_mut()
+        .find(|node| node.id == "n0")
+        .expect("the mapper's map node is n0");
+    map.body = Some(entry.to_string());
+}
+
+#[test]
+fn a_fan_out_produces_the_same_values_as_a_sequential_one() {
+    let ir = fan_out_mapper();
+    let overlapping = run_fan_out(&ir, three_items(), 4, 1_000, echoing());
+    let sequential = run_fan_out(&ir, three_items(), 1, 1_000, echoing());
+
+    let overlapped = overlapping.result.expect("the fan-out should succeed");
+    let one_at_a_time = sequential.result.expect("the fan-out should succeed");
+
+    assert_eq!(
+        overlapped.outputs["out"].value,
+        json!(["a-done", "b-done", "c-done"]),
+        "an iteration's value belongs to its own element, collected in index order"
+    );
+    assert_eq!(
+        overlapped.outputs["out"].value,
+        one_at_a_time.outputs["out"].value
+    );
+    assert_eq!(overlapped.steps, one_at_a_time.steps);
+    assert_eq!(overlapped.usage, one_at_a_time.usage);
+    assert!(
+        overlapping.providers_built > 1,
+        "the fan-out should have built a provider per worker, built {}",
+        overlapping.providers_built
+    );
+    assert_eq!(
+        sequential.providers_built, 0,
+        "a ceiling of one uses the provider the run was given"
+    );
+}
+
+#[test]
+fn the_event_stream_of_a_fan_out_is_byte_identical_to_the_sequential_one() {
+    let ir = fan_out_mapper();
+    let overlapping = run_fan_out(&ir, three_items(), 4, 1_000, echoing());
+    let sequential = run_fan_out(&ir, three_items(), 1, 1_000, echoing());
+
+    assert!(overlapping.result.is_ok() && sequential.result.is_ok());
+    assert_eq!(
+        overlapping.events, sequential.events,
+        "each iteration's events are spliced in index order, so the two records \
+         are one record"
+    );
+}
+
+#[test]
+fn iterations_of_a_fan_out_really_do_overlap() {
+    // The one test here that asserts about the schedule, because everything else
+    // asserts that the schedule cannot be observed -- and a feature whose whole
+    // purpose is wall clock needs one test that it happened at all.
+    let ir = fan_out_mapper();
+    let meeting = Rendezvous::new();
+    let waiting = Arc::clone(&meeting);
+    let answer: Answer = Arc::new(move |request: &CompletionRequest| {
+        waiting.arrive(3);
+        Ok(CompletionResponse {
+            value: json!(format!("{}-done", request.prompt)),
+            usage: Usage::default(),
+            model: "answering".to_string(),
+        })
+    });
+
+    let outcome = run_fan_out(&ir, three_items(), 4, 1_000, answer);
+    outcome.result.expect("the fan-out should succeed");
+    assert_eq!(
+        meeting.peak(),
+        3,
+        "three iterations under a ceiling of four should have been in flight together"
+    );
+}
+
+#[test]
+fn max_concurrency_of_one_is_sequential_execution() {
+    let ir = fan_out_mapper();
+    let outcome = run_fan_out(&ir, three_items(), 1, 1_000, echoing());
+    outcome.result.expect("the fan-out should succeed");
+    assert_eq!(
+        outcome.providers_built, 0,
+        "an operator who says one at a time gets one at a time"
+    );
+}
+
+#[test]
+fn a_run_without_a_provider_factory_executes_a_fan_out_sequentially() {
+    // The mechanism behind two of the four ceilings: a replayed run and a
+    // contained run both reach this by never supplying a factory, and so does any
+    // embedder that passes only a provider. Neither is named in the interpreter,
+    // which is the point.
+    let ir = fan_out_mapper();
+    let mut provider = Answering(echoing());
+    let mut tools = DenyAllTools;
+    let mut sink = CollectingSink::default();
+    let registry = BTreeMap::new();
+    let result = run(
+        &ir,
+        &registry,
+        &mut provider,
+        &mut tools,
+        &mut sink,
+        RunOptions {
+            inputs: three_items(),
+            // A ceiling with nothing to build providers with is still a ceiling
+            // of one: the two halves are not independent.
+            fan_out: FanOut {
+                providers: None,
+                ceiling: 8,
+            },
+            ..RunOptions::default()
+        },
+    );
+    let report = result.expect("the fan-out should succeed");
+    assert_eq!(
+        report.outputs["out"].value,
+        json!(["a-done", "b-done", "c-done"])
+    );
+}
+
+#[test]
+fn a_fan_out_over_a_thousand_items_opens_no_more_than_the_ceiling() {
+    let ir = fan_out_mapper();
+    let items: Vec<serde_json::Value> = (0..1_000).map(|n| json!(format!("item-{n}"))).collect();
+    let outcome = run_fan_out(
+        &ir,
+        [("items".to_string(), json!(items))].into(),
+        4,
+        2_000,
+        echoing(),
+    );
+
+    let report = outcome.result.expect("the fan-out should succeed");
+    assert_eq!(report.steps, 1_000, "one step per element, as before");
+    assert!(
+        outcome.providers_built <= 4,
+        "a thousand items must not open a thousand connections, built {}",
+        outcome.providers_built
+    );
+}
+
+#[test]
+fn a_failing_iteration_lets_the_others_finish() {
+    let ir = fan_out_mapper();
+    let answered = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&answered);
+    let answer: Answer = Arc::new(move |request: &CompletionRequest| {
+        counted.fetch_add(1, Ordering::Relaxed);
+        if request.prompt == "b" {
+            return Err(ProviderError::Transport("b is unreachable".to_string()));
+        }
+        Ok(CompletionResponse {
+            value: json!(format!("{}-done", request.prompt)),
+            usage: Usage::default(),
+            model: "answering".to_string(),
+        })
+    });
+
+    let outcome = run_fan_out(&ir, three_items(), 4, 1_000, answer);
+    let error = outcome
+        .result
+        .expect_err("one iteration failed, so the fan-out did");
+    assert!(error.to_string().contains("b is unreachable"), "{error}");
+    assert_eq!(
+        answered.load(Ordering::Relaxed),
+        3,
+        "cancelling the others would make a failing run's bill depend on the scheduler"
+    );
+}
+
+#[test]
+fn the_reported_failure_is_the_first_in_index_order_not_in_time() {
+    // Two iterations fail and the later one fails *first*. Coordinated rather than
+    // slept: `c` fails immediately, and `a` waits until it has seen that happen
+    // before failing itself.
+    let ir = fan_out_mapper();
+    let later = Arc::new((Mutex::new(false), Condvar::new()));
+    let signal = Arc::clone(&later);
+    let answer: Answer = Arc::new(move |request: &CompletionRequest| {
+        let (failed, ready) = &*signal;
+        match request.prompt.as_str() {
+            "c" => {
+                *failed.lock().expect("no test panics holding this") = true;
+                ready.notify_all();
+                Err(ProviderError::Transport(
+                    "c failed first in time".to_string(),
+                ))
+            }
+            "a" => {
+                let mut failed = failed.lock().expect("no test panics holding this");
+                while !*failed {
+                    let (guard, timeout) = ready
+                        .wait_timeout(failed, Duration::from_secs(10))
+                        .expect("no test panics holding this");
+                    failed = guard;
+                    if timeout.timed_out() {
+                        break;
+                    }
+                }
+                Err(ProviderError::Transport(
+                    "a failed first in index".to_string(),
+                ))
+            }
+            _ => Ok(CompletionResponse {
+                value: json!(format!("{}-done", request.prompt)),
+                usage: Usage::default(),
+                model: "answering".to_string(),
+            }),
+        }
+    });
+
+    let outcome = run_fan_out(&ir, three_items(), 4, 1_000, answer);
+    let error = outcome.result.expect_err("two iterations failed");
+    assert!(
+        error.to_string().contains("a failed first in index"),
+        "which error an operator is shown must not depend on which socket \
+         answered first: {error}"
+    );
+}
+
+#[test]
+fn a_budget_trips_at_the_same_total_and_names_the_same_iteration() {
+    // Each answer reports fifteen tokens, so a ceiling of twenty is crossed by the
+    // second iteration and by no earlier one -- whichever thread got there first.
+    let mut ir = fan_out_mapper();
+    ir.budget.tokens = Some(20);
+
+    let overlapping = run_fan_out(&ir, three_items(), 4, 1_000, echoing());
+    let sequential = run_fan_out(&ir, three_items(), 1, 1_000, echoing());
+
+    let overlapped = overlapping
+        .result
+        .expect_err("fifteen tokens an iteration passes a ceiling of twenty");
+    let one_at_a_time = sequential
+        .result
+        .expect_err("fifteen tokens an iteration passes a ceiling of twenty");
+
+    assert!(
+        matches!(&overlapped, RunError::BudgetExceeded { budget, .. } if budget == "tokens"),
+        "{overlapped}"
+    );
+    assert_eq!(
+        overlapped.to_string(),
+        one_at_a_time.to_string(),
+        "charges are replayed in index order, so the trip is the sequential one"
+    );
+    assert_eq!(
+        overlapping.events, sequential.events,
+        "and the record stops where the sequential record stops: the events \
+         before the trip, and none after"
+    );
+}
+
+#[test]
+fn no_deltas_are_shown_from_inside_a_fan_out() {
+    /// Counts what a watcher was shown.
+    struct Watching {
+        events: Vec<RunEvent>,
+        deltas: usize,
+    }
+
+    impl crate::EventSink for Watching {
+        fn emit(&mut self, event: RunEvent) {
+            self.events.push(event);
+        }
+        fn delta(&mut self, _node: &str, _text: &str) {
+            self.deltas += 1;
+        }
+    }
+
+    /// Streams before it answers, so there is something to suppress.
+    struct Streaming(Answer);
+
+    impl ModelProvider for Streaming {
+        fn name(&self) -> &str {
+            "streaming"
+        }
+        fn streams(&self) -> bool {
+            true
+        }
+        fn complete(
+            &mut self,
+            request: &CompletionRequest,
+        ) -> Result<CompletionResponse, ProviderError> {
+            (self.0)(request)
+        }
+        fn complete_streaming(
+            &mut self,
+            request: &CompletionRequest,
+            on_delta: crate::provider::DeltaSink<'_>,
+        ) -> Result<CompletionResponse, ProviderError> {
+            on_delta("a fragment");
+            (self.0)(request)
+        }
+    }
+
+    let ir = fan_out_mapper();
+    let answer = echoing();
+    let mut provider = Streaming(Arc::clone(&answer));
+    let mut tools = DenyAllTools;
+    let mut watcher = Watching {
+        events: Vec::new(),
+        deltas: 0,
+    };
+    let registry = BTreeMap::new();
+    let factory_answer = Arc::clone(&answer);
+    let result = run(
+        &ir,
+        &registry,
+        &mut provider,
+        &mut tools,
+        &mut watcher,
+        RunOptions {
+            inputs: three_items(),
+            fan_out: FanOut::new(
+                Box::new(move || Ok(Box::new(Streaming(Arc::clone(&factory_answer))))),
+                4,
+            ),
+            ..RunOptions::default()
+        },
+    );
+
+    result.expect("the fan-out should succeed");
+    assert_eq!(
+        watcher.deltas, 0,
+        "eight concurrent answers interleaved on one terminal is not a feature"
+    );
+    assert_eq!(
+        watcher
+            .events
+            .iter()
+            .filter(|event| matches!(event, RunEvent::ModelCall { .. }))
+            .count(),
+        3,
+        "the events still arrive; only the live text does not"
+    );
+}
+
+/// Run the mapper with a factory that counts, and report how many it built.
+fn built_providers_for(
+    ir: &AgentIr,
+    tools: &mut dyn crate::ToolHost,
+    approval: HumanChannel,
+) -> (serde_json::Value, usize) {
+    let mut provider = Answering(echoing());
+    let mut sink = CollectingSink::default();
+    let registry = BTreeMap::new();
+    let built = Arc::new(AtomicUsize::new(0));
+    let factory_built = Arc::clone(&built);
+    let result = run(
+        ir,
+        &registry,
+        &mut provider,
+        tools,
+        &mut sink,
+        RunOptions {
+            inputs: three_items(),
+            approval,
+            fan_out: FanOut::new(
+                Box::new(move || {
+                    factory_built.fetch_add(1, Ordering::Relaxed);
+                    Ok(Box::new(Answering(echoing())))
+                }),
+                4,
+            ),
+            ..RunOptions::default()
+        },
+    );
+    let report = result.expect("the fan-out should succeed");
+    (
+        report.outputs["out"].value.clone(),
+        built.load(Ordering::Relaxed),
+    )
+}
+
+#[test]
+fn a_body_that_calls_a_tool_executes_sequentially() {
+    // A tool server is one child process, started once and handshaken once. Until
+    // it can be shared behind a lock, a body that reaches one runs sequentially
+    // and the register says so rather than the release notes.
+    let mut ir = fan_out_mapper();
+    ir.effects.push("filesystem_read".to_string());
+    ir.policy.insert(
+        "filesystem_read".to_string(),
+        PolicyRule {
+            decision: Decision::Allow,
+            values: Vec::new(),
+            qualifier: None,
+        },
+    );
+    ir.tools.push(ToolBinding {
+        reference: "mcp:fs.read_file".into(),
+        name: "fs.read_file".into(),
+        transport: "mcp".into(),
+        scopes: BTreeMap::new(),
+        effects: vec!["filesystem_read".into()],
+        signature: ToolSignature {
+            params: Vec::new(),
+            result: "text".into(),
+        },
+    });
+
+    let mut call = Node::new("n3", NodeKind::ToolCall);
+    call.binding = Some("read".into());
+    call.tool = Some("mcp:fs.read_file".into());
+    call.effects = vec!["filesystem_read".to_string()];
+    call.next = Some("n1".into());
+    ir.nodes.push(call);
+    body_starts_at(&mut ir, "n3");
+
+    let mut tools = StaticToolHost::new().with("fs.read_file", |_| Ok(json!("# Sample")));
+    let (values, built) = built_providers_for(&ir, &mut tools, HumanChannel::Deny);
+    assert_eq!(values, json!(["a-done", "b-done", "c-done"]));
+    assert_eq!(
+        built, 0,
+        "a body that reaches the one tool host must not overlap"
+    );
+}
+
+#[test]
+fn a_body_that_needs_a_person_executes_sequentially() {
+    // The order somebody is asked in is observable to them, which is the argument
+    // ING6005 already makes about `consult`. A policy that requires approval for
+    // an effect makes the compiler put an `Approval` node in the body, so this is
+    // read from the artifact before the run starts.
+    let mut ir = fan_out_mapper();
+
+    let mut gate = Node::new("n3", NodeKind::Approval);
+    gate.label = Some("approval required before asking".into());
+    gate.effects = vec!["model_access".to_string()];
+    gate.next = Some("n1".into());
+    ir.nodes.push(gate);
+    body_starts_at(&mut ir, "n3");
+
+    let mut tools = DenyAllTools;
+    let (values, built) = built_providers_for(&ir, &mut tools, HumanChannel::AssumeYes);
+    assert_eq!(values, json!(["a-done", "b-done", "c-done"]));
+    assert_eq!(
+        built, 0,
+        "a body that can stop for a person must not overlap"
+    );
+}
+
+/// Record a fan-out over `items`, answering positionally.
+///
+/// A recording run has one cassette being written, so it has a ceiling of one and
+/// a positional script is exactly right for it — which is the arrangement these
+/// tests are about.
+fn record_fan_out(items: serde_json::Value, answers: Vec<serde_json::Value>) -> Cassette {
+    let ir = fan_out_mapper();
+    let mut provider = RecordingProvider::new(ScriptedProvider::new(answers), ir.agent.clone());
+    let mut tools = DenyAllTools;
+    let mut sink = CollectingSink::default();
+    let registry = BTreeMap::new();
+    run(
+        &ir,
+        &registry,
+        &mut provider,
+        &mut tools,
+        &mut sink,
+        RunOptions {
+            inputs: [("items".to_string(), items)].into(),
+            ..RunOptions::default()
+        },
+    )
+    .expect("the recording run should succeed");
+    provider.finish()
+}
+
+fn replay_fan_out(
+    cassette: Cassette,
+    items: serde_json::Value,
+) -> Result<crate::RunReport, RunError> {
+    let ir = fan_out_mapper();
+    let mut provider = ReplayProvider::new(cassette);
+    let mut tools = DenyAllTools;
+    let mut sink = CollectingSink::default();
+    let registry = BTreeMap::new();
+    run(
+        &ir,
+        &registry,
+        &mut provider,
+        &mut tools,
+        &mut sink,
+        RunOptions {
+            inputs: [("items".to_string(), items)].into(),
+            // A cassette is one tape with one position in it, so a replayed run
+            // has a ceiling of one however generous this is.
+            fan_out: FanOut {
+                providers: None,
+                ceiling: 8,
+            },
+            ..RunOptions::default()
+        },
+    )
+}
+
+#[test]
+fn a_replayed_fan_out_takes_its_rows_in_order() {
+    let cassette = record_fan_out(
+        json!(["a", "b", "c"]),
+        vec![json!("first"), json!("second"), json!("third")],
+    );
+    let report =
+        replay_fan_out(cassette, json!(["a", "b", "c"])).expect("a recorded fan-out should replay");
+    assert_eq!(
+        report.outputs["out"].value,
+        json!(["first", "second", "third"])
+    );
+}
+
+#[test]
+fn two_iterations_over_identical_items_get_the_rows_recorded_for_them() {
+    // The case that killed RFC-0021's digest-matching rule, kept as a test so it
+    // cannot come back. Two identical elements ask identical questions, so their
+    // recorded rows carry **one digest** -- but the answers a live model gave them
+    // need not be equal. Matching by "the first unconsumed row whose digest
+    // matches" would hand them out by arrival order, and the collected list would
+    // be `["foo", "bar"]` or `["bar", "foo"]` depending on the schedule.
+    let cassette = record_fan_out(json!(["x", "x"]), vec![json!("foo"), json!("bar")]);
+
+    assert_eq!(
+        cassette.interactions[0].request_digest, cassette.interactions[1].request_digest,
+        "identical elements ask identical questions, which is the whole difficulty"
+    );
+    assert_ne!(
+        cassette.interactions[0].value, cassette.interactions[1].value,
+        "and a model may answer the same question two ways, which is the other half"
+    );
+
+    // Replayed repeatedly: the answer is the recorded one every time, because the
+    // row an iteration gets is decided by position and a replayed fan-out has a
+    // ceiling of one.
+    for attempt in 0..8 {
+        let report = replay_fan_out(cassette.clone(), json!(["x", "x"]))
+            .expect("a recorded fan-out should replay");
+        assert_eq!(
+            report.outputs["out"].value,
+            json!(["foo", "bar"]),
+            "attempt {attempt} disagreed with the recording"
+        );
+    }
+}
+
+#[test]
+fn a_cassette_recorded_from_a_fan_out_is_byte_identical_run_to_run() {
+    // A cassette nobody can diff is a cassette nobody reviews.
+    let answers = vec![json!("first"), json!("second"), json!("third")];
+    let once = record_fan_out(json!(["a", "b", "c"]), answers.clone());
+    let twice = record_fan_out(json!(["a", "b", "c"]), answers);
+    assert_eq!(once.to_canonical_json(), twice.to_canonical_json());
 }

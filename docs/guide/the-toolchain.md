@@ -402,6 +402,63 @@ it: a declaration takes over a built-in name, so `name = "anthropic"` with an
 `api-key-env` and a `timeout-seconds` reaches the same service on your own
 terms.
 
+### How many calls at once
+
+`parallel map` overlaps its iterations. How many at a time is yours to say:
+
+```toml
+[model]
+max-concurrency = 8     # 0 and 1 both mean one at a time
+```
+
+Absent, it is **four**. Against a service that answers four requests at once, ten
+documents summarised by a thirty-second call each is a little over a minute
+rather than five. A fan-out over a thousand items still opens four connections
+rather than a thousand: each concurrent iteration gets its own provider, so the
+ceiling is also the number of connection pools your run holds.
+
+**On a local model, raising it can make a run slower, and the default may already
+be too high.** Measured on one 8B model under Ollama on an 8 GB card: with
+`max-concurrency = 1` the same fan-out took 19–21 s, and with `4` it took 24 s.
+Nothing was wrong with either run — the results were byte-identical — but four
+concurrent requests need four KV caches, and on a card with about 2 GB free after
+the weights they do not fit. What the server does about that costs more than the
+overlap saves.
+
+So the number to reach for on a machine serving one model to one person is
+usually `1`, and this is the clearest case for why the ceiling is deployment
+configuration rather than something the artifact states: **the same agent wants
+`1` here and `8` against a hosted API,** and nothing in the program could tell
+you which. Measure it rather than assuming; `ollama ps` will tell you how much
+context the server actually kept and whether the weights are still on the GPU.
+
+It is under `[model]` rather than on one provider because a run routes to one
+provider at a time: the number bounds what your run asks for, not what an
+endpoint can take. And the artifact cannot state one, for the reason it cannot
+state a `timeout-seconds` — how many concurrent requests a service tolerates is a
+property of that service and of the machine calling it.
+
+**A fan-out does not always overlap, and the rule is worth knowing before you
+plan around it.** Overlapping needs a second of everything an iteration touches,
+so a body runs one iteration at a time whenever there is only one of something:
+
+| Your fan-out runs sequentially when | Because |
+|---|---|
+| it is replaying a cassette — `ingot test`, or `--provider replay` | one tape, one position in it |
+| it is running under `--sandbox` containment | the supervisor is one pair of pipes |
+| the body can stop for you — an `approve`, or a `call` your policy gates | there is one of you, and the order you were asked in would depend on the schedule |
+| the body makes a tool `call` at all | a tool server is one child process, started and handshaken once |
+| it is recording with `--record` | one cassette is being written, and a cassette you can review is written in index order |
+
+The last two are limitations rather than principles, and the register carries
+them: [GAP-043](../gaps.md#gap-043).
+
+**Nothing about your results changes either way.** The values, the event stream
+and the cost are the same ones a sequential run produces — byte for byte, and
+that is a tested property rather than an intention. Only the wall clock differs,
+which is why `ingot test` staying sequential costs you nothing: there is no
+socket to wait on in a replay.
+
 ### Asking for a capability instead of a model
 
 An agent can state what it needs rather than which model provides it:

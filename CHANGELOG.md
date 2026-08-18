@@ -8,6 +8,80 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
 
 ## [Unreleased]
 
+### Added
+
+- **`parallel map` overlaps its iterations.** Ten documents summarised by a
+  thirty-second model call each is a little over a minute rather than five. The
+  ceiling is `[model] max-concurrency`, four by default, and it bounds the
+  connection pools a run holds as well as the requests in flight: each
+  overlapping iteration gets its own provider, and one provider is built per
+  worker rather than per element. Deployment configuration, and the artifact may
+  not state one, for the reason it may not state a `timeout-seconds`. Closes
+  [GAP-010](docs/gaps.md#gap-010); specified as
+  [Runtime 0.6](specs/runtime/v0.6.md); designed in
+  [RFC-0021](rfcs/0021-a-fan-out-that-overlaps.md).
+
+  **Nothing a run produces changes.** The values, the event stream, the recorded
+  cassette and the cost are the same ones a sequential run produces, byte for
+  byte, and that is a tested property rather than an intention — each iteration
+  records its events and its charges in one private ordered trace, and the fan-out
+  replays them into the run in index order. So a budget trips at the total
+  sequential execution would have reached, at the node it would have reached it,
+  having emitted the events it would have emitted and no others. A failing
+  iteration does not cancel the others, and the reported failure is the first in
+  **index** order rather than the first in time — which error an operator is shown
+  must not depend on which socket answered first.
+
+  **A fan-out overlaps only what can be duplicated,** which is why several
+  arrangements stay sequential: a replay has one tape, a contained run has one
+  pair of pipes, a person is one person, a tool server is one child process. The
+  first two are simply the absence of a way to build a second provider, so they
+  cost no code. `ingot test` is one of them and loses nothing by it: there is no
+  socket to wait on in a replay. What is left is
+  [GAP-043](docs/gaps.md#gap-043) — a body that calls a tool, and a run that is
+  recording, do not overlap yet.
+
+  Nothing shows deltas from inside a fan-out. Eight answers interleaved fragment
+  by fragment on one terminal is not a live view of anything.
+
+  **The default of four is aimed at a hosted API, and on a local model it can be
+  too high.** Measured against one 8B model under Ollama on an 8 GB card, the same
+  fan-out took 19–21 s at `1` and 24 s at `4`: four concurrent requests need four
+  KV caches, and they did not fit beside the weights. The results were identical,
+  which is the property that matters — but the wall clock went the wrong way, and
+  [the guide](docs/guide/the-toolchain.md#how-many-calls-at-once) now says so and
+  says how to tell. It is also the clearest argument yet that this number belongs
+  to the deployment: the same agent wants `1` on that machine and `8` against a
+  hosted endpoint, and nothing in the program could say which.
+
+### Fixed
+
+- **The routing notice is printed once again.** `model calls go to local` was
+  emitted by every provider construction, so an overlapping fan-out printed it
+  once per worker. It describes a run's routing, not an instance, and five copies
+  of it told an operator only how many threads there were — the one thing about a
+  run that is deliberately not observable. Found by running a fan-out against a
+  local Ollama rather than by a test, which is why it is worth naming.
+
+### Changed
+
+- **`ingot-runtime` (breaking, the crate only).** `catalogue::build` returns
+  `Box<dyn ModelProvider + Send>`, and `RunOptions` gains a `fan_out` field. An
+  existing `impl ModelProvider` compiles untouched unless it holds something
+  genuinely thread-hostile, and a caller who passes `FanOut::default()` — or uses
+  `..RunOptions::default()` — keeps today's behaviour exactly. No trait changed
+  shape: `complete(&mut self, …)` stays as it is, because an implementer is never
+  called twice at once. Done now because
+  [no backend outside this repository is known to exist](docs/gaps.md#gap-039),
+  and doing it later means doing it to somebody.
+
+- **`RFC-0021` was corrected before it was built.** Three of its claims did not
+  survive the code. Its digest-matching rule would have made `ingot test` flaky
+  on a fan-out over duplicate items — identical requests share a digest, and their
+  recorded answers need not be equal — while buying no wall clock at all, because
+  one cassette is one lock. It is replaced by the ceiling above, and **the
+  cassette format, version and matching rule are untouched.**
+
 ## [0.7.0] — 2026-08-17
 
 The release where an operator can say how long a model may take.

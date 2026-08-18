@@ -85,6 +85,25 @@
 //! a program written by `ingot build --target python` reads the same variable —
 //! that program has no manifest to read, and the ceiling was the one piece of
 //! configuration it had no way to receive at all.
+//!
+//! # How many calls at once
+//!
+//! ```toml
+//! [model]
+//! max-concurrency = 8
+//! ```
+//!
+//! How many iterations of one `parallel map` may have a call in flight. It is
+//! deployment configuration for the same reason `timeout-seconds` is, and it is
+//! under `[model]` rather than on one provider because a run routes to one
+//! provider at a time: the number bounds the run's appetite, not an endpoint's
+//! capacity. See [`ModelConfig::max_concurrency`] and
+//! [RFC-0021](../../../rfcs/0021-a-fan-out-that-overlaps.md).
+//!
+//! There is no environment variable beside it, unlike the wait above. The wait
+//! needed one because a program written by `ingot build --target python` has no
+//! manifest to read; that program executes a fan-out sequentially and has no use
+//! for a ceiling.
 
 use std::collections::BTreeSet;
 use std::time::Duration;
@@ -161,6 +180,16 @@ pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(180);
 /// `INGOT_OPENAI_BASE_URL` from — so one name serves both backends, and the
 /// same machine is configured once however its agents are run.
 pub const TIMEOUT_ENV: &str = "INGOT_MODEL_TIMEOUT_SECONDS";
+
+/// How many iterations of one `parallel map` may have a call in flight when
+/// nothing says otherwise.
+///
+/// Small on purpose. A fan-out over a thousand items must not open a thousand
+/// connections, and every iteration carries its own provider — so the ceiling is
+/// also the number of HTTP connection pools a run holds. Four overlaps enough to
+/// turn a fan-out of ten thirty-second calls from five minutes into a little over
+/// one, without a run looking like a load test to whoever is answering.
+pub const DEFAULT_MAX_CONCURRENCY: u32 = 4;
 
 /// The wait a provider gets: what it declared, else what the machine says, else
 /// the default.
@@ -272,6 +301,36 @@ pub struct ModelConfig {
     /// against". This is that catalogue.
     #[serde(default, rename = "catalogue", skip_serializing_if = "Vec::is_empty")]
     pub catalogue: Vec<ModelEntry>,
+    /// How many iterations of one `parallel map` may have a call in flight.
+    ///
+    /// Absent falls back to [`DEFAULT_MAX_CONCURRENCY`]. `0` and `1` both mean
+    /// sequential execution, which is what a machine gets when it says so.
+    ///
+    /// Deployment configuration, and the artifact may not state one, for the
+    /// reason `timeout-seconds` may not: how many concurrent requests a service
+    /// tolerates is a property of that service and of the machine calling it.
+    /// The same artifact against a hosted API and against a laptop wants
+    /// different numbers, and one carrying a number would be wrong on one of
+    /// them with nothing in the program to explain why.
+    ///
+    /// It sits under `[model]` rather than on a `[[model.provider]]` because a
+    /// run routes to one provider at a time, so the ceiling bounds the run's
+    /// appetite rather than an endpoint's capacity. Moving it to the provider
+    /// later is additive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_concurrency: Option<u32>,
+}
+
+impl ModelConfig {
+    /// The ceiling a fan-out gets: what the manifest said, else the default.
+    ///
+    /// Never zero. `0` is an operator saying "one at a time", and reporting it
+    /// as zero would make every caller translate the same special case.
+    pub fn fan_out_ceiling(&self) -> u32 {
+        self.max_concurrency
+            .unwrap_or(DEFAULT_MAX_CONCURRENCY)
+            .max(1)
+    }
 }
 
 /// What one model provides.
@@ -533,7 +592,7 @@ pub fn build(
     models: &ModelConfig,
     model_override: Option<String>,
     effort: Option<String>,
-) -> Result<Box<dyn crate::provider::ModelProvider>, crate::provider::ProviderError> {
+) -> Result<Box<dyn crate::provider::ModelProvider + Send>, crate::provider::ProviderError> {
     use crate::provider::ProviderError;
 
     // The whole manifest, not just this declaration. A declared provider used
@@ -844,6 +903,7 @@ mod tests {
             catalogue: Vec::new(),
             default: Some("anthropic".to_string()),
             providers: Vec::new(),
+            max_concurrency: None,
         };
         assert!(config.validate(BUILT_IN).is_ok());
     }
@@ -855,6 +915,7 @@ mod tests {
             catalogue: Vec::new(),
             default: Some("mistral".to_string()),
             providers: vec![provider("local")],
+            max_concurrency: None,
         };
         let error = config.validate(BUILT_IN).unwrap_err();
         assert!(error.contains("mistral"), "{error}");

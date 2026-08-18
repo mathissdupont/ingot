@@ -37,7 +37,6 @@ to you*.
 | ID | Gap | Class | Closes with |
 |----|-----|-------|-------------|
 | [GAP-009](#gap-009) | MCP prompts, resources and sampling unsupported | Refused | language support for each |
-| [GAP-010](#gap-010) | `parallel` executes sequentially | Degraded | a scheduler in the interpreter |
 | [GAP-011](#gap-011) | No package semantics beyond project-local imports | Absent | a package model (RFC) |
 | [GAP-012](#gap-012) | No generics | Absent | evidence, then an RFC |
 | [GAP-020](#gap-020) | The boundary needs Linux containers | Refused | a second expression of the boundary |
@@ -52,6 +51,7 @@ to you*.
 | [GAP-037](#gap-037) | A remote tool server cannot be used under a boundary | Refused | a channel for a tool call out of a contained run |
 | [GAP-038](#gap-038) | No backend outside this repository has ever run the suite | Unproven | somebody else's backend, and what they hit |
 | [GAP-039](#gap-039) | No agent outside this repository is known to run | Unproven | a program somebody depends on, and its friction |
+| [GAP-043](#gap-043) | A fan-out does not overlap when its body calls a tool, or when it records | Degraded | `Send` on `ToolHost`, a locking proxy, and per-iteration recording buffers |
 
 ---
 
@@ -270,56 +270,52 @@ a test that means something.
 *Recorded in.* [README](guide/the-toolchain.md#authoring-with-a-model), the generated
 project README, [RFC-0007](../rfcs/0007-the-ingot-product-loop.md).
 
-### GAP-010
+### GAP-043
 
-**`parallel` executes sequentially.**
+**A fan-out does not overlap when its body calls a tool, or when the run is
+recording.**
 
-`parallel map` runs its iterations one after another. The result is identical:
-the compiler guarantees a `parallel` body contains no state write, no emission
-and no checkpoint, so iterations cannot observe one another. Only the wall clock
-differs.
+[GAP-010](#gap-010) closed: iterations of a `parallel map` overlap. Two kinds of
+body still do not, and both are what
+[RFC-0021](../rfcs/0021-a-fan-out-that-overlaps.md) left for a second change
+rather than a principle it settled.
 
-*Nothing here misleads.* [Runtime 0.1 §5.1](../specs/runtime/v0.1.md) already
-says the node marks an opportunity for concurrency rather than an obligation,
-and that conformance asserts the result and never the schedule. This entry is a
-performance gap, which is why it is Degraded rather than Unenforced.
+- **A body that makes a tool `call`.** A `ToolHost` is an MCP client attached to
+  one child process, started once and handshaken once. Sharing it behind a lock
+  would let a mixed body's `ask`s overlap while its `call`s queued; nothing shares
+  it yet, so a body holding a `call` anywhere in it runs one iteration at a time.
+- **A run recording with `--record`.** There is one cassette being written, and a
+  cassette somebody can review is written in index order — which needs a recording
+  buffer per iteration. Recording is also the one arrangement where the overlap
+  would be worth most, because it is by definition a live run.
 
-*What closing it needs — the full price.* This entry used to say "concurrency in
-the interpreter, and a decision about what a provider rate limit does to a
-fan-out". That undersold it. Concurrency in a fan-out makes the order of model
-and tool calls nondeterministic, and three things depend on that order today:
+*How it shows up.* The wall clock, and nothing else. The values, the event stream,
+the recorded cassette and the cost are the same ones an overlapping fan-out
+produces, which is the property
+[Runtime 0.6 §3](../specs/runtime/v0.6.md) requires in both directions. This is
+Degraded for exactly the reason GAP-010 was.
 
-- **Replay matches by position.** `ReplayProvider` and `ReplayToolHost` both take
-  the next recorded row. Concurrent calls arriving in a different order than they
-  were recorded would make `ingot test` flaky, so replay would have to match by
-  digest instead.
-- **The event stream is compared across backends.**
-  `the_event_streams_agree_on_kind_and_order` asserts that the reference
-  interpreter and the Python backend emit the same events in the same order. The
-  Python backend is sequential, so a concurrent reference diverges unless each
-  iteration's events are buffered and spliced back in index order.
-- **`ModelProvider::complete` takes `&mut self`.** Calling it concurrently means
-  making the central backend contract thread-safe — a change to the interface
-  every backend implements, for a wall-clock win.
+*Why not yet.* Both need the same three pieces — `Send` on `ToolHost`, a proxy
+that locks per call, and per-iteration recording buffers spliced in index order —
+and taking them on at the same time as the threading itself would have put a lock
+in the first version of a feature whose whole argument is that a lock is not
+overlap. The first change kept to one trait's return type and no locks anywhere.
 
-None of that is impossible; it is a deterministic-concurrency design, and the
-honest version of it keeps every property above. It is simply much larger than
-"concurrency in the interpreter", and it should not be started by someone who
-believes the shorter sentence.
+*What closing it needs.* Those three pieces, and one decision the RFC did not
+make: what a concurrent tool host means for a server the operator started
+`--allow-write`. Eight iterations sharing one write-capable server is the
+arrangement they approved; eight copies of it is not, which is the shape
+[GAP-035](#gap-035) already warns about for memory stores.
 
-*What must not be done.* Concurrency for live providers and sequential execution
-under replay. It is the cheap version, and it makes an artifact behave one way in
-a test and another in production — the divergence this project exists to refuse.
+*What will not close, and should not.* A body that can stop for a **person** —
+an `approve`, or a `call` whose effect the policy gates — stays sequential
+whatever happens to the tool host. The order somebody is asked in is observable to
+them, which is the argument `ING6005` already makes about `consult`.
 
-*Designed, not yet built.* [RFC-0021](../rfcs/0021-a-fan-out-that-overlaps.md) is
-the longer sentence this entry asked for. It found the price to be lower in one
-place than stated here — every cassette row already carries a digest, so matching
-by digest instead of by position needs no new cassette format — and higher in
-another: three traits take `&mut self` and none is `Send`, not one.
-
-*Recorded in.* [Runtime 0.1 §5.1](../specs/runtime/v0.1.md),
-[RFC-0021](../rfcs/0021-a-fan-out-that-overlaps.md),
-`crates/ingot-cli/tests/differential.rs`.
+*Recorded in.* [RFC-0021](../rfcs/0021-a-fan-out-that-overlaps.md),
+[Runtime 0.6 §2.2](../specs/runtime/v0.6.md),
+[The toolchain guide](guide/the-toolchain.md#how-many-calls-at-once),
+[`crates/ingot-runtime/src/interp.rs`](../crates/ingot-runtime/src/interp.rs).
 
 ## Absent
 
@@ -562,6 +558,70 @@ that closes this is somebody depending on one.
 When a gap closes it moves here with the release that closed it, and its section
 stays where a link can find it. Identifiers are never reused: a link to GAP-007
 must keep meaning what it meant.
+
+### GAP-010
+
+**`parallel` executed sequentially.**
+*Closed 2026-08-17.*
+
+`parallel map` ran its iterations one after another. Ten documents, ten model
+calls, and the tenth started when the ninth finished — five minutes to do five
+minutes of nothing. Nothing misled, which is why this sat in Degraded for months:
+[Runtime 0.1 §5.1](../specs/runtime/v0.1.md) always said the node marks an
+opportunity rather than an obligation. But the wall clock is the whole reason the
+construct exists, and an author who writes `parallel map` and gets sequential
+execution has written a comment.
+
+*What closed it.* Threads, per iteration, where every source of answers the body
+touches can be duplicated — designed in
+[RFC-0021](../rfcs/0021-a-fan-out-that-overlaps.md) and specified as
+[Runtime 0.6](../specs/runtime/v0.6.md). Determinism is bought by a per-iteration
+**trace** rather than by locks: each iteration records its events and its charges
+in one ordered list, and the fan-out replays them into the run in index order. So
+the event stream of an overlapping fan-out is byte-identical to the sequential
+one, a budget trips at the total sequential execution would have reached and at
+the node it would have reached it, and the reported failure is the first in index
+order rather than the first in time.
+
+*What this entry got wrong, and it was the expensive half.* It said replay would
+"have to match by digest instead" of by position, and named sequential-under-replay
+as the thing that **must not be done**. Both were mistaken, and reading the code
+is what showed it.
+
+Digest matching does not survive two iterations over identical items: their
+requests are identical, so their recorded rows share a digest — but the recorded
+*answers* need not be equal, and "first unconsumed match" then hands them out by
+arrival order. `[foo, bar]` or `[bar, foo]`, depending on the schedule. That is
+the flake the rule existed to prevent.
+
+And concurrency under replay was never real anyway. One cassette is one tape with
+one position in it, so every replayed call serialises behind it however many
+threads ask. The wall-clock win was zero and the cost was the nondeterminism
+above.
+
+So sequential-under-replay is what shipped — not as the cheap version this entry
+refused, but as one case of a general rule: **a fan-out overlaps only what can be
+duplicated.** A cassette, a contained run's supervisor, a person and a tool server
+each exist once, and each caps the fan-out at one iteration. The first two are
+simply the absence of a provider factory, so they cost no code and cannot be got
+wrong. The divergence this entry feared is in the *schedule*, which §5.1 has never
+asserted — and a sequential Python backend in production is conforming, so a
+sequential replay in a test cannot be the thing the project exists to refuse.
+
+*What it undersold, in the other direction.* Three interfaces take `&mut self`,
+not one — `ModelProvider`, `ToolHost` and `EventSink`. In the end none of them
+changed shape: `EventSink` is never shared, and a body that would touch the other
+two runs sequentially. The break is `+ Send` on what `catalogue::build` returns
+and one new `RunOptions` field.
+
+*What is left.* [GAP-043](#gap-043): a body that calls a tool, and a run that is
+recording, still do not overlap.
+
+*Recorded in.* [RFC-0021](../rfcs/0021-a-fan-out-that-overlaps.md),
+[Runtime 0.6](../specs/runtime/v0.6.md),
+[The toolchain guide](guide/the-toolchain.md#how-many-calls-at-once),
+[`crates/ingot-runtime/src/interp.rs`](../crates/ingot-runtime/src/interp.rs),
+`crates/ingot-cli/tests/differential.rs`.
 
 ### GAP-040
 

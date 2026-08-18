@@ -468,7 +468,7 @@ The ones worth knowing before you write an agent:
 
 | | |
 |---|---|
-| [GAP-010](docs/gaps.md#gap-010) | `parallel map` runs its iterations one after another. The result is identical; only the wall clock differs. |
+| [GAP-043](docs/gaps.md#gap-043) | `parallel map` overlaps its iterations, but not when the body calls a tool and not while recording. The result is identical either way; only the wall clock differs. |
 | [GAP-011](docs/gaps.md#gap-011) | Imports are project-local. There is no package model, so source is shared by copying it. |
 | [GAP-039](docs/gaps.md#gap-039) | **No agent outside this repository is known to run.** Every `.ing` program here was written to exercise the compiler. The friction that would stop you is probably not on this list, because nobody has hit it yet. |
 

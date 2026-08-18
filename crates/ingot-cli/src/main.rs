@@ -1110,6 +1110,9 @@ fn author_with_model(
         // one having been declared.
         models: ingot_runtime::ModelConfig::default(),
         strict_replay: false,
+        // Authoring is a run too, and saying which service is about to write
+        // somebody's program is worth one line.
+        announce_routing: true,
     };
     let mut provider = run::Provider::new(
         run::build_model_provider(&selection)?,

@@ -15,6 +15,7 @@ Normative behaviour lives here. Implementation detail does not.
 | [`runtime/v0.3.md`](runtime/v0.3.md) | Draft, implemented | Runtime 0.2 plus streaming, a live channel and transport-decided ceilings |
 | [`runtime/v0.4.md`](runtime/v0.4.md) | Draft, implemented | Runtime 0.3 plus a `verify` that runs, and a failed check that stops the run |
 | [`runtime/v0.5.md`](runtime/v0.5.md) | Draft, implemented | Runtime 0.4 plus persistent memory and a resumable checkpoint |
+| [`runtime/v0.6.md`](runtime/v0.6.md) | Draft, implemented | Runtime 0.5 plus a fan-out that overlaps, and what overlapping may not change |
 | [`tools/mcp-v0.2.md`](tools/mcp-v0.2.md) | Draft, implemented | MCP binding 0.1 plus Streamable HTTP and the policy check that governs it |
 | [`ingot-conformance`](../crates/ingot-conformance/README.md) | Draft, implemented | Normative tests a backend must pass. A crate rather than a directory here, because it ships inside the `ingot` binary and a package carries only its own files |
 

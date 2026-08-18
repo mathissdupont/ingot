@@ -225,10 +225,12 @@ fn verdict(kind: NodeKind) -> (Support, &'static str) {
         ),
         NodeKind::Parallel => (
             Support::Degraded,
-            "executed sequentially. The result is identical: the compiler \
-             guarantees a `parallel` body contains no state write, no emission \
-             and no checkpoint (ING6005), so iterations cannot observe one \
-             another and only the wall clock differs (GAP-010)",
+            "executed sequentially, where the reference interpreter overlaps \
+             iterations. The result is identical: the compiler guarantees a \
+             `parallel` body contains no state write, no emission and no \
+             checkpoint (ING6005), so iterations cannot observe one another and \
+             only the wall clock differs. A sequential backend conforms, and \
+             Runtime 0.6 section 1 says so rather than leaving it to be inferred",
         ),
         // Both cases match the reference interpreter exactly: a `verify`
         // carrying a `condition` is evaluated and reports `passed` or `failed`,

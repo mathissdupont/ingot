@@ -248,8 +248,9 @@ agent Fanout(topic: string) -> report<markdown> {
 
 * `parallel map` fans out over a collection. It is the only loop form, and it
   is bounded by the collection — which is what lets `steps` be checked at
-  compile time. (It currently *executes* sequentially; the result is identical
-  and [GAP-010](../gaps.md#gap-010) records the difference.)
+  compile time. Its iterations *overlap* where they can, and where they cannot
+  they run one at a time — the result and the record are the same either way, and
+  [GAP-043](../gaps.md#gap-043) records what still does not overlap.)
 * `memory { working ephemeral { … } }` declares typed state. `state.queries`
   reads and writes it.
 * `checkpoint "name"` marks a resumable point in the event stream.

@@ -503,6 +503,11 @@ pub fn adapt(path: &Path) -> Result<u8> {
             approval: HumanChannel::Deny,
             max_steps: 1_000,
             pricing: Default::default(),
+            // A case is served from its cassette, so there is one tape and a
+            // fan-out has a ceiling of one. That is what makes a case's event
+            // stream comparable against a sequential backend's: the reference
+            // interpreter is running the same schedule the Python backend does.
+            fan_out: Default::default(),
         },
     );
 
