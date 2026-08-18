@@ -195,7 +195,7 @@ impl Launcher for ContainerLauncher {
         server: &ServerConfig,
         agent: &str,
         _cwd: &Path,
-    ) -> Result<Box<dyn Transport>, String> {
+    ) -> Result<Box<dyn Transport + Send>, String> {
         let plan = self
             .plans
             .get(&(server.name.clone(), agent.to_string()))
@@ -238,7 +238,7 @@ impl Launcher for ContainerLauncher {
             Some(&self.workspace),
             &plan.env,
         )
-        .map(|transport| Box::new(transport) as Box<dyn Transport>)
+        .map(|transport| Box::new(transport) as Box<dyn Transport + Send>)
         .map_err(|error| error.to_string())
     }
 

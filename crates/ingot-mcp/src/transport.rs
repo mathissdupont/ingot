@@ -297,7 +297,7 @@ impl Drop for ChildTransport {
 
 /// Answers one incoming line with zero or more outgoing lines, so a fake peer
 /// can send notifications alongside a reply.
-type Handler = Box<dyn FnMut(&str) -> Vec<String>>;
+type Handler = Box<dyn FnMut(&str) -> Vec<String> + Send>;
 
 /// An in-process peer, for tests that exercise the protocol rather than the
 /// process.
@@ -309,7 +309,7 @@ pub struct LoopbackTransport {
 }
 
 impl LoopbackTransport {
-    pub fn new(handler: impl FnMut(&str) -> Vec<String> + 'static) -> LoopbackTransport {
+    pub fn new(handler: impl FnMut(&str) -> Vec<String> + Send + 'static) -> LoopbackTransport {
         LoopbackTransport {
             handler: Box::new(handler),
             pending: std::collections::VecDeque::new(),

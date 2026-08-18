@@ -485,7 +485,7 @@ pub fn exec() -> Result<u8> {
 /// They inherit the boundary rather than getting one of their own, which is the
 /// same guarantee by a shorter route: they are already inside a box built from
 /// the policy they would otherwise have been given.
-fn guest_tools(config: &WireConfig) -> Result<Box<dyn ToolHost>, String> {
+fn guest_tools(config: &WireConfig) -> Result<Box<dyn ToolHost + Send>, String> {
     if config.mcp.is_empty() {
         return Ok(Box::new(DenyAllTools));
     }

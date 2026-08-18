@@ -1327,7 +1327,7 @@ fn contained_host(compilation: &Compilation, config: &RunConfig) -> Result<McpTo
 /// The host is chosen here and nowhere else. When nothing is configured the
 /// answer is [`DenyAllTools`], so an artifact that needs a tool stops at the
 /// call with a message naming it — never by quietly skipping the step.
-fn tool_host(compilation: &Compilation, config: &RunConfig) -> Result<Box<dyn ToolHost>> {
+fn tool_host(compilation: &Compilation, config: &RunConfig) -> Result<Box<dyn ToolHost + Send>> {
     let required = required_tools(compilation);
     if config.no_tools || config.mcp.is_empty() {
         if !required.is_empty() && !config.no_tools {
@@ -1408,12 +1408,12 @@ fn tool_host(compilation: &Compilation, config: &RunConfig) -> Result<Box<dyn To
 /// a deployment decision, so the host stays a trait object, and the recording
 /// has to come back out afterwards without a downcast.
 enum Tools {
-    Plain(Box<dyn ToolHost>),
-    Recording(RecordingTools<Box<dyn ToolHost>>),
+    Plain(Box<dyn ToolHost + Send>),
+    Recording(RecordingTools<Box<dyn ToolHost + Send>>),
 }
 
 impl Tools {
-    fn new(inner: Box<dyn ToolHost>, record: bool) -> Tools {
+    fn new(inner: Box<dyn ToolHost + Send>, record: bool) -> Tools {
         if record {
             Tools::Recording(RecordingTools::new(inner))
         } else {
@@ -1421,7 +1421,7 @@ impl Tools {
         }
     }
 
-    fn as_mut(&mut self) -> &mut dyn ToolHost {
+    fn as_mut(&mut self) -> &mut (dyn ToolHost + Send) {
         match self {
             Tools::Plain(inner) => inner.as_mut(),
             Tools::Recording(inner) => inner,

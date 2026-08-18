@@ -32,14 +32,24 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
   **index** order rather than the first in time — which error an operator is shown
   must not depend on which socket answered first.
 
-  **A fan-out overlaps only what can be duplicated,** which is why several
-  arrangements stay sequential: a replay has one tape, a contained run has one
-  pair of pipes, a person is one person, a tool server is one child process. The
-  first two are simply the absence of a way to build a second provider, so they
-  cost no code. `ingot test` is one of them and loses nothing by it: there is no
-  socket to wait on in a replay. What is left is
-  [GAP-043](docs/gaps.md#gap-043) — a body that calls a tool, and a run that is
-  recording, do not overlap yet.
+  **A fan-out overlaps only what can be duplicated, or shared without the sharing
+  being observable.** A replay has one tape, a contained run has one pair of pipes,
+  a person is one person: each of those keeps the ceiling at one. The first two are
+  simply the absence of a way to build a second provider, so they cost no code, and
+  `ingot test` loses nothing by being one of them — there is no socket to wait on in
+  a replay.
+
+  A **tool host** is the one thing genuinely shared. There is one child process, so
+  its calls queue behind a lock and it never serves two iterations at once, which is
+  what `call(&mut self, …)` already promised. A body that is mostly `call` therefore
+  gains almost nothing and one that is mostly `ask` gains almost everything. The
+  order the server sees calls in does change — and was never promised: `parallel map`
+  has always run its body in an unspecified order
+  ([Language 0.1 §6.4](specs/language/v0.1.md)), so an `--allow-write` server needed
+  no rule of its own and gets none. What is left is
+  [GAP-043](docs/gaps.md#gap-043): a run that is **recording** keeps a ceiling of
+  one, because one cassette is being written and a reviewable cassette is written in
+  index order.
 
   Nothing shows deltas from inside a fan-out. Eight answers interleaved fragment
   by fragment on one terminal is not a live view of anything.
@@ -65,8 +75,10 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
 
 ### Changed
 
-- **`ingot-runtime` (breaking, the crate only).** `catalogue::build` returns
-  `Box<dyn ModelProvider + Send>`, and `RunOptions` gains a `fan_out` field. An
+- **`ingot-runtime`, `ingot-mcp` (breaking, the crates only).**
+  `catalogue::build` returns `Box<dyn ModelProvider + Send>`, `run` takes
+  `&mut (dyn ToolHost + Send)`, `ingot-mcp`'s boxed `Transport` gains the same
+  bound, and `RunOptions` gains a `fan_out` field. An
   existing `impl ModelProvider` compiles untouched unless it holds something
   genuinely thread-hostile, and a caller who passes `FanOut::default()` — or uses
   `..RunOptions::default()` — keeps today's behaviour exactly. No trait changed

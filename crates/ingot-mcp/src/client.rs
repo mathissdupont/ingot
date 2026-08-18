@@ -185,7 +185,7 @@ impl CallOutcome {
 
 pub struct McpClient {
     server: String,
-    transport: Box<dyn Transport>,
+    transport: Box<dyn Transport + Send>,
     timeout: Duration,
     next_id: u64,
     info: Option<ServerInfo>,
@@ -194,7 +194,7 @@ pub struct McpClient {
 impl McpClient {
     pub fn new(
         server: impl Into<String>,
-        transport: Box<dyn Transport>,
+        transport: Box<dyn Transport + Send>,
         timeout: Duration,
     ) -> Self {
         McpClient {
@@ -468,7 +468,7 @@ mod tests {
         Incoming::parse(line).unwrap().id.unwrap_or(Value::Null)
     }
 
-    fn client(handler: impl FnMut(&str) -> Vec<String> + 'static) -> McpClient {
+    fn client(handler: impl FnMut(&str) -> Vec<String> + Send + 'static) -> McpClient {
         McpClient::new(
             "test",
             Box::new(LoopbackTransport::new(handler)),

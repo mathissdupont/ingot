@@ -51,7 +51,7 @@ to you*.
 | [GAP-037](#gap-037) | A remote tool server cannot be used under a boundary | Refused | a channel for a tool call out of a contained run |
 | [GAP-038](#gap-038) | No backend outside this repository has ever run the suite | Unproven | somebody else's backend, and what they hit |
 | [GAP-039](#gap-039) | No agent outside this repository is known to run | Unproven | a program somebody depends on, and its friction |
-| [GAP-043](#gap-043) | A fan-out does not overlap when its body calls a tool, or when it records | Degraded | `Send` on `ToolHost`, a locking proxy, and per-iteration recording buffers |
+| [GAP-043](#gap-043) | A run that is recording does not overlap its fan-out | Degraded | per-iteration recording buffers, merged in index order |
 
 ---
 
@@ -272,50 +272,47 @@ project README, [RFC-0007](../rfcs/0007-the-ingot-product-loop.md).
 
 ### GAP-043
 
-**A fan-out does not overlap when its body calls a tool, or when the run is
-recording.**
+**A run that is recording does not overlap its fan-out.**
 
-[GAP-010](#gap-010) closed: iterations of a `parallel map` overlap. Two kinds of
-body still do not, and both are what
-[RFC-0021](../rfcs/0021-a-fan-out-that-overlaps.md) left for a second change
-rather than a principle it settled.
+*Narrowed 2026-08-18.* This entry used to carry two halves. The first — a body
+that makes a tool `call` runs sequentially — is closed: the host is shared behind
+a lock, its calls queue, and it never serves two iterations at once
+([Runtime 0.6 §2.3](../specs/runtime/v0.6.md)). The `--allow-write` question the
+entry asked has an answer that needed no new rule: what the host sees is the same
+serial stream of calls in a different order, and
+[Language 0.1 §6.4](../specs/language/v0.1.md) has always said a `parallel` body
+runs "in an unspecified order".
 
-- **A body that makes a tool `call`.** A `ToolHost` is an MCP client attached to
-  one child process, started once and handshaken once. Sharing it behind a lock
-  would let a mixed body's `ask`s overlap while its `call`s queued; nothing shares
-  it yet, so a body holding a `call` anywhere in it runs one iteration at a time.
-- **A run recording with `--record`.** There is one cassette being written, and a
-  cassette somebody can review is written in index order — which needs a recording
-  buffer per iteration. Recording is also the one arrangement where the overlap
-  would be worth most, because it is by definition a live run.
+What is left is `--record`. There is one cassette being written, and a cassette
+somebody can review is written in **index order**
+([Runtime 0.6 §3.3](../specs/runtime/v0.6.md)) — so a recording run keeps a ceiling
+of one, which is the one arrangement where the overlap would be worth most, because
+a recording run is by definition a live one.
 
-*How it shows up.* The wall clock, and nothing else. The values, the event stream,
-the recorded cassette and the cost are the same ones an overlapping fan-out
-produces, which is the property
-[Runtime 0.6 §3](../specs/runtime/v0.6.md) requires in both directions. This is
-Degraded for exactly the reason GAP-010 was.
+*How it shows up.* The wall clock of `ingot run --record`, and nothing else. Drop
+`--record` and the same fan-out overlaps.
 
-*Why not yet.* Both need the same three pieces — `Send` on `ToolHost`, a proxy
-that locks per call, and per-iteration recording buffers spliced in index order —
-and taking them on at the same time as the threading itself would have put a lock
-in the first version of a feature whose whole argument is that a lock is not
-overlap. The first change kept to one trait's return type and no locks anywhere.
+*Why not yet.* Recording is a **wrapper the caller puts around a provider**, and
+the interpreter cannot see it. Splicing rows in index order needs the iteration
+each row belongs to, which only the interpreter knows — so closing this means
+either teaching `CompletionRequest` and `ToolInvocation` to carry an iteration
+path, or making recording something the runtime knows about. Both are layering
+decisions, and neither belonged in the change that added the threads.
 
-*What closing it needs.* Those three pieces, and one decision the RFC did not
-make: what a concurrent tool host means for a server the operator started
-`--allow-write`. Eight iterations sharing one write-capable server is the
-arrangement they approved; eight copies of it is not, which is the shape
-[GAP-035](#gap-035) already warns about for memory stores.
+*What closing it needs.* That decision, and then per-iteration recording buffers
+merged in index order on both lists. The property to hold is the one
+[Runtime 0.6 §3.3](../specs/runtime/v0.6.md) already states: two recordings of the
+same run against the same inputs are the same file.
 
-*What will not close, and should not.* A body that can stop for a **person** —
-an `approve`, or a `call` whose effect the policy gates — stays sequential
-whatever happens to the tool host. The order somebody is asked in is observable to
-them, which is the argument `ING6005` already makes about `consult`.
+*What will not close, and should not.* A body that can stop for a **person** — an
+`approve`, or a `call` whose effect the policy gates — stays sequential. The order
+somebody is asked in is observable to them, which is the argument `ING6005` already
+makes about `consult`.
 
 *Recorded in.* [RFC-0021](../rfcs/0021-a-fan-out-that-overlaps.md),
 [Runtime 0.6 §2.2](../specs/runtime/v0.6.md),
 [The toolchain guide](guide/the-toolchain.md#how-many-calls-at-once),
-[`crates/ingot-runtime/src/interp.rs`](../crates/ingot-runtime/src/interp.rs).
+[`crates/ingot-cli/src/run.rs`](../crates/ingot-cli/src/run.rs).
 
 ## Absent
 
@@ -562,7 +559,7 @@ must keep meaning what it meant.
 ### GAP-010
 
 **`parallel` executed sequentially.**
-*Closed 2026-08-17.*
+*Closed 2026-08-18.*
 
 `parallel map` ran its iterations one after another. Ten documents, ten model
 calls, and the tenth started when the ninth finished — five minutes to do five

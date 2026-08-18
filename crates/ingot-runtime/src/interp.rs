@@ -12,8 +12,10 @@
 //!   checkpoint, so iterations cannot observe each other. Where a run can make a
 //!   second model provider, they run on separate threads; where it cannot — a
 //!   cassette is one tape, a contained run is one pair of pipes, a person is one
-//!   operator, a tool server is one child process — the fan-out has a ceiling of
-//!   one and runs as it always did. Either way the result and the event stream
+//!   operator — the fan-out has a ceiling of one and runs as it always did. The
+//!   one thing genuinely shared is the tool host, because a tool server is one
+//!   child process, and it is shared behind a lock: its calls queue, and it never
+//!   sees two at once. Either way the result and the event stream
 //!   are the same ones, because each iteration's events and charges are recorded
 //!   in a private trace and replayed into the run in **index order**. See
 //!   [`FanOut`] and [RFC-0021](../../../rfcs/0021-a-fan-out-that-overlaps.md).
@@ -215,7 +217,7 @@ struct Interp<'a> {
     ir: &'a AgentIr,
     registry: &'a AgentRegistry,
     provider: &'a mut dyn ModelProvider,
-    tools: &'a mut dyn ToolHost,
+    tools: &'a mut (dyn ToolHost + Send),
     sink: &'a mut dyn EventSink,
     approval: &'a mut HumanChannel,
 
@@ -271,7 +273,7 @@ pub fn run(
     ir: &AgentIr,
     registry: &AgentRegistry,
     provider: &mut dyn ModelProvider,
-    tools: &mut dyn ToolHost,
+    tools: &mut (dyn ToolHost + Send),
     sink: &mut dyn EventSink,
     options: RunOptions,
 ) -> Result<RunReport, RunError> {
@@ -305,6 +307,182 @@ pub fn run(
     )
 }
 
+/// Everything the workers of one fan-out read, gathered so the call that spawns
+/// them has an argument list a person can check.
+///
+/// All of it is shared immutably. A `parallel` body holds no state write, no
+/// emission and no checkpoint (`ING6005`), so nothing here is merged back.
+struct Workers<'w> {
+    ir: &'w AgentIr,
+    registry: &'w AgentRegistry,
+    node: &'w Node,
+    binder: &'w str,
+    items: &'w [Value],
+    last_body_node: Option<&'w str>,
+    bindings: &'w BTreeMap<String, Value>,
+    state: &'w BTreeMap<String, Value>,
+    memory: &'w BTreeMap<String, Value>,
+    pricing: &'w Pricing,
+    /// What is left of the run's step budget, as each iteration's own ceiling.
+    headroom: u32,
+    factory: &'w ProviderFactory,
+    count: usize,
+}
+
+/// Run every iteration across `count` threads, and hand back what each did.
+///
+/// A free function taking the host by a **short** borrow, so that the enclosing
+/// run gets `&mut self` back the moment the threads have joined — the replay that
+/// follows needs it, and a `Mutex` holding a field of `self` for the rest of the
+/// interpreter's life would not give it up.
+fn run_workers<'h>(
+    work: Workers<'_>,
+    tools: &'h mut (dyn ToolHost + Send + 'h),
+) -> Result<Vec<Option<Iteration>>, RunError> {
+    let Workers {
+        ir,
+        registry,
+        node,
+        binder,
+        items,
+        last_body_node,
+        bindings,
+        state,
+        memory,
+        pricing,
+        headroom,
+        factory,
+        count,
+    } = work;
+    let total = items.len();
+
+    // One provider per **worker**, not per iteration. A thousand items under a
+    // ceiling of four is four connection pools rather than a thousand, which is
+    // the whole reason the ceiling is worth having: the pools are what a
+    // per-iteration instance costs, and the ceiling is what bounds them.
+    //
+    // Built before anything runs, so a provider that will not build is a fan-out
+    // that fails having spent nothing, at the node that would have used it. A
+    // worker reuses its instance across the iterations it claims, one at a time,
+    // so exclusive access stays literally true.
+    let mut providers = Vec::with_capacity(count);
+    for _ in 0..count {
+        providers.push(factory().map_err(|source| RunError::Provider {
+            node: node.id.clone(),
+            source,
+        })?);
+    }
+
+    // The one thing a fan-out shares. See `SharedToolHost`.
+    let host = Mutex::new(tools);
+    let host = &host;
+    let claimed = AtomicUsize::new(0);
+    let outcomes: Mutex<Vec<Option<Iteration>>> = Mutex::new((0..total).map(|_| None).collect());
+    let next = &claimed;
+    let slots = &outcomes;
+
+    std::thread::scope(|scope| {
+        for mut provider in providers {
+            scope.spawn(move || loop {
+                let index = next.fetch_add(1, Ordering::Relaxed);
+                if index >= total {
+                    break;
+                }
+                let iteration = run_iteration(
+                    ir,
+                    registry,
+                    node,
+                    binder,
+                    items[index].clone(),
+                    index,
+                    total,
+                    last_body_node,
+                    bindings,
+                    state,
+                    memory,
+                    pricing,
+                    headroom,
+                    &mut *provider,
+                    &mut SharedToolHost::new(host),
+                );
+                // Poisoning means another iteration panicked, which the scope is
+                // about to re-raise. Taking the lock anyway leaves that panic as
+                // the one reported rather than this one.
+                let mut slots = slots
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                slots[index] = Some(iteration);
+            });
+        }
+    });
+
+    Ok(outcomes
+        .into_inner()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()))
+}
+
+/// The run's tool host, shared by the iterations of an overlapping fan-out.
+///
+/// A `ToolHost` is an MCP client attached to a child process that was started
+/// once, handshaken once, and may have been started `--allow-write`. There can be
+/// no second one, so this is the one place in a fan-out where something *is*
+/// shared behind a lock — and the lock is what keeps the promise `&mut self`
+/// makes: **the host is never called by two iterations at once.** What it sees is
+/// a serial stream of calls, exactly as before.
+///
+/// What changes is the order that stream arrives in, and that was never promised:
+/// [Language 0.1 §6.4](../../../specs/language/v0.1.md) says a `parallel` body
+/// runs "in an unspecified order". A program that depended on the order of its
+/// fan-out's tool calls was already depending on something no version of this
+/// project guaranteed — which is why an `--allow-write` server needs no special
+/// rule here, and gets none.
+///
+/// The consequence for the wall clock is real and worth naming: a body that is
+/// mostly `call` gains almost nothing, because those calls queue. One that is
+/// mostly `ask` gains almost everything.
+struct SharedToolHost<'a, 'h> {
+    /// Captured up front because [`ToolHost::name`] returns a borrow, and a
+    /// borrow cannot escape the guard it was read through.
+    name: String,
+    host: &'a Mutex<&'h mut (dyn ToolHost + Send)>,
+}
+
+impl<'a, 'h> SharedToolHost<'a, 'h> {
+    fn new(host: &'a Mutex<&'h mut (dyn ToolHost + Send)>) -> SharedToolHost<'a, 'h> {
+        let name = host
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .name()
+            .to_string();
+        SharedToolHost { name, host }
+    }
+
+    /// The lock, with a poisoned one taken anyway.
+    ///
+    /// Poisoning means another iteration panicked, which the enclosing scope is
+    /// about to re-raise. Taking the lock leaves that panic as the one reported
+    /// rather than burying it under a second.
+    fn locked(&self) -> std::sync::MutexGuard<'_, &'h mut (dyn ToolHost + Send)> {
+        self.host
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
+impl ToolHost for SharedToolHost<'_, '_> {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn provides(&self, tool: &str) -> bool {
+        self.locked().provides(tool)
+    }
+
+    fn call(&mut self, invocation: &ToolInvocation) -> Result<Value, ToolError> {
+        self.locked().call(invocation)
+    }
+}
+
 /// One iteration of an overlapping fan-out, on its own thread.
 ///
 /// A free function rather than a method because there is no `&mut self` to have:
@@ -334,6 +512,7 @@ fn run_iteration(
     pricing: &Pricing,
     step_headroom: u32,
     provider: &mut dyn ModelProvider,
+    tools: &mut (dyn ToolHost + Send),
 ) -> Iteration {
     let trace = Rc::new(RefCell::new(Vec::new()));
     let mut sink = TraceSink(Rc::clone(&trace));
@@ -353,11 +532,10 @@ fn run_iteration(
         consultations: calls.2,
     };
 
-    // Neither of these is meant to be reached: a body that would touch a tool
-    // server or a person has a ceiling of one, by `fan_out_ceiling`. They are here
-    // so that a body which reaches one anyway fails loudly instead of quietly
-    // doing something else.
-    let mut tools = crate::tools::DenyAllTools;
+    // A body that can stop for a person has a ceiling of one, by
+    // `fan_out_ceiling`, so this is here to fail loudly if that rule is ever
+    // wrong rather than to be used. The tool host, by contrast, is the run's own
+    // -- shared behind a lock, because there is only one of it.
     let mut approval = HumanChannel::Deny;
 
     let mut iteration_bindings = bindings.clone();
@@ -367,7 +545,7 @@ fn run_iteration(
         ir,
         registry,
         provider,
-        tools: &mut tools,
+        tools,
         sink: &mut sink,
         approval: &mut approval,
         bindings: iteration_bindings,
@@ -434,7 +612,7 @@ fn run_nested(
     ir: &AgentIr,
     registry: &AgentRegistry,
     provider: &mut dyn ModelProvider,
-    tools: &mut dyn ToolHost,
+    tools: &mut (dyn ToolHost + Send),
     sink: &mut dyn EventSink,
     inputs: BTreeMap<String, Value>,
     approval: &mut HumanChannel,
@@ -1285,11 +1463,12 @@ impl Interp<'_> {
 
     /// How many iterations of this fan-out may have a call in flight.
     ///
-    /// One unless **every** source of answers the body touches can be duplicated.
-    /// Two of the four need no looking for — a run with no
-    /// [`ProviderFactory`] has one provider, and an operator who wrote
-    /// `max-concurrency = 1` has said what they want — and the other two are read
-    /// from the artifact by [`Interp::body_holds_something_singular`].
+    /// One unless every source of answers the body touches can either be
+    /// duplicated or shared without the sharing being observable. Two of the three
+    /// need no looking for — a run with no [`ProviderFactory`] has one provider,
+    /// and an operator who wrote `max-concurrency = 1` has said what they want —
+    /// and the third is read from the artifact by
+    /// [`Interp::body_holds_something_singular`].
     fn fan_out_ceiling(&self, node: &Node) -> u32 {
         if self.providers.is_none() || self.ceiling <= 1 {
             return 1;
@@ -1303,14 +1482,16 @@ impl Interp<'_> {
     /// Whether the body reaches something a run has only one of, or something a
     /// checked artifact would not have put there.
     ///
-    /// Three of these exist once: a **tool server** is a child process, started
-    /// once and handshaken once, and possibly started `--allow-write`; an
-    /// **approval** and a **consultation** both reach one person, and the order
+    /// An **approval** and a **consultation** both reach one person, and the order
     /// they are asked in is observable to them — which is the argument `ING6005`
     /// already makes about `consult`, applied to the gate a policy inserts rather
     /// than the one an author writes. A policy that requires approval for an
     /// effect makes the compiler put an `Approval` node ahead of the call, so a
     /// body that will stop for somebody says so in the IR before the run starts.
+    ///
+    /// A **tool call** is deliberately not on this list. A tool host exists once
+    /// too, but unlike a person it can be shared behind a lock without anybody
+    /// noticing the order — see [`SharedToolHost`].
     ///
     /// The other three — a state write, an emission, a checkpoint — cannot appear
     /// here in a checked artifact (`ING6005`). They are looked for anyway, because
@@ -1343,8 +1524,7 @@ impl Interp<'_> {
                 return true;
             };
             match node.kind {
-                NodeKind::ToolCall
-                | NodeKind::Approval
+                NodeKind::Approval
                 | NodeKind::Consult
                 | NodeKind::StateWrite
                 | NodeKind::ArtifactEmit
@@ -1403,77 +1583,26 @@ impl Interp<'_> {
         // outspend the run — the same bound a sub-agent gets.
         let headroom = self.max_steps.saturating_sub(self.steps).max(1);
 
-        // One provider per **worker**, not per iteration. A thousand items under a
-        // ceiling of four is four connection pools rather than a thousand, which
-        // is the whole reason the ceiling is worth having: the pools are what a
-        // per-iteration instance costs, and the ceiling is what bounds them.
-        //
-        // Built before anything runs, so a provider that will not build is a
-        // fan-out that fails having spent nothing, at the node that would have
-        // used it. A worker reuses its instance across the iterations it claims,
-        // one at a time, so exclusive access stays literally true.
-        let mut providers = Vec::with_capacity(workers);
-        for _ in 0..workers {
-            providers.push(factory().map_err(|source| RunError::Provider {
-                node: node.id.clone(),
-                source,
-            })?);
-        }
-
-        // Everything an iteration reads. A `parallel` body holds no state write,
-        // no emission and no checkpoint, so these are handed over as clones and
-        // never merged back.
-        let ir = self.ir;
-        let registry = self.registry;
-        let bindings = &self.bindings;
-        let state = &self.state;
-        let memory = &self.memory;
-        let pricing = &self.pricing;
-        let items = &items;
-
-        let claimed = AtomicUsize::new(0);
-        let outcomes: Mutex<Vec<Option<Iteration>>> =
-            Mutex::new((0..total).map(|_| None).collect());
-        let next = &claimed;
-        let slots = &outcomes;
-
-        std::thread::scope(|scope| {
-            for mut provider in providers {
-                scope.spawn(move || loop {
-                    let index = next.fetch_add(1, Ordering::Relaxed);
-                    if index >= total {
-                        break;
-                    }
-                    let iteration = run_iteration(
-                        ir,
-                        registry,
-                        node,
-                        binder,
-                        items[index].clone(),
-                        index,
-                        total,
-                        last_body_node,
-                        bindings,
-                        state,
-                        memory,
-                        pricing,
-                        headroom,
-                        &mut *provider,
-                    );
-                    // Poisoning means another iteration panicked, which the scope
-                    // is about to re-raise. Taking the lock anyway leaves that
-                    // panic as the one reported rather than this one.
-                    let mut slots = slots
-                        .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner());
-                    slots[index] = Some(iteration);
-                });
-            }
-        });
-
-        let finished = outcomes
-            .into_inner()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // Split out so that the borrow of `self.tools` the workers share ends
+        // here, before the replay below needs `&mut self` again.
+        let finished = run_workers(
+            Workers {
+                ir: self.ir,
+                registry: self.registry,
+                node,
+                binder,
+                items: &items,
+                last_body_node,
+                bindings: &self.bindings,
+                state: &self.state,
+                memory: &self.memory,
+                pricing: &self.pricing,
+                headroom,
+                factory,
+                count: workers,
+            },
+            self.tools,
+        )?;
 
         let mut collected = Vec::with_capacity(total);
         for (index, iteration) in finished.into_iter().enumerate() {

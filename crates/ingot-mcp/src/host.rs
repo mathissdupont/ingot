@@ -113,7 +113,7 @@ pub trait Launcher {
         server: &ServerConfig,
         agent: &str,
         cwd: &Path,
-    ) -> Result<Box<dyn Transport>, String>;
+    ) -> Result<Box<dyn Transport + Send>, String>;
 
     /// One line for the run log, so it is never a mystery whether a boundary
     /// was in effect.
@@ -130,12 +130,12 @@ impl Launcher for DirectLauncher {
         server: &ServerConfig,
         _agent: &str,
         cwd: &Path,
-    ) -> Result<Box<dyn Transport>, String> {
+    ) -> Result<Box<dyn Transport + Send>, String> {
         if server.is_remote() {
             return connect_remote(server, DEFAULT_TIMEOUT);
         }
         ChildTransport::spawn(&server.command, &server.args, Some(cwd), &server.pass_env)
-            .map(|transport| Box::new(transport) as Box<dyn Transport>)
+            .map(|transport| Box::new(transport) as Box<dyn Transport + Send>)
             .map_err(|error| error.to_string())
     }
 
@@ -161,7 +161,7 @@ const DEFAULT_TIMEOUT: std::time::Duration =
 fn connect_remote(
     server: &ServerConfig,
     timeout: std::time::Duration,
-) -> Result<Box<dyn Transport>, String> {
+) -> Result<Box<dyn Transport + Send>, String> {
     let url = server.url.as_deref().unwrap_or_default();
     let authorization = match &server.auth_env {
         Some(variable) => {
@@ -190,7 +190,7 @@ fn connect_remote(
 fn connect_remote(
     server: &ServerConfig,
     _timeout: std::time::Duration,
-) -> Result<Box<dyn Transport>, String> {
+) -> Result<Box<dyn Transport + Send>, String> {
     Err(format!(
         "MCP server `{}` has a `url`, and this build of ingot-mcp was compiled \
          without the `http` feature",
