@@ -8,6 +8,66 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-08-18
+
+The release where `parallel map` means something.
+
+The word has been in the language since 0.1 and the runtime has been ignoring it
+since 0.1: ten documents, ten model calls, and the tenth started when the ninth
+finished. Nothing misled — [Runtime 0.1 §5.1](specs/runtime/v0.1.md) always said
+the node marks an opportunity rather than an obligation — so
+[GAP-010](docs/gaps.md#gap-010) sat in Degraded for months, honestly. But the wall
+clock is the whole reason the construct exists, and an author who writes
+`parallel map` and gets sequential execution has written a comment.
+
+**The rule that made it safe is stated the other way round from how it is usually
+reached.** Rather than a list of situations that get an exception, one question is
+put to each source of answers an iteration touches: can there be a second one, or
+can this one be shared without the sharing being observable? A cassette is one tape,
+a contained run is one pair of pipes, a person is one person — each keeps the
+ceiling at one. The first two are simply the absence of a way to build a second
+provider, so they cost no code and cannot be got wrong. A tool host is the one
+thing genuinely shared, behind a lock, because its order was never promised anyway.
+
+**Nothing a run produces changes.** The values, the event stream, the recorded
+cassette and the cost are the same ones a sequential run produces, byte for byte,
+and that is a tested property rather than an intention. A budget trips at the total
+sequential execution would have reached, at the node it would have reached it. The
+reported failure is the first in index order, not the first in time.
+
+**What did not survive the build is worth naming.** RFC-0021 designed this with a
+digest-matching rule for cassette replay, and the rule would have made `ingot test`
+flaky on a fan-out over duplicate items: identical requests share a digest, their
+recorded answers need not be equal, and the row an iteration got would have depended
+on which thread asked first. It bought no wall clock either, because one cassette is
+one tape with one position in it. So the cassette was not touched at all — not the
+format, not the version, not the matching rule, not one diagnostic — and
+[GAP-010's closure](docs/gaps.md#gap-010) records that the register itself had named
+the right answer as the thing that must not be done.
+
+**And the wall clock is not a promise.** Measured against one 8B model under Ollama
+on an 8 GB card, the same fan-out ran *slower* at a ceiling of four than at one:
+four concurrent requests need four KV caches, and they did not fit beside the
+weights. The output was byte-identical, which is the property that matters. The
+number to reach for on a machine serving one model to one person is usually `1`, and
+that is the clearest argument yet for why it is deployment configuration rather than
+something the artifact states.
+
+**Breaking, for two crates and nobody else.** `catalogue::build` returns
+`Box<dyn ModelProvider + Send>`, `run` takes `&mut (dyn ToolHost + Send)`,
+`ingot-mcp`'s boxed `Transport` gains the same bound, and `RunOptions` gains a
+`fan_out` field. No trait changed shape — `complete(&mut self, …)` and
+`call(&mut self, …)` stay as they are, because an implementer is never called twice
+at once. An existing implementation compiles untouched unless it holds something
+genuinely thread-hostile, and a caller using `..RunOptions::default()` keeps the
+previous behaviour exactly. Done now because
+[no backend outside this repository is known to exist](docs/gaps.md#gap-039), and
+doing it later means doing it to somebody.
+
+No format moved. Language 0.3, Agent IR 0.3 and cassette 0.3 are exactly as they
+were, every artifact compiles to byte-identical IR, and there is nothing to migrate.
+Runtime 0.6 is new and additive.
+
 ### Added
 
 - **`parallel map` overlaps its iterations.** Ten documents summarised by a
@@ -1733,7 +1793,8 @@ Backends, packaging and the language server are not part of this release.
 - `Ingot` is a working name. Trademark, domain and registry clearance has not
   been carried out and requires legal review before any public release.
 
-[Unreleased]: https://github.com/mathissdupont/ingot/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/mathissdupont/ingot/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/mathissdupont/ingot/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/mathissdupont/ingot/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/mathissdupont/ingot/compare/v0.5.2...v0.6.0
 [0.5.2]: https://github.com/mathissdupont/ingot/compare/v0.5.1...v0.5.2
