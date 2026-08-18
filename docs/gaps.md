@@ -370,6 +370,47 @@ already see:
 - **Does a fallback interact with `verify`?** A failed check is the failure most
   worth recovering from and the one where recovering is most suspect.
 
+*What two real programs found, 2026-08-18.* The entry above was written from
+reading the language surface. Two agents were then written outside this repository
+to test it by evidence rather than by argument, both against a local model.
+
+**The first did not hit this at all.** An agent that reads a list of documentation
+pages, fans out over them — a `call` and then an `ask` in the body — asks whether
+each still states what it is supposed to, and emits a review. It compiled first
+try, ran first try, and correctly found the one page whose content contradicted its
+claim. For an agent whose job is *produce something correct or nothing*, the
+language is adequate and this gap is not felt.
+
+**The second hit it on the most ordinary thing imaginable: partial data.** An agent
+that digests incident write-ups, one file per incident, where **some incidents have
+no write-up filed**. Three incidents, two files. What the author wants to write is
+about six characters long:
+
+```ingot
+writeup = call fs.read_file("${incident.id}.md")
+  else "no write-up was filed"
+```
+
+What happens instead: `error: at node n0: the tool failed: fs.read_file:
+INC-2.md: The system cannot find the file specified`. The run ends, exit code 1,
+no digest.
+
+**And that is where this turned out to be worse than a missing convenience.** The
+fan-out had already summarised the other two incidents. Iterations are drained
+rather than cancelled ([Runtime 0.6 §3.4](../specs/runtime/v0.6.md)) precisely so
+that a failing run's cost does not depend on the schedule — so the run **spent the
+whole fan-out and returned nothing.** Every token for two summaries, discarded
+because a third file was absent.
+
+*So there is a sixth question, and it is the one the first five missed.* Inside a
+fan-out, the shape an author reaches for may not be a handler wrapped around a
+statement at all, but a way for **one iteration to absorb its own failure** — to
+contribute a default, or to contribute nothing and shorten the list. If an
+iteration can do that, the fan-out never fails, and none of the questions about
+`steps` or effects or the event stream arise for it. That is a smaller feature than
+`try`, it covers the case two out of two real programs actually wanted, and it
+deserves to be designed before the general one rather than after.
+
 *Raised 2026-08-18,* while reading the language surface to answer whether the
 system is complete enough for 1.0. It is recorded rather than fixed because the
 answer to "was this decided?" turned out to be "no", and an unrecorded decision is
