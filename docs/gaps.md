@@ -52,6 +52,7 @@ to you*.
 | [GAP-038](#gap-038) | No backend outside this repository has ever run the suite | Unproven | somebody else's backend, and what they hit |
 | [GAP-039](#gap-039) | No agent outside this repository is known to run | Unproven | a program somebody depends on, and its friction |
 | [GAP-043](#gap-043) | A run that is recording does not overlap its fan-out | Degraded | per-iteration recording buffers, merged in index order |
+| [GAP-044](#gap-044) | A program cannot say what to do when something fails | Absent | an RFC that keeps the static bounds |
 
 ---
 
@@ -315,6 +316,67 @@ makes about `consult`.
 [`crates/ingot-cli/src/run.rs`](../crates/ingot-cli/src/run.rs).
 
 ## Absent
+
+### GAP-044
+
+**A program cannot say what to do when something fails.**
+
+The statement and expression forms a flow is built from — `ask`, `call`,
+`verify`, `emit`, `if`, `loop`, `parallel map`, `checkpoint`
+([Language 0.1 §6](../specs/language/v0.1.md)) — contain no way to express a
+second attempt or a second path. There is no `try`, no fallback, no retry, and no
+handler.
+
+So every failure ends the run: a tool that returns an error, a provider that
+cannot be reached or declines to answer, a `verify` whose property does not hold,
+an approval that is refused, a budget that trips. Each is reported by name, at the
+node, which is the right behaviour for a great many agents — **"summarise this
+document" should fail loudly rather than invent a summary.**
+
+*How it shows up.* An agent that wants to say *search the web, and if the search
+fails, use what is in the store* has nowhere to put the second half. The
+workaround is to move the decision out of the agent: run it, let it fail, and have
+whatever started it decide. That works, and it moves a part of the agent's
+reasoning out of the artifact — which is the one place this project otherwise
+insists it belongs.
+
+*Why it is this way, as far as the record shows.* Nothing decided this in writing,
+which is why this entry exists. The absence is load-bearing rather than
+accidental: **a recovery path multiplies the paths through a flow,** and three
+guarantees are stated over all paths. `steps` is checked at compile time from a
+bounded walk of the graph. `ING6001` requires that every path emits the declared
+output, and `ING6004` warns where one might not. A `parallel` body's independence
+is argued from what it cannot contain. Each of those gets harder the moment a
+statement can be reached because an earlier one failed.
+
+*What closing it needs.* An RFC, and it has to answer questions the register can
+already see:
+
+- **Does a failed attempt count toward `steps`?** If it does, a retry doubles a
+  bound the compiler proved. If it does not, `steps` stops bounding the work a run
+  can do.
+- **May a fallback have effects the path it replaces did not?** `call cache.read`
+  standing in for `call web.search` needs `filesystem_read` where the first needed
+  `network`. A policy is checked per node today; a recovery path makes "what this
+  agent may reach" the union over paths, and an operator reading the policy has to
+  be told which.
+- **What does a cassette record for a call that failed and was retried?** Both
+  rows, or the one that answered? `ingot test` has to replay whichever it was, and
+  a recording that dropped the failure would hide the behaviour most worth testing
+  ([GAP-028](#gap-028) makes the same argument the other way round).
+- **Is a recovered failure still in the event stream?** It must be — a run that
+  quietly succeeded on the second attempt is a run whose record does not say what
+  happened — which means a new event, and a backend that must emit it.
+- **Does a fallback interact with `verify`?** A failed check is the failure most
+  worth recovering from and the one where recovering is most suspect.
+
+*Raised 2026-08-18,* while reading the language surface to answer whether the
+system is complete enough for 1.0. It is recorded rather than fixed because the
+answer to "was this decided?" turned out to be "no", and an unrecorded decision is
+worse than a recorded gap.
+
+*Recorded in.* [Language 0.1 §6](../specs/language/v0.1.md),
+[`docs/guide/the-language.md`](guide/the-language.md).
 
 ### GAP-011
 

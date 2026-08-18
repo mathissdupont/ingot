@@ -251,6 +251,13 @@ agent Fanout(topic: string) -> report<markdown> {
   compile time. Its iterations *overlap* where they can, and where they cannot
   they run one at a time — the result and the record are the same either way, and
   [GAP-043](../gaps.md#gap-043) records what still does not overlap.)
+* **There is no way to say what happens when a step fails.** A tool that errors, a
+  model that cannot be reached, a `verify` that does not hold — each ends the run,
+  named at the node it happened on. That is the right answer for an agent whose job
+  is to produce something correct or nothing at all, and a wall for one that wants
+  a second attempt or a second source. Recorded as
+  [GAP-044](../gaps.md#gap-044); the workaround today is to let the run fail and
+  decide outside it.
 * `memory { working ephemeral { … } }` declares typed state. `state.queries`
   reads and writes it.
 * `checkpoint "name"` marks a resumable point in the event stream.
