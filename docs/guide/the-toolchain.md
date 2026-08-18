@@ -447,11 +447,19 @@ so a body runs one iteration at a time whenever there is only one of something:
 | it is replaying a cassette — `ingot test`, or `--provider replay` | one tape, one position in it |
 | it is running under `--sandbox` containment | the supervisor is one pair of pipes |
 | the body can stop for you — an `approve`, or a `call` your policy gates | there is one of you, and the order you were asked in would depend on the schedule |
-| the body makes a tool `call` at all | a tool server is one child process, started and handshaken once |
 | it is recording with `--record` | one cassette is being written, and a cassette you can review is written in index order |
 
-The last two are limitations rather than principles, and the register carries
-them: [GAP-043](../gaps.md#gap-043).
+The last is a limitation rather than a principle, and the register carries it:
+[GAP-043](../gaps.md#gap-043).
+
+**A tool `call` inside the body no longer stops the overlap, but it does not speed
+up either.** A tool server is one child process, so there is one of it and the
+calls queue behind a lock — the server never sees two at once. A body that is mostly
+`call` therefore gains almost nothing; one that is mostly `ask` gains almost
+everything. What changes for the server is the order the calls arrive in, and that
+was never promised: `parallel map` has always run its body
+[in an unspecified order](../../specs/language/v0.1.md), so a `--allow-write`
+server is in exactly the position it was in before.
 
 **Nothing about your results changes either way.** The values, the event stream
 and the cost are the same ones a sequential run produces — byte for byte, and

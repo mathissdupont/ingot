@@ -187,7 +187,7 @@ fn searcher(decision: Option<Decision>) -> AgentIr {
 fn run_with(
     ir: &AgentIr,
     provider: &mut dyn crate::ModelProvider,
-    tools: &mut dyn crate::ToolHost,
+    tools: &mut (dyn crate::ToolHost + Send),
     inputs: BTreeMap<String, serde_json::Value>,
 ) -> (Result<crate::RunReport, RunError>, Vec<RunEvent>) {
     let mut sink = CollectingSink::default();
@@ -2543,7 +2543,7 @@ fn no_deltas_are_shown_from_inside_a_fan_out() {
 /// Run the mapper with a factory that counts, and report how many it built.
 fn built_providers_for(
     ir: &AgentIr,
-    tools: &mut dyn crate::ToolHost,
+    tools: &mut (dyn crate::ToolHost + Send),
     approval: HumanChannel,
 ) -> (serde_json::Value, usize) {
     let mut provider = Answering(echoing());
@@ -2578,10 +2578,42 @@ fn built_providers_for(
 }
 
 #[test]
-fn a_body_that_calls_a_tool_executes_sequentially() {
-    // A tool server is one child process, started once and handshaken once. Until
-    // it can be shared behind a lock, a body that reaches one runs sequentially
-    // and the register says so rather than the release notes.
+fn a_tool_call_inside_a_fan_out_serialises() {
+    // A tool server is one child process, started once and handshaken once, so
+    // there can be no second one: the host is shared behind a lock and the calls
+    // queue behind it. What the host must never see is two calls at once — that is
+    // the promise `&mut self` makes, and the lock is what keeps it.
+    //
+    // The hold inside the call is what would make a missing lock visible. Without
+    // it three threads might never collide, and the test would pass by luck
+    // rather than by the lock.
+    struct Counting {
+        inside: Arc<Mutex<usize>>,
+        peak: Arc<AtomicUsize>,
+    }
+
+    impl crate::ToolHost for Counting {
+        fn name(&self) -> &str {
+            "counting"
+        }
+        fn provides(&self, _tool: &str) -> bool {
+            true
+        }
+        fn call(
+            &mut self,
+            _invocation: &crate::ToolInvocation,
+        ) -> Result<serde_json::Value, crate::ToolError> {
+            {
+                let mut inside = self.inside.lock().expect("no test panics holding this");
+                *inside += 1;
+                self.peak.fetch_max(*inside, Ordering::Relaxed);
+            }
+            std::thread::sleep(Duration::from_millis(25));
+            *self.inside.lock().expect("no test panics holding this") -= 1;
+            Ok(json!("# Sample"))
+        }
+    }
+
     let mut ir = fan_out_mapper();
     ir.effects.push("filesystem_read".to_string());
     ir.policy.insert(
@@ -2612,12 +2644,26 @@ fn a_body_that_calls_a_tool_executes_sequentially() {
     ir.nodes.push(call);
     body_starts_at(&mut ir, "n3");
 
-    let mut tools = StaticToolHost::new().with("fs.read_file", |_| Ok(json!("# Sample")));
+    let peak = Arc::new(AtomicUsize::new(0));
+    let mut tools = Counting {
+        inside: Arc::new(Mutex::new(0)),
+        peak: Arc::clone(&peak),
+    };
     let (values, built) = built_providers_for(&ir, &mut tools, HumanChannel::Deny);
-    assert_eq!(values, json!(["a-done", "b-done", "c-done"]));
+
     assert_eq!(
-        built, 0,
-        "a body that reaches the one tool host must not overlap"
+        values,
+        json!(["a-done", "b-done", "c-done"]),
+        "the values are the sequential ones whatever order the calls arrived in"
+    );
+    assert!(
+        built > 1,
+        "a body that calls a tool overlaps its model calls now, built {built}"
+    );
+    assert_eq!(
+        peak.load(Ordering::Relaxed),
+        1,
+        "the host must never be called by two iterations at once"
     );
 }
 

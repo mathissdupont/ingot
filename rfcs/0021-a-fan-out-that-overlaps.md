@@ -1,6 +1,6 @@
 # RFC-0021: A fan-out that overlaps
 
-- Status: **Accepted**, implemented 2026-08-17
+- Status: **Accepted**, implemented 2026-08-18
 - Created: 2026-08-17
 - Affects: runtime spec, CLI, `ingot-runtime`
 - Closes: [GAP-010](../docs/gaps.md#gap-010)
@@ -469,7 +469,7 @@ concurrent replay would actually cost: an `iterationPath` on a row, matching by
 node and iteration and position within it, digest demoted to a check. It works, it
 is deterministic, and 0.3 cassettes would keep replaying by position. It was
 rejected because it buys a wall-clock win of zero — under replay there is no
-socket to wait on — in exchange for a format version, on the day 0.7.0 shipped
+socket to wait on — in exchange for a format version, the day after 0.7.0 shipped
 saying that no format had moved.
 
 **A `limit` in the source: `parallel map items as x limit 4`.** Puts a
@@ -478,12 +478,13 @@ argument that kept `timeout-seconds` out of the artifact.
 
 ## Opens
 
-- **A fan-out whose body calls a tool does not overlap.** A new register entry,
-  class Degraded: the result is correct and only the wall clock is affected,
-  exactly as GAP-010 itself reads today. Closing it is the second change described
-  above — `Send` on `ToolHost`, a locking proxy, per-iteration recording buffers —
-  and it also wants a decision about what a concurrent host means for an
-  `--allow-write` server.
+- **A fan-out whose body calls a tool does not overlap.** *Closed the same day, in
+  the change after this one.* The host is shared behind a lock, so its calls queue
+  and it never serves two iterations at once. The `--allow-write` decision this
+  entry asked for needed no new rule: what the server sees is the same serial
+  stream of calls in a different order, and Language 0.1 §6.4 has always said a
+  `parallel` body runs in an unspecified order. What is left of the register entry
+  is `--record`, which still keeps a ceiling of one.
 - **A fan-out whose body can stop for a person does not overlap.** The same entry
   covers it, and this half may never be worth closing: the order an operator is
   asked in is observable to them, which is the argument `ING6005` already makes

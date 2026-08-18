@@ -114,7 +114,7 @@ impl ToolHost for DenyAllTools {
 #[derive(Default)]
 pub struct StaticToolHost {
     #[allow(clippy::type_complexity)]
-    handlers: BTreeMap<String, Box<dyn FnMut(&ToolInvocation) -> Result<Value, ToolError>>>,
+    handlers: BTreeMap<String, Box<dyn FnMut(&ToolInvocation) -> Result<Value, ToolError> + Send>>,
 }
 
 impl StaticToolHost {
@@ -125,7 +125,7 @@ impl StaticToolHost {
     pub fn with(
         mut self,
         name: impl Into<String>,
-        handler: impl FnMut(&ToolInvocation) -> Result<Value, ToolError> + 'static,
+        handler: impl FnMut(&ToolInvocation) -> Result<Value, ToolError> + Send + 'static,
     ) -> StaticToolHost {
         self.handlers.insert(name.into(), Box::new(handler));
         self
