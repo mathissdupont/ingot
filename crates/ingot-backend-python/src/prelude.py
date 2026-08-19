@@ -27,15 +27,48 @@ import urllib.request
 
 
 class RunFailed(Exception):
-    """The run stopped. `operator` marks the ones the caller can fix."""
+    """The run stopped. `operator` marks the ones the caller can fix.
+
+    `absorbable` marks the ones a node's stated fallback may stand in for, and
+    it defaults to **false** on purpose. `else` absorbs a failure of the
+    attempt — a provider that could not be reached, an answer that did not match
+    its declared type — and must never absorb a capability the policy denied, a
+    budget that ran out, an approval a person refused, a `verify` that did not
+    hold, or a malformed artifact. Absorbing the first alone would make `deny`
+    advisory.
+
+    Defaulting to false is what makes that safe to maintain: the flag is set in
+    one narrow place, and a failure raised anywhere else is not absorbed without
+    anybody having to remember it. A forgotten tag costs a run that stops when
+    it could have continued, never a guarantee that quietly became a default.
+
+    See Runtime 0.7 section 2.
+    """
 
     def __init__(self, message, operator=False):
         super().__init__(message)
         self.operator = operator
+        self.absorbable = False
 
 
 def _fail(message, operator=False):
     raise RunFailed(message, operator)
+
+
+def _fail_unabsorbable(message, operator=False):
+    """Fail in a way no stated fallback may stand in for.
+
+    `Runtime.ask` marks the failures of its own attempt absorbable, and a
+    replay's stale recording is raised from inside exactly that region while
+    being nothing of the kind: absorbing it would let a run whose prompt was
+    edited pass on a digest of defaults, which is the failure the digest check
+    exists to prevent. `decided` says the answer is already settled, so `ask`
+    leaves it alone. The mirror of `ProviderError::Cassette` in the reference
+    interpreter.
+    """
+    error = RunFailed(message, operator)
+    error.decided = True
+    raise error
 
 
 # --- events -------------------------------------------------------------------
@@ -126,6 +159,10 @@ class Events:
             )
         if kind == "approvalDecided":
             return "        approval %s" % ("granted" if event["allowed"] else "denied")
+        if kind == "fallbackTaken":
+            # Said plainly, because the value this node bound is a default the
+            # program stated rather than an answer anything produced.
+            return "        the %s failed; used the stated fallback" % event["because"]
         if kind == "stateWritten":
             return "        state.%s written" % event["field"]
         if kind == "verified":
@@ -376,7 +413,7 @@ class Replay:
     def complete(self, request):
         interactions = self.cassette.get("interactions", [])
         if self.position >= len(interactions):
-            _fail(
+            _fail_unabsorbable(
                 "cassette replay failed: the recording has %d interaction(s) and "
                 "the run asked for one more, at node `%s`"
                 % (len(interactions), request["node"])
@@ -385,7 +422,7 @@ class Replay:
         self.position += 1
 
         if interaction.get("node") != request["node"]:
-            _fail(
+            _fail_unabsorbable(
                 "cassette replay failed: interaction %d was recorded at node `%s` "
                 "and the run reached `%s`"
                 % (self.position - 1, interaction.get("node"), request["node"])
@@ -393,7 +430,7 @@ class Replay:
         recorded = interaction.get("requestDigest")
         actual = digest(request)
         if recorded != actual:
-            _fail(
+            _fail_unabsorbable(
                 "cassette replay failed: interaction %d was recorded for a "
                 "different request at node `%s`. The prompt or its context "
                 "changed since recording — re-record the cassette and review the "
@@ -1122,11 +1159,17 @@ class Runtime:
             value = reply["value"]
             if shape[0] != "freeJson":
                 validate(value, response_type, self.types, "node `%s`" % node)
-        except BaseException:
+        except BaseException as failure:
             # `kept` is false whenever the accumulated text was discarded, and
             # a response that failed to validate was discarded.
             if shown:
                 self.events.settled(node, False)
+            # The one place a failure is marked absorbable, and it is this narrow
+            # on purpose. Everything above this `try` — the policy check, the
+            # step charge, the response shape — and everything below it — the
+            # token charge — stays unabsorbable without a tag of its own.
+            if isinstance(failure, RunFailed) and not getattr(failure, "decided", False):
+                failure.absorbable = True
             raise
         if shown:
             self.events.settled(node, True)
@@ -1140,6 +1183,18 @@ class Runtime:
         )
         self._charge_tokens(node, reply["usage"])
         return value
+
+    def fallback(self, node, failure, because):
+        """Decide whether a stated fallback may stand in for `failure`.
+
+        Re-raises when it may not, which is the default for every failure the
+        run can produce. `because` is the kind of failure — `model` here, since
+        this backend implements `llm.call` — taken from the node kind rather
+        than from the failure, so the value is the same on every backend.
+        """
+        if not getattr(failure, "absorbable", False):
+            raise failure
+        self.events.emit(event="fallbackTaken", node=node, because=because)
 
     def approve(self, node, effects, reason):
         self.events.emit(

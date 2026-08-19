@@ -106,14 +106,28 @@ impl Ty {
 
     /// Whether a value of type `self` may be used where `expected` is required.
     ///
-    /// Language 0.1 permits exactly two widenings, both of them lossless:
+    /// Exactly three widenings, all of them lossless and all in the same
+    /// direction — from the more specific type to the less:
     ///
     /// * `int` to `float`
     /// * `markdown` to `text`, because every markdown value is also valid text
+    /// * `string` to `text`, because a string is text (Language 0.4)
     ///
     /// Nothing else converts, including in the other direction and inside
     /// lists. Keeping the rule this small is what makes "it compiles" a
     /// meaningful statement about a portable artifact.
+    ///
+    /// **`string` to `markdown` is deliberately not here**, and the reason is the
+    /// direction. The two rules above widen; that one would narrow, claiming an
+    /// arbitrary string satisfies the more specific type. Admitting it would
+    /// leave no ground to refuse `text` to `markdown` either — a `text` value is
+    /// no less markdown than a bare string is — and then `markdown` and `text`
+    /// are one type with two names, which is not what an artifact's content type
+    /// or its file extension mean. A program that wants a markdown fallback asks
+    /// for `string` and lets the step that assembles the document produce the
+    /// markdown. See [GAP-045].
+    ///
+    /// [GAP-045]: https://github.com/mathissdupont/ingot/blob/main/docs/gaps.md#gap-045
     pub fn is_assignable_to(&self, expected: &Ty) -> bool {
         if self.is_unknown() || expected.is_unknown() {
             return true;
@@ -123,6 +137,7 @@ impl Ty {
         }
         match (self, expected) {
             (Ty::Int, Ty::Float) => true,
+            (Ty::String, Ty::Text) => true,
             (Ty::Markdown, Ty::Text) => true,
             (Ty::Optional(actual), Ty::Optional(expected)) => actual.is_assignable_to(expected),
             (actual, Ty::Optional(expected)) => actual.is_assignable_to(expected),
@@ -278,6 +293,56 @@ mod tests {
         assert!(Ty::Markdown.is_assignable_to(&Ty::Text));
         assert!(!Ty::Text.is_assignable_to(&Ty::Markdown));
         assert!(!Ty::Markdown.is_assignable_to(&Ty::String));
+    }
+
+    #[test]
+    fn string_widens_to_text_but_not_to_markdown() {
+        // Language 0.4. A string is text, so it widens the way markdown does.
+        assert!(Ty::String.is_assignable_to(&Ty::Text));
+        assert!(!Ty::Text.is_assignable_to(&Ty::String));
+
+        // And it stops there, which is the load-bearing half. `markdown` is the
+        // more specific type; letting an arbitrary string claim it would leave
+        // no ground to refuse `text` either, and then the two are one type with
+        // two names. See GAP-045.
+        assert!(!Ty::String.is_assignable_to(&Ty::Markdown));
+        assert!(!Ty::String.is_assignable_to(&Ty::Json));
+        assert!(!Ty::String.is_assignable_to(&Ty::File));
+    }
+
+    #[test]
+    fn the_widenings_stay_at_three() {
+        // A guard on the table rather than on any one entry: every ordered pair
+        // of scalar types is checked, so a fourth widening added without a
+        // reason breaks this and has to argue for itself.
+        let scalars = [
+            Ty::String,
+            Ty::Int,
+            Ty::Float,
+            Ty::Bool,
+            Ty::Text,
+            Ty::Markdown,
+            Ty::Json,
+            Ty::File,
+        ];
+        let mut widenings = Vec::new();
+        for from in &scalars {
+            for to in &scalars {
+                if from != to && from.is_assignable_to(to) {
+                    widenings.push((format!("{from}"), format!("{to}")));
+                }
+            }
+        }
+        widenings.sort();
+        assert_eq!(
+            widenings,
+            vec![
+                ("int".to_string(), "float".to_string()),
+                ("markdown".to_string(), "text".to_string()),
+                ("string".to_string(), "text".to_string()),
+            ],
+            "the assignability table changed"
+        );
     }
 
     #[test]

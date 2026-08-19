@@ -115,6 +115,23 @@ pub enum RunEvent {
         index: usize,
         answer: String,
     },
+    /// The attempt at this node failed and its stated fallback was used instead.
+    ///
+    /// Emitted after the failing node's own events and before execution
+    /// continues, so a reader sees what was tried and then sees that the value
+    /// was replaced. A run that quietly succeeded on a default is a run whose
+    /// record does not say what happened, and the record is the point.
+    ///
+    /// `because` is the **kind** of failure — `tool`, `model` or `agent`, taken
+    /// from the node kind — and never its text, which is already in the event
+    /// before this one. Counting these events tells a reviewer how much of a
+    /// result was made of defaults, which is the first thing to ask of one.
+    ///
+    /// See [Runtime 0.7 §2](../../../specs/runtime/v0.7.md).
+    FallbackTaken {
+        node: String,
+        because: String,
+    },
     StateWritten {
         node: String,
         field: String,
@@ -215,6 +232,9 @@ impl RunEvent {
                     "        approval {}",
                     if *allowed { "granted" } else { "denied" }
                 )
+            }
+            RunEvent::FallbackTaken { because, .. } => {
+                format!("        the {because} failed; used the stated fallback")
             }
             RunEvent::StateWritten { field, .. } => format!("        state.{field} written"),
             RunEvent::Verified {

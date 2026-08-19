@@ -606,6 +606,13 @@ fn print_expr(out: &mut String, expr: &Expr, level: usize) {
         Expr::FunctionCall { callee, args, .. } => {
             let _ = write!(out, "{}({})", callee.text, print_args(args, level));
         }
+        Expr::Fallback {
+            attempt, fallback, ..
+        } => {
+            print_expr(out, attempt, level);
+            out.push_str(" else ");
+            print_expr(out, fallback, level);
+        }
         Expr::Unary { op, operand, .. } => {
             out.push_str(op.symbol());
             print_expr(out, operand, level);

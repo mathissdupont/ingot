@@ -90,8 +90,8 @@ fn lowers_the_reference_agent() {
         .expect("expected one lowered agent");
 
     // A `language 0.1` source still lowers to the current IR: the two versions
-    // move independently, and the document format is what 0.3 changed.
-    assert_eq!(ir.ir_version, "0.3");
+    // move independently, and the document format is what 0.4 changed.
+    assert_eq!(ir.ir_version, ingot_ir::IR_VERSION);
     assert_eq!(ir.language, "0.1");
     assert_eq!(ir.agent, "heptapus.test.ResearchAgent");
     assert_eq!(ir.inputs.get("topic").map(String::as_str), Some("string"));

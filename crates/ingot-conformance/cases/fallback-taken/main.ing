@@ -1,0 +1,34 @@
+language 0.4
+package conformance.absorbed
+
+/// A fan-out whose iterations score elements, with a fallback for the ones that
+/// come back unusable.
+///
+/// The failure this case pins is **an answer that did not match its declared
+/// type** — one of the four things `else` catches, and the only one a 0.3
+/// cassette can hold for a model call, because `Interaction` records a value and
+/// has no field for an error. The recorded answer for the second element is not
+/// an `int`, so both backends reject it, both use the stated fallback, and both
+/// must say so in the same place in the event stream.
+///
+/// A fan-out rather than a straight line, because the point of the feature is
+/// that the *other* elements' work survives: a run that lost one element used to
+/// spend the whole fan-out and return nothing.
+agent Absorbed(items: string[]) -> digest<json> {
+  model requires { structured_output }
+
+  budget {
+    steps <= 4
+  }
+
+  policy {
+    network deny
+  }
+
+  flow {
+    scores = parallel map items as item {
+      ask<int>("Score ${item} out of ten. Answer with a number.") else 0
+    }
+    emit digest = ask<json>("Report these scores.", context: scores)
+  }
+}

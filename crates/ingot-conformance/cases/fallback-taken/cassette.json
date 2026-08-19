@@ -1,0 +1,65 @@
+{
+  "cassetteVersion": "0.3",
+  "agent": "conformance.absorbed.Absorbed",
+  "inputs": {
+    "items": [
+      "alpha",
+      "beta",
+      "gamma"
+    ]
+  },
+  "interactions": [
+    {
+      "index": 0,
+      "node": "n0",
+      "requestDigest": "31d490ef849aa0e3253e6662a7ea3674d2753a9e0a882e27915c45b220713a68",
+      "responseType": "int",
+      "value": 7,
+      "usage": {
+        "inputTokens": 100,
+        "outputTokens": 50
+      },
+      "model": "stub-1"
+    },
+    {
+      "index": 1,
+      "node": "n0",
+      "requestDigest": "f70c4434bfab446c2177d30dc2104caee2227cc221504d0ebce51c2d4a839773",
+      "responseType": "int",
+      "value": "I could not tell from this.",
+      "usage": {
+        "inputTokens": 100,
+        "outputTokens": 50
+      },
+      "model": "stub-1"
+    },
+    {
+      "index": 2,
+      "node": "n0",
+      "requestDigest": "84650650d657eb7bd8e0f5d842756dd7ee137ed329730aaff177be9e676a62f7",
+      "responseType": "int",
+      "value": 4,
+      "usage": {
+        "inputTokens": 100,
+        "outputTokens": 50
+      },
+      "model": "stub-1"
+    },
+    {
+      "index": 3,
+      "node": "n2",
+      "requestDigest": "2af3a5f4c52a8a0486ba005565f7b243367478c9e389515b72c263d3345281ef",
+      "responseType": "json",
+      "value": {
+        "alpha": 7,
+        "beta": 0,
+        "gamma": 4
+      },
+      "usage": {
+        "inputTokens": 100,
+        "outputTokens": 50
+      },
+      "model": "stub-1"
+    }
+  ]
+}

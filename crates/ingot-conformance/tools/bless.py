@@ -31,15 +31,33 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
-CASES = ROOT / "specs" / "conformance" / "cases"
+# Relative to this file rather than to the repository root, so the two cannot
+# drift again: the suite moved out of `specs/conformance` and into this crate so
+# that `cargo package` would carry it, and this path was left behind pointing at
+# a directory that no longer exists. `sys.exit` below is what makes that loud.
+CASES = Path(__file__).resolve().parents[1] / "cases"
+if not CASES.is_dir():
+    sys.exit(f"no cases directory at {CASES}")
 
 
 def ingot() -> str:
-    for candidate in ("ingot.exe", "ingot"):
-        path = ROOT / "target" / "debug" / candidate
-        if path.is_file():
-            return str(path)
-    sys.exit("build it first: cargo build -p ingot-cli")
+    # `CARGO_TARGET_DIR` first, because this repository has to set one: a
+    # `target/` directory inside the OneDrive-synchronised working tree and cargo
+    # do not get along, so the default path is frequently not where the binary is.
+    roots = []
+    override = os.environ.get("CARGO_TARGET_DIR")
+    if override:
+        roots.append(Path(override))
+    roots.append(ROOT / "target")
+    for root in roots:
+        for candidate in ("ingot.exe", "ingot"):
+            path = root / "debug" / candidate
+            if path.is_file():
+                return str(path)
+    sys.exit(
+        "build it first: cargo build -p ingot-cli\n"
+        "looked in: %s" % ", ".join(str(root / "debug") for root in roots)
+    )
 
 
 class Stub(BaseHTTPRequestHandler):

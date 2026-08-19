@@ -318,6 +318,97 @@ impl fmt::Display for RunError {
 impl std::error::Error for RunError {}
 
 impl RunError {
+    /// Whether a node's stated fallback may stand in for this failure.
+    ///
+    /// This is the most important rule in the language's failure handling, and
+    /// it is not about ergonomics. `else` absorbs a failure of the **attempt**:
+    /// a tool that errored, a provider that could not be reached, an answer that
+    /// did not match its declared type, a sub-agent that failed. It must not
+    /// absorb a capability the policy denied, a budget that ran out, an approval
+    /// a person refused, a `verify` that did not hold, or a malformed artifact.
+    /// A backend that got that wrong would turn every guarantee in the language
+    /// into a default value, silently — absorbing the first alone would make
+    /// `deny` advisory.
+    ///
+    /// So the rule is a match on this enum rather than a sentence in a
+    /// specification, written without a wildcard arm on purpose: a new variant
+    /// does not compile until somebody has decided which side of this it falls
+    /// on.
+    ///
+    /// See [Runtime 0.7 §2](../../../specs/runtime/v0.7.md) and
+    /// [RFC-0022](../../../rfcs/0022-a-failure-an-iteration-can-absorb.md).
+    pub fn is_absorbable(&self) -> bool {
+        match self {
+            // The attempt failed. These are what `else` exists for — but not
+            // every provider or tool failure is the attempt failing, so each is
+            // asked rather than assumed. RFC-0022's list did not make this
+            // distinction, and reading the code is what found it: a replay whose
+            // recording no longer matches the run reaches the interpreter as an
+            // ordinary provider failure, and absorbing it would let `ingot test`
+            // pass on a digest of defaults after somebody edited a prompt.
+            RunError::Provider { source, .. } => match source {
+                ProviderError::Transport(_)
+                | ProviderError::Request { .. }
+                | ProviderError::RateLimited { .. }
+                | ProviderError::Refused { .. }
+                | ProviderError::InvalidResponse(_)
+                | ProviderError::Truncated { .. } => true,
+                // The recording does not match this run. Absorbing it would
+                // destroy the digest check, which exists to make an edited
+                // prompt fail loudly rather than reuse the previous answer.
+                ProviderError::Cassette(_) => false,
+                // No key, or a model this deployment cannot use. A setup mistake
+                // somebody can fix, and a run that quietly produced defaults
+                // instead of saying so would hide it.
+                ProviderError::Configuration(_) => false,
+            },
+            RunError::Tool { source, .. } => match source {
+                ToolError::Failed(_) | ToolError::InvalidResult(_) => true,
+                // Nothing provides this tool. The artifact requires it, so this
+                // is a host that was not wired up rather than a call that failed.
+                ToolError::NotAvailable(_) => false,
+                ToolError::Cassette(_) => false,
+            },
+            // Only when the sub-agent's own failure was absorbable. A caller
+            // that could absorb anything a callee hit would let a denied
+            // capability or an exhausted budget be laundered through a
+            // sub-agent, and the parent's step budget is the callee's ceiling.
+            RunError::SubAgent { source, .. } => source.is_absorbable(),
+
+            // The five the design turns on. Each is the artifact or a person
+            // having said something, and a default value is not an answer to it.
+            RunError::CapabilityDenied { .. }
+            | RunError::BudgetExceeded { .. }
+            | RunError::ApprovalDenied { .. }
+            | RunError::VerificationFailed { .. }
+            | RunError::MalformedIr(_) => false,
+
+            // A person was asked and did not answer. `else` cannot attach to a
+            // `consult` at all, so this is unreachable from a fallback node —
+            // and stated here anyway, because the guarantee should not depend on
+            // where the compiler happens to put a node.
+            RunError::ConsultFailed { .. } => false,
+
+            // Failures of the program or of the setup rather than of the world.
+            // Absorbing one would replace a mistake somebody can fix with a
+            // default value nobody asked for.
+            RunError::MissingInput { .. }
+            | RunError::InvalidInput { .. }
+            | RunError::UnknownInput { .. }
+            | RunError::AgentNotAvailable { .. }
+            | RunError::UnsupportedResponseType { .. }
+            | RunError::StateNotSet { .. }
+            | RunError::TypeMismatch { .. }
+            | RunError::OutputNotProduced { .. }
+            | RunError::InvalidMemory { .. }
+            | RunError::Snapshot(_)
+            | RunError::InputsAfterResume
+            | RunError::NotResumable { .. }
+            | RunError::UnknownMemoryField { .. }
+            | RunError::UnsupportedIrVersion { .. } => false,
+        }
+    }
+
     /// Whether the failure is the operator's to fix (inputs, approvals,
     /// missing tools) rather than a defect in the artifact.
     pub fn is_operator_error(&self) -> bool {

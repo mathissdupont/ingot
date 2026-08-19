@@ -1,12 +1,17 @@
 # RFC-0022: A failure an iteration can absorb
 
-- Status: **Draft**
+- Status: **Accepted**, implemented 2026-08-19
 - Created: 2026-08-18
-- Affects: language, IR, runtime spec, compiler, `ingot-runtime`
+- Affects: language, IR, runtime spec, compiler, `ingot-runtime`,
+  `ingot-backend-python`
 - Narrows: [GAP-044](../docs/gaps.md#gap-044)
+- Opens: [GAP-045](../docs/gaps.md#gap-045),
+  [GAP-046](../docs/gaps.md#gap-046)
 - Builds on: [RFC-0014](0014-a-capabilitys-reach.md),
   [RFC-0021](0021-a-fan-out-that-overlaps.md)
-- Would specify: Language 0.4, Agent IR 0.4, Runtime 0.7
+- Specifies: [Language 0.4](../specs/language/v0.4.md),
+  [Agent IR 0.4](../specs/ir/v0.4.md),
+  [Runtime 0.7](../specs/runtime/v0.7.md)
 
 ## Problem
 
@@ -199,6 +204,84 @@ answer, and much larger than this: it needs a type constructor, a way to test it
 and a rule for every place a value is used. It is the shape a language reaches for
 eventually and not the shape a 0.x reaches for to fix a fan-out that burns tokens.
 
+## What reading the code changed
+
+Four claims in the sections above did not survive being built. Three were
+corrections to this document and one was a scope decision; all four are left
+visible rather than edited away, because this RFC's own argument is that evidence
+should move a design.
+
+**The not-caught list was incomplete, and the omissions matter.** The five it names
+are all *the artifact or a person having said something*. Reading the runtime's
+error paths found four more that reach the interpreter as ordinary provider or tool
+failures and must not be absorbed either:
+
+| Also not caught | Because |
+|---|---|
+| a stale cassette | `ReplayProvider` reports "this recording no longer matches this run" as a `ProviderError`, indistinguishable at the node from a provider that was down. Absorbing it would let `ingot test` pass on a digest of defaults after somebody edited a prompt — the exact failure the request digest exists to prevent. |
+| a missing credential, an unusable model | `ProviderError::Configuration`. A run with no API key that produced a digest of defaults would look like a run that worked. |
+| a tool no host provides | `ToolError::NotAvailable`. The artifact requires the tool; this is a host that was not wired up. |
+| a sub-agent whose own failure was not absorbable | Otherwise moving a denied call into a sub-agent and putting `else` on the caller absorbs the denial after all. A callee's step budget is also bounded by what remains of its caller's, so a callee's exhausted budget is the caller's in disguise. |
+
+The tool half needed a type change: `ToolError` had no way to say *stale recording*
+— `ReplayToolHost` reported all three of its mismatches as `ToolError::Failed` —
+so it gained a `Cassette` variant mirroring `ProviderError::Cassette`.
+
+**"No cassette change" is true, and true for a narrower reason than stated.** The
+table above claims `ToolExchange` carries `error`, which it does. It does not
+mention that `Interaction` — the *model* half — carries no error and requires a
+value, so a provider that was unreachable, refused, or timed out is not recordable
+at any cassette version. The conformance case works because a model answer that
+did not *match its declared type* is recorded as the value it was and rejected one
+layer further in, which is a real 0.3-recordable model failure. The promise held;
+the reasoning did not. The missing half is [GAP-046](../docs/gaps.md#gap-046),
+recorded rather than fixed, because fixing it is a format version and expanding
+scope mid-change would have been the worse call.
+
+**The motivating example did not compile either, and that needed fixing rather than
+recording.** `writeup = call fs.read_file("${incident.id}.md") else "no write-up was
+filed"` is the line this RFC exists for, and it was `ING3001`: the shipped
+filesystem tool reads a file as `text`, and `string` was not assignable to `text`.
+The available workaround — declare the tool `-> string` — makes a tool's signature
+depend on whether some flow wants a fallback, which is backwards.
+
+So Language 0.4 adds one widening, `string` → `text`, in the same direction as the
+two the table already had and on the same grounds: a string is text exactly as
+markdown is text. It is scope this RFC did not ask for and the feature does not
+work without it, which is the honest reason to take it.
+
+`string` → `markdown` was **not** taken. The three widenings all go from the more
+specific type to the less; that one goes the other way, letting an arbitrary string
+claim the more specific type — and admitting it leaves no ground to refuse `text`
+→ `markdown`, after which `markdown` and `text` are one type with two names.
+
+**The second example still does not compile, and now cannot be made to.** `grade =
+ask<rating>("Rate this.", context: page) else rating { score: 0, note: "unrated" }`
+was written into the design section above and this language has no record
+construction, so it does not parse. Nor does `ask<markdown>(…) else "…"`, by the
+paragraph above. What remains is [GAP-045](../docs/gaps.md#gap-045): a fallback for
+`markdown`, `json`, `file` or a record. The shape that works instead is to ask for
+`string` and let the step that assembles the document produce the markdown, which is
+what the conformance case and both trial programs do without being told to.
+
+**Verified against the program that produced this RFC.** The incident-digest agent
+runs to completion against a local model with the `else` line as its author first
+wrote it and its tool declaration untouched: three entries, one built from the
+fallback, one `fallbackTaken` in the record. Before this, the same program with the
+same inputs spent the whole fan-out and returned nothing.
+
+**The malformed-artifact check moved earlier.** A `fallback` on a node kind that
+cannot carry one was going to be refused when the node was reached. It is refused
+before the run starts instead, alongside the IR version check, for the reason
+persistent memory is validated up front: an artifact that is going to be refused
+should be refused before it spends anything.
+
+*And one thing that needed no rule.* `fallbackTaken` inside an overlapping fan-out
+required nothing new. Per-iteration traces already carry events and charges in one
+ordered list replayed in index order ([RFC-0021](0021-a-fan-out-that-overlaps.md)),
+so the event lands where a sequential run would have put it without this design
+saying so.
+
 ## Opens
 
 - **The general handler and the effectful fallback** both stay open, above, with
@@ -212,20 +295,51 @@ eventually and not the shape a 0.x reaches for to fix a fan-out that burns token
 
 ## Conformance tests
 
-- [ ] `a_tool_failure_is_absorbed_and_the_run_continues`
-- [ ] `a_model_failure_is_absorbed_and_the_fallback_is_typed`
-- [ ] `a_fallback_that_reaches_anything_does_not_compile`
-- [ ] `a_policy_denial_is_not_absorbed`
-- [ ] `a_budget_trip_is_not_absorbed`
-- [ ] `a_refused_approval_is_not_absorbed`
-- [ ] `a_failed_verify_is_not_absorbed`
-- [ ] `else_on_something_that_cannot_fail_does_not_compile`
-- [ ] `a_fan_out_whose_iteration_falls_back_does_not_fail`
-- [ ] `a_fan_out_that_fell_back_collects_one_entry_per_element`
-- [ ] `the_fallback_is_visible_in_the_event_stream`
-- [ ] `a_recorded_failure_replays_as_a_failure_and_falls_back` (the cassette is
-      unchanged, so this must pass against a 0.3 recording)
-- [ ] `the_event_streams_agree_on_kind_and_order` (existing; must keep passing,
-      which means the Python backend implements this too)
-- [ ] `an_artifact_without_a_fallback_compiles_to_byte_identical_ir` (existing
-      golden IR; must keep passing)
+All present. `ingot-runtime/src/tests.rs` unless noted.
+
+- [x] `a_tool_failure_is_absorbed_and_the_run_continues`
+- [x] `a_model_failure_is_absorbed_and_the_fallback_is_typed`
+- [x] `a_fallback_that_reaches_anything_does_not_compile` — `ingot-semantic`
+- [x] `a_policy_denial_is_not_absorbed`, plus
+      `an_absent_policy_rule_is_not_absorbed_either`
+- [x] `a_budget_trip_is_not_absorbed`
+- [x] `a_refused_approval_is_not_absorbed`
+- [x] `a_failed_verify_is_not_absorbed` — both halves: an artifact that puts a
+      fallback on a `verify` is refused, and a `verify` reached *after* a fallback
+      still ends the run without emitting
+- [x] `else_on_something_that_cannot_fail_does_not_compile` — `ingot-semantic`,
+      with `else_on_a_consult_does_not_compile` and
+      `else_on_a_whole_fan_out_does_not_compile`
+- [x] `a_fan_out_whose_iteration_falls_back_does_not_fail`
+- [x] `a_fan_out_that_fell_back_collects_one_entry_per_element`
+- [x] `the_fallback_is_visible_in_the_event_stream` — asserts the whole stream in
+      order, not only that the event occurs
+- [x] `a_recorded_failure_replays_as_a_failure_and_falls_back` — against a 0.3
+      recording, as promised
+- [x] `the_event_streams_agree_on_kind_and_order` — kept passing, and joined by
+      `a_fallback_agrees_across_both_backends` in `ingot-cli/tests/differential.rs`,
+      which compares whole events rather than kinds so `because` is covered too
+- [x] `an_artifact_without_a_fallback_compiles_to_byte_identical_ir` — the golden
+      IR files' entire diff for this change is five `irVersion` lines
+
+Added beyond the list, each from a claim that did not survive the code:
+
+- [x] `a_sub_agents_denial_cannot_be_laundered_through_a_fallback`, and
+      `a_sub_agents_own_failure_is_absorbed`
+- [x] `a_stale_recording_is_not_absorbed`
+- [x] `a_tool_no_host_provides_is_not_absorbed`
+- [x] `a_missing_api_key_is_not_absorbed`
+- [x] `the_five_failures_a_fallback_may_not_absorb` — the table as an assertion
+- [x] `a_fallback_on_a_node_kind_that_cannot_carry_one_is_refused`
+- [x] `a_fallback_does_not_move_the_static_step_bound` — `ingot-semantic`
+- [x] `a_fallback_reaches_exactly_the_types_the_language_can_write` — pins
+      [GAP-045](../docs/gaps.md#gap-045), so the day it closes, this fails
+- [x] `the_motivating_example_compiles_against_a_text_returning_tool`, and
+      `a_string_fallback_does_not_reach_a_markdown_attempt` — the two halves of
+      the widening
+- [x] `string_widens_to_text_but_not_to_markdown` and `the_widenings_stay_at_three`
+      — `ingot-lang-types`; the second checks every ordered pair of scalar types,
+      so a fourth widening cannot be added without arguing for itself
+- [x] `else_does_not_chain`
+- [x] the conformance case `fallback-taken`, which holds both backends to the
+      event stream, the artifact bytes and one entry per element at once

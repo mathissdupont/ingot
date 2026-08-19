@@ -866,6 +866,12 @@ fn add_expr_symbols(map: &SourceMap, expr: &Expr, symbols: &mut Vec<EditorSymbol
             ));
             add_arg_symbols(map, args, symbols);
         }
+        Expr::Fallback {
+            attempt, fallback, ..
+        } => {
+            add_expr_symbols(map, attempt, symbols);
+            add_expr_symbols(map, fallback, symbols);
+        }
         Expr::Unary { operand, .. } => add_expr_symbols(map, operand, symbols),
         Expr::Binary { lhs, rhs, .. } => {
             add_expr_symbols(map, lhs, symbols);

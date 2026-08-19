@@ -107,6 +107,10 @@ pub const OUTPUT_NOT_ON_ALL_PATHS: &str = "ING6004";
 pub const INVALID_IN_PARALLEL: &str = "ING6005";
 pub const VERIFIER_NOT_PERFORMED: &str = "ING6006";
 pub const VERIFY_AFTER_EMIT: &str = "ING6007";
+/// A fallback that reaches something. A fallback must be a pure expression.
+pub const FALLBACK_NOT_PURE: &str = "ING6008";
+/// `else` on an expression that may not carry one.
+pub const ELSE_NOT_APPLICABLE: &str = "ING6009";
 
 /// Long-form explanation shown by `ingot explain <CODE>`.
 ///
@@ -281,6 +285,37 @@ pub fn explain(code: &str) -> Option<&'static str> {
              unspecified order, so these would make the result depend on \
              scheduling. Collect values from the map and act on them afterwards."
         }
+        FALLBACK_NOT_PURE => {
+            "The expression after `else` reaches something: an `ask`, a `call`, \
+             a `consult` or a `parallel map`.\n\n\
+             A fallback must be pure — literals, records, lists, reads of \
+             things already bound, arithmetic and the builtins. That \
+             restriction is what makes `else` a small feature rather than a \
+             large one, and three guarantees rest on it. The attempt is still \
+             exactly one step, so the `steps` bound the compiler proved does \
+             not change. The fallback reaches nothing, so what the artifact's \
+             policy permits is still one sequence of nodes rather than a union \
+             over paths — which is what an operator reads it as. And a \
+             recording has one row for the attempt rather than one per path.\n\n\
+             If the second path genuinely needs to reach something, that is a \
+             larger feature and it is not in the language yet. Run the flow, \
+             let it fail, and decide outside the artifact."
+        }
+        ELSE_NOT_APPLICABLE => {
+            "`else` may only follow an `ask`, a tool `call` or a sub-agent \
+             `call` — the three expressions whose attempt can fail.\n\n\
+             On anything else there is no failure to absorb, so the fallback \
+             would be unreachable text that looks like a safety net.\n\n\
+             `consult` is deliberately excluded even though it can fail: a \
+             person was asked and did not answer, and continuing with a default \
+             is continuing without them. So is `parallel map`, because a \
+             fallback for a whole fan-out is a handler around a block rather \
+             than a value for one attempt — put the `else` on the statement \
+             inside the body, which is where the failure is and where the other \
+             elements' work is still worth keeping.\n\n\
+             `verify` cannot carry one at all: a property the artifact states \
+             either holds or the run is not entitled to its output."
+        }
         RECURSIVE_AGENT => {
             "An agent calls itself, directly or through another agent.\n\n\
              Recursion has no static bound, so step and cost budgets could not be \
@@ -360,6 +395,8 @@ pub const EXPLAINED_CODES: &[&str] = &[
     VERIFIER_NOT_PERFORMED,
     VERIFY_AFTER_EMIT,
     INVALID_IN_PARALLEL,
+    FALLBACK_NOT_PURE,
+    ELSE_NOT_APPLICABLE,
     CHOICES_NOT_LITERAL,
     INAPPLICABLE_POLICY_ACTION,
     RECURSIVE_AGENT,

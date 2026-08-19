@@ -130,6 +130,21 @@ pub struct Node {
     /// Positional arguments, in declaration order.
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub args: Vec<Argument>,
+    /// The value to bind when this call fails, when the program stated one.
+    ///
+    /// Only on `llm.call`, `tool.call` and `agent.call` — the three kinds whose
+    /// attempt can fail. A [`Value`] rather than a node id, and that is the
+    /// whole restriction: the fallback reaches nothing, so it spends no step,
+    /// widens no policy, and the graph a backend walks does not branch here.
+    ///
+    /// Absent on a node whose program stated no fallback, which is every node
+    /// compiled before IR 0.4 — so **every existing artifact is a valid 0.4
+    /// artifact and encodes byte for byte as it always did.**
+    ///
+    /// What it must not absorb is a runtime rule rather than an encoding one:
+    /// see [Runtime 0.7 §2](../../../specs/runtime/v0.7.md).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub fallback: Option<Value>,
 
     // --- control flow -----------------------------------------------------
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -204,6 +219,7 @@ impl Node {
             prompt: None,
             response_type: None,
             args: Vec::new(),
+            fallback: None,
             condition: None,
             then: None,
             otherwise: None,

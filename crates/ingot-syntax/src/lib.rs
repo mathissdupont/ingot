@@ -596,6 +596,20 @@ pub enum Expr {
         args: Vec<Arg>,
         span: Span,
     },
+    /// `call fs.read_file(path) else "no write-up was filed"` — a value to use
+    /// when the attempt fails. Requires language 0.4.
+    ///
+    /// `attempt` is an [`Expr::Ask`] or an [`Expr::Call`]; nothing else may carry
+    /// an `else`, and the semantic phase is what refuses the rest. `fallback` is
+    /// a **pure** expression — the restriction is the whole design, because a
+    /// fallback that reaches nothing cannot widen what the artifact's policy
+    /// describes and cannot spend a second step. See
+    /// [RFC-0022](../../../rfcs/0022-a-failure-an-iteration-can-absorb.md).
+    Fallback {
+        attempt: Box<Expr>,
+        fallback: Box<Expr>,
+        span: Span,
+    },
     Unary {
         op: UnaryOp,
         operand: Box<Expr>,
@@ -627,6 +641,7 @@ impl Expr {
             | Expr::ParallelMap { span, .. }
             | Expr::Builtin { span, .. }
             | Expr::FunctionCall { span, .. }
+            | Expr::Fallback { span, .. }
             | Expr::Unary { span, .. }
             | Expr::Binary { span, .. }
             | Expr::Error { span } => *span,

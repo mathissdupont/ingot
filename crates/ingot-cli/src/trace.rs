@@ -181,6 +181,21 @@ impl HumanTrace {
                 if *allowed { "yes" } else { "no" },
                 self.current_agent()
             ),
+            RunEvent::FallbackTaken { node, because } => {
+                // The value this node bound is a default the program stated, not
+                // an answer anything produced. A trace that did not say so would
+                // read as a step that worked.
+                detail.push(format!(
+                    "the {because} failed; the value is the fallback the program states"
+                ));
+                if let Some(ir_node) = self.current_node(node) {
+                    detail.push(self.source_detail(ir_node));
+                }
+                format!(
+                    "fallback     {}:{node}  because={because}",
+                    self.current_agent()
+                )
+            }
             RunEvent::StateWritten { node, field } => {
                 format!("state.write  {}:{node}  {field}", self.current_agent())
             }

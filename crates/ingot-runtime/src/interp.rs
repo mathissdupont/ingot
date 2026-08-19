@@ -632,6 +632,7 @@ fn run_nested(
     overlap: Overlap<'_>,
 ) -> Result<RunReport, RunError> {
     check_ir_version(ir)?;
+    check_fallbacks(ir)?;
 
     // A resumption carries the inputs the first half ran with. Supplying them
     // again would let the two halves disagree about what the run was given, so
@@ -857,6 +858,42 @@ fn check_stop_label(ir: &AgentIr, label: &str) -> Result<(), RunError> {
     })
 }
 
+/// What a `fallbackTaken` event says failed, for a node kind that may carry one.
+///
+/// Taken from the node kind rather than from the error, so the value is the same
+/// on every backend and for every way one kind can fail. The failure's own text
+/// is already in the event before this one.
+fn fallback_kind(kind: NodeKind) -> Option<&'static str> {
+    match kind {
+        NodeKind::LlmCall => Some("model"),
+        NodeKind::ToolCall => Some("tool"),
+        NodeKind::AgentCall => Some("agent"),
+        _ => None,
+    }
+}
+
+/// Refuse an artifact whose fallback sits on a node kind that cannot carry one.
+///
+/// Checked before the run rather than when the node is reached, for the reason
+/// persistent memory is validated up front: an artifact that is going to be
+/// refused should be refused before it spends anything. The compiler does not
+/// emit one of these, so an artifact carrying one came from something else — and
+/// a field a runner does not understand is refused rather than ignored, which is
+/// the rule the IR version check applies too.
+fn check_fallbacks(ir: &AgentIr) -> Result<(), RunError> {
+    for node in &ir.nodes {
+        if node.fallback.is_some() && fallback_kind(node.kind).is_none() {
+            return Err(RunError::MalformedIr(format!(
+                "`{}` is a `{}` and carries a fallback, which only a call may: \
+                 `llm.call`, `tool.call` or `agent.call`",
+                node.id,
+                node.kind.as_str()
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn check_ir_version(ir: &AgentIr) -> Result<(), RunError> {
     let major = ir.ir_version.split('.').next().unwrap_or_default();
     if major != "0" {
@@ -921,7 +958,39 @@ impl Interp<'_> {
         Ok(())
     }
 
+    /// Run one node, and use its stated fallback if the attempt failed.
+    ///
+    /// The fallback lives here rather than inside the three call functions so
+    /// that the rule about what may not be absorbed exists in exactly one place.
+    /// A node without a `fallback` takes the same path it always did.
     fn run_node(&mut self, node: &Node) -> Result<(), RunError> {
+        let Err(failure) = self.run_node_attempt(node) else {
+            return Ok(());
+        };
+        let Some(fallback) = &node.fallback else {
+            return Err(failure);
+        };
+        if !failure.is_absorbable() {
+            return Err(failure);
+        }
+        // `check_fallbacks` refused this artifact before the run started, so
+        // there is nothing here to report. Kept as a match rather than an
+        // `expect` because a panic is not a way to fail a run.
+        let Some(because) = fallback_kind(node.kind) else {
+            return Err(failure);
+        };
+        let value = self.eval(&fallback.clone())?;
+        // After the failing node's own events and before anything continues, so
+        // the record reads as what was tried and then what stood in for it.
+        self.sink.emit(RunEvent::FallbackTaken {
+            node: node.id.clone(),
+            because: because.to_string(),
+        });
+        self.bind(node, value);
+        Ok(())
+    }
+
+    fn run_node_attempt(&mut self, node: &Node) -> Result<(), RunError> {
         match node.kind {
             NodeKind::LlmCall => self.run_llm_call(node),
             NodeKind::ToolCall => self.run_tool_call(node),

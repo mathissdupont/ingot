@@ -15,7 +15,7 @@ use ingot_syntax::*;
 mod strings;
 
 /// Language versions this compiler implements.
-pub const SUPPORTED_LANGUAGE_VERSIONS: &[(u32, u32)] = &[(0, 1), (0, 2), (0, 3)];
+pub const SUPPORTED_LANGUAGE_VERSIONS: &[(u32, u32)] = &[(0, 1), (0, 2), (0, 3), (0, 4)];
 
 #[derive(Debug)]
 pub struct ParseResult {
@@ -400,6 +400,22 @@ impl<'a> Parser<'a> {
                         "`consult` is a keyword from 0.3 onwards, so a program that used it as                          an ordinary name still compiles under the version it declares",
                     )
                     .with_help("change the file header to `language 0.3`"),
+                );
+            }
+        }
+        if !language_supports_v0_4(program.language) {
+            if let Some(span) = first_fallback_span(&program) {
+                self.error(
+                    Diagnostic::error(
+                        codes::UNSUPPORTED_LANGUAGE_VERSION,
+                        "a fallback with `else` requires language 0.4 or newer",
+                    )
+                    .with_primary(span, "not available in this language version")
+                    .with_note(
+                        "before 0.4 every failure ends the run, which is the right behaviour \
+                         for work whose job is to produce something correct or nothing",
+                    )
+                    .with_help("change the file header to `language 0.4`"),
                 );
             }
         }
@@ -1712,8 +1728,46 @@ impl<'a> Parser<'a> {
 
     // --- expressions ------------------------------------------------------
 
+    /// `else` binds loosest of all, so `call f(x) else a || b` reads the way it
+    /// looks: the whole right-hand side is the fallback.
+    ///
+    /// There is no ambiguity with the `else` of an `if` statement even though
+    /// they share the keyword. A statement's `else` can only follow a `}`, and a
+    /// `}` never continues an expression — so at the point this looks, an `else`
+    /// is always this one.
+    ///
+    /// Non-associative on purpose: `a else b else c` is refused here rather than
+    /// silently grouping, because the second `else` would be a fallback for a
+    /// fallback, and a pure expression cannot fail.
     fn parse_expr(&mut self) -> Expr {
-        self.parse_or()
+        let attempt = self.parse_or();
+        if !self.at_keyword(Keyword::Else) {
+            return attempt;
+        }
+        self.bump();
+        let fallback = self.parse_or();
+        let expr = Expr::Fallback {
+            span: attempt.span().merge(fallback.span()),
+            attempt: Box::new(attempt),
+            fallback: Box::new(fallback),
+        };
+        if self.at_keyword(Keyword::Else) {
+            let span = self.span();
+            self.error(
+                Diagnostic::error(
+                    codes::UNEXPECTED_TOKEN,
+                    "`else` does not chain: an expression may carry one fallback",
+                )
+                .with_primary(span, "a second `else` here")
+                .with_note(
+                    "a fallback is a pure expression, so it cannot fail and cannot need a \
+                     fallback of its own",
+                ),
+            );
+            self.bump();
+            let _ = self.parse_or();
+        }
+        expr
     }
 
     fn parse_or(&mut self) -> Expr {
@@ -2070,6 +2124,17 @@ fn language_supports_v0_3(version: Option<LanguageVersion>) -> bool {
     )
 }
 
+fn language_supports_v0_4(version: Option<LanguageVersion>) -> bool {
+    matches!(
+        version,
+        Some(LanguageVersion {
+            major: 0,
+            minor: 4..,
+            ..
+        })
+    )
+}
+
 fn language_supports_v0_2_types(version: Option<LanguageVersion>) -> bool {
     matches!(
         version,
@@ -2093,56 +2158,85 @@ fn first_persistent_span(program: &Program) -> Option<Span> {
 }
 
 /// The first `consult` anywhere in the program, if there is one.
-///
-/// Walks statements rather than types, because a `consult` can be nested inside
-/// a branch, a loop or a fan-out body — and a gate that only looked at the top
-/// level would let the deeper ones through under a version that does not have
-/// the keyword.
 fn first_consult_span(program: &Program) -> Option<Span> {
-    fn from_expr(expr: &Expr) -> Option<Span> {
+    first_flow_expr(program, &|expr| matches!(expr, Expr::Consult { .. }))
+}
+
+/// The first `else` fallback anywhere in the program, if there is one.
+fn first_fallback_span(program: &Program) -> Option<Span> {
+    first_flow_expr(program, &|expr| matches!(expr, Expr::Fallback { .. }))
+}
+
+/// The span of the first flow expression a predicate accepts.
+///
+/// Walks statements rather than types, because the constructs these gates cover
+/// can be nested inside a branch, a loop or a fan-out body — and a gate that
+/// only looked at the top level would let the deeper ones through under a
+/// version that does not have the keyword.
+///
+/// One traversal for every version gate rather than one per keyword: each new
+/// [`Expr`] variant otherwise has to be remembered in several near-identical
+/// walks, and the one that gets forgotten is the one that lets a construct
+/// through under a version that does not have it.
+fn first_flow_expr(program: &Program, wanted: &dyn Fn(&Expr) -> bool) -> Option<Span> {
+    fn from_expr(expr: &Expr, wanted: &dyn Fn(&Expr) -> bool) -> Option<Span> {
+        if wanted(expr) {
+            return Some(expr.span());
+        }
         match expr {
-            Expr::Consult { span, .. } => Some(*span),
-            Expr::ParallelMap { source, body, .. } => {
-                from_expr(source).or_else(|| body.iter().find_map(from_stmt))
+            Expr::ParallelMap { source, body, .. } => from_expr(source, wanted)
+                .or_else(|| body.iter().find_map(|stmt| from_stmt(stmt, wanted))),
+            Expr::Ask { args, .. }
+            | Expr::Consult { args, .. }
+            | Expr::Call { args, .. }
+            | Expr::FunctionCall { args, .. } => {
+                args.iter().find_map(|arg| from_expr(&arg.value, wanted))
             }
-            Expr::Ask { args, .. } | Expr::Call { args, .. } | Expr::FunctionCall { args, .. } => {
-                args.iter().find_map(|arg| from_expr(&arg.value))
+            Expr::Builtin { args, .. } => args.iter().find_map(|arg| from_expr(arg, wanted)),
+            Expr::Fallback {
+                attempt, fallback, ..
+            } => from_expr(attempt, wanted).or_else(|| from_expr(fallback, wanted)),
+            Expr::Unary { operand, .. } => from_expr(operand, wanted),
+            Expr::Binary { lhs, rhs, .. } => {
+                from_expr(lhs, wanted).or_else(|| from_expr(rhs, wanted))
             }
-            Expr::Builtin { args, .. } => args.iter().find_map(from_expr),
-            Expr::Unary { operand, .. } => from_expr(operand),
-            Expr::Binary { lhs, rhs, .. } => from_expr(lhs).or_else(|| from_expr(rhs)),
-            Expr::List { items, .. } => items.iter().find_map(from_expr),
+            Expr::List { items, .. } => items.iter().find_map(|item| from_expr(item, wanted)),
             _ => None,
         }
     }
 
-    fn from_stmt(stmt: &Stmt) -> Option<Span> {
+    fn from_stmt(stmt: &Stmt, wanted: &dyn Fn(&Expr) -> bool) -> Option<Span> {
         match stmt {
-            Stmt::Bind { value, .. } | Stmt::Expr { value, .. } => from_expr(value),
-            Stmt::StateWrite { value, .. } => from_expr(value),
-            Stmt::Emit { value, .. } => from_expr(value),
+            Stmt::Bind { value, .. } | Stmt::Expr { value, .. } => from_expr(value, wanted),
+            Stmt::StateWrite { value, .. } => from_expr(value, wanted),
+            Stmt::Emit { value, .. } => from_expr(value, wanted),
+            Stmt::Verify { args, .. } => args.iter().find_map(|arg| from_expr(&arg.value, wanted)),
             Stmt::If {
                 condition,
                 then_branch,
                 else_branch,
                 ..
-            } => from_expr(condition)
-                .or_else(|| then_branch.iter().find_map(from_stmt))
+            } => from_expr(condition, wanted)
+                .or_else(|| then_branch.iter().find_map(|stmt| from_stmt(stmt, wanted)))
                 .or_else(|| {
                     else_branch
                         .as_ref()
-                        .and_then(|body| body.iter().find_map(from_stmt))
+                        .and_then(|body| body.iter().find_map(|stmt| from_stmt(stmt, wanted)))
                 }),
-            Stmt::Loop { body, .. } => body.iter().find_map(from_stmt),
+            Stmt::Loop { guard, body, .. } => guard
+                .as_ref()
+                .and_then(|guard| from_expr(guard, wanted))
+                .or_else(|| body.iter().find_map(|stmt| from_stmt(stmt, wanted))),
             _ => None,
         }
     }
 
     program.agents.iter().find_map(|agent| {
-        agent
-            .flow
-            .as_ref()
-            .and_then(|flow| flow.statements.iter().find_map(from_stmt))
+        agent.flow.as_ref().and_then(|flow| {
+            flow.statements
+                .iter()
+                .find_map(|stmt| from_stmt(stmt, wanted))
+        })
     })
 }
 
@@ -2173,6 +2267,9 @@ fn first_v0_2_type_span(program: &Program) -> Option<Span> {
             Expr::List { items, .. } => items.iter().find_map(from_expr),
             Expr::Builtin { args, .. } => args.iter().find_map(from_expr),
             Expr::FunctionCall { args, .. } => args.iter().find_map(|arg| from_expr(&arg.value)),
+            Expr::Fallback {
+                attempt, fallback, ..
+            } => from_expr(attempt).or_else(|| from_expr(fallback)),
             Expr::Unary { operand, .. } => from_expr(operand),
             Expr::Binary { lhs, rhs, .. } => from_expr(lhs).or_else(|| from_expr(rhs)),
             Expr::Str(_)

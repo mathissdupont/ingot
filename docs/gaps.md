@@ -52,7 +52,9 @@ to you*.
 | [GAP-038](#gap-038) | No backend outside this repository has ever run the suite | Unproven | somebody else's backend, and what they hit |
 | [GAP-039](#gap-039) | No agent outside this repository is known to run | Unproven | a program somebody depends on, and its friction |
 | [GAP-043](#gap-043) | A run that is recording does not overlap its fan-out | Degraded | per-iteration recording buffers, merged in index order |
-| [GAP-044](#gap-044) | A program cannot say what to do when something fails | Absent | RFC-0022 narrows it; a general handler closes it |
+| [GAP-044](#gap-044) | A program cannot say what to do when something fails | Absent | RFC-0022 built it for one attempt; a general handler closes it |
+| [GAP-045](#gap-045) | A fallback cannot be written for `markdown`, `json`, `file` or a record | Refused | a literal for those, or a narrowing rule with its own argument |
+| [GAP-046](#gap-046) | A model call that returned nothing cannot be recorded | Absent | an error on a recorded interaction, at a new cassette version |
 
 ---
 
@@ -239,6 +241,66 @@ to keep for exactly the reason model names change.
 
 *Recorded in.* `crates/ingot-runtime/src/google.rs`.
 
+### GAP-045
+
+**A fallback cannot be written for `markdown`, `json`, `file` or a declared
+record.**
+
+`else` may follow an `ask`, a tool `call` or a sub-agent `call`
+([Language 0.4 §1.3](../specs/language/v0.4.md)). A fallback is a pure expression,
+so it can only be *written* for a type this language can produce without reaching
+anything: one with a literal — `string`, `int`, `float`, `bool` and lists of those
+— or one of those widened, which means `text`.
+
+*How it shows up.*
+
+```ingot
+score   = ask<int>("Score this out of ten.") else 0
+writeup = call fs.read_file(path) else "no write-up was filed"
+summary = ask<markdown>("Summarise this.") else "nothing to say"
+#         ING3001: the fallback is `string` and the attempt is `markdown`
+grade   = ask<rating>("Rate this.") else rating { score: 0 }
+#         does not parse: there is no record construction in this language
+```
+
+The first two compile. The third and fourth are this entry.
+
+*Two independent causes, both older than `else`.* There is no record literal, so no
+value of a declared record type can be built purely. And `markdown`, `json` and
+`file` are the more specific types: the assignability table
+([Language 0.4 §2](../specs/language/v0.4.md)) only widens, and nothing widens
+*into* them.
+
+*What was fixed rather than recorded, and why the line is there.* This entry was
+opened covering `text` as well, which made the RFC's own motivating example
+`ING3001` — the shipped filesystem tool reads a file as `text`. So `string` →
+`text` was added to the assignability table in Language 0.4, because a string is
+text in exactly the sense markdown is, and the alternative workaround was to
+declare a tool `-> string` so that some *flow* could have a fallback, which gets
+the direction of a declaration backwards.
+
+`string` → `markdown` was **not** added, and that is the line. The three widenings
+all go from the more specific type to the less; this one would go the other way,
+letting an arbitrary string claim the more specific type. Admit it and there is no
+ground left to refuse `text` → `markdown` either — a `text` value is no less
+markdown than a bare string — and then `markdown` and `text` are one type with two
+names, which is not what an artifact's content type or its file extension mean.
+
+*What it costs today.* An `ask` for prose or for a record has no fallback. The
+shape that works instead is to ask for `string` and let the step that assembles the
+document produce the `markdown` — which is what the conformance case and both trial
+programs do without being told to. A sub-agent call is writable only where the
+callee's output is `text`.
+
+*What closing it needs.* A literal for records, and for the prose types either a
+literal or a narrowing rule that argues for itself — including what it means for
+`text` → `markdown`, which cannot then stay refused. Not a special case in the
+fallback's type check: an ad-hoc coercion in one position is how a type system
+stops being one.
+
+*Recorded in.* [Language 0.4 §1.5 and §2](../specs/language/v0.4.md),
+`crates/ingot-lang-types/src/lib.rs`, `crates/ingot-semantic/src/check.rs`.
+
 ## Degraded
 
 ### GAP-028
@@ -416,15 +478,33 @@ system is complete enough for 1.0. It is recorded rather than fixed because the
 answer to "was this decided?" turned out to be "no", and an unrecorded decision is
 worse than a recorded gap.
 
-*Designed, not yet built.*
-[RFC-0022](../rfcs/0022-a-failure-an-iteration-can-absorb.md) takes the sixth
-question first and narrows this entry rather than closing it: `else` over a
-**pure** expression, which erases four of the five questions above instead of
-answering them, and explicitly refuses to absorb a policy denial, a budget trip, a
-refused approval or a failed `verify`. The general handler and the effectful
-fallback are what is left here.
+*Built, and this entry narrows rather than closes.*
+[RFC-0022](../rfcs/0022-a-failure-an-iteration-can-absorb.md) took the sixth
+question first: `else` over a **pure** expression, which erases four of the five
+questions above instead of answering them. Shipped as
+[Language 0.4](../specs/language/v0.4.md),
+[Agent IR 0.4](../specs/ir/v0.4.md) and
+[Runtime 0.7](../specs/runtime/v0.7.md). The example above now compiles and runs,
+and a fan-out that loses one element keeps the other elements' work.
 
-*Recorded in.* [Language 0.1 §6](../specs/language/v0.1.md),
+**What is left here is the general handler and the effectful fallback**, with the
+questions they still have to answer written down in the RFC's *Alternatives*.
+
+*What building it added to the not-absorbed list, which the RFC's five had missed.*
+A stale recording, a missing credential, an unusable model, and a tool no host
+provides all reached the interpreter as ordinary provider or tool failures. Each is
+a setup mistake or a test that should have failed loudly, and absorbing the first
+would let `ingot test` pass on a digest of defaults after somebody edited a prompt.
+The full list is [Runtime 0.7 §2.1](../specs/runtime/v0.7.md).
+
+*And two limits it exposed, recorded as their own entries:*
+[GAP-045](#gap-045) — the types a fallback can currently be *written* for are far
+fewer than the attempts it may follow — and [GAP-046](#gap-046) — a model call that
+returned nothing is not recordable, so `ingot test` cannot cover a provider
+outage.
+
+*Recorded in.* [Language 0.4 §1](../specs/language/v0.4.md),
+[Runtime 0.7 §2](../specs/runtime/v0.7.md),
 [`docs/guide/the-language.md`](guide/the-language.md),
 [RFC-0022](../rfcs/0022-a-failure-an-iteration-can-absorb.md).
 
@@ -587,6 +667,59 @@ deliberately, which is the case this entry exists to warn.
 
 *Recorded in.* [RFC-0018 §5](../rfcs/0018-state-that-outlives-a-run.md),
 `crates/ingot-cli/src/memory.rs`.
+
+### GAP-046
+
+**A model call that returned nothing cannot be recorded, so `ingot test` cannot
+cover a provider outage.**
+
+A cassette's `toolCalls` rows carry an `error` and have since cassette 0.2,
+precisely so a recording can hold the behaviour most worth testing. **The model
+rows do not.** `Interaction` records a `value`, which is required, and has no field
+for a failure.
+
+So these are recordable:
+
+* a tool that ran and failed;
+* a model answer that did not match its declared type — the value is recorded as
+  the model produced it, and the run rejects it one layer further in.
+
+And these are not, at any cassette version:
+
+* a provider that could not be reached;
+* a provider that rejected the request or rate-limited it;
+* a provider that declined to answer;
+* an answer that was cut off.
+
+*How it shows up.* `ingot test` can pin what an agent does when a *tool* is down
+and what it does when a model answers badly. It cannot pin what an agent does when
+the model is down — which, for an agent whose whole flow is `ask`, is most of the
+failure surface. Writing that test means reaching for a stub provider in a language
+runtime, which is exactly the work a cassette exists to remove.
+
+*Why this is only visible now.* Nothing could express a response to a failed call
+until `else` existed, so there was nothing to test. The asymmetry is older than
+[GAP-044](#gap-044) and was found while implementing it: the RFC claimed the
+cassette would not have to move, which is true for everything it needed and not
+true in general.
+
+*Why it was not fixed in the same change.* Because it is a format move, and this
+one is not free. `error` on an interaction means `value` becomes optional, so an
+0.3 reader handed such a recording would read a row with no value — the version
+whitelist refuses it, correctly, which means it is cassette **0.4** and every
+existing recording stays 0.3 until re-recorded.
+[RFC-0022](../rfcs/0022-a-failure-an-iteration-can-absorb.md) promised no cassette
+change and the promise was kept; expanding scope to a format version mid-change
+would have been the worse call.
+
+*What closing it needs.* An optional `error` on `Interaction`, `value` made
+optional beside it, cassette 0.4, and `RecordingProvider` recording a failure
+rather than only a success. It is the same shape `ToolExchange` already has, and
+that symmetry is the argument for doing it.
+
+*Recorded in.* [Agent IR 0.4 §5](../specs/ir/v0.4.md),
+[Language 0.4 §4](../specs/language/v0.4.md),
+`crates/ingot-runtime/src/cassette.rs`.
 
 ---
 

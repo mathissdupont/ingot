@@ -66,9 +66,14 @@ fn the_python_backend_conforms() {
         .to_string();
     let backend = format!("{python} {adapter}");
 
-    let output = run(
+    // The binary under test, named explicitly. Without this the adapter looked in
+    // `target/debug` and fell back to whatever `ingot` was on PATH, so a checkout
+    // with `CARGO_TARGET_DIR` set — which this repository requires — compiled the
+    // artifacts with a stale binary and this test still passed. It found nothing
+    // for three releases.
+    let output = run_env(
         &["conform", "--suite", &suite(), "--backend", &backend],
-        None,
+        &[("INGOT_BIN", binary())],
     );
     assert_eq!(
         code(&output),

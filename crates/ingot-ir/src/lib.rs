@@ -26,7 +26,11 @@ pub mod node;
 pub use node::{Node, NodeKind, RefScope, SourceSpan, TemplatePart, Value};
 
 /// Version of the IR schema this crate emits and understands.
-pub const IR_VERSION: &str = "0.3";
+///
+/// The runtime checks only the **major** component, so an artifact compiled by
+/// an earlier 0.x still runs here. That is what makes each minor bump additive
+/// in practice rather than only on paper.
+pub const IR_VERSION: &str = "0.4";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

@@ -166,7 +166,30 @@ impl Emitter<'_> {
         }
     }
 
+    /// An `llm.call`, and the fallback it states if it states one.
+    ///
+    /// A fallback becomes a real `try`/`except` around the call rather than an
+    /// interpreted one, for the same reason a branch becomes a real `if`. The
+    /// rule about what may not be absorbed is not emitted here: `rt.fallback`
+    /// re-raises anything the run is not entitled to swallow, so the decision
+    /// lives in one reviewable place instead of in every generated program.
     fn llm_call(&mut self, node: &Node, depth: usize) -> Result<(), EmitError> {
+        let Some(fallback) = &node.fallback else {
+            return self.llm_attempt(node, depth);
+        };
+        let rendered = self.value(fallback)?;
+        self.line(depth, "try:");
+        self.llm_attempt(node, depth + 1)?;
+        self.line(depth, "except RunFailed as failure:");
+        self.line(
+            depth + 1,
+            &format!("rt.fallback({}, failure, \"model\")", quote(&node.id)),
+        );
+        self.line(depth + 1, &format!("{} = {rendered}", binding_of(node)));
+        Ok(())
+    }
+
+    fn llm_attempt(&mut self, node: &Node, depth: usize) -> Result<(), EmitError> {
         let response_type = node
             .response_type
             .clone()

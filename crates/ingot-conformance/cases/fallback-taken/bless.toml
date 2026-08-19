@@ -1,0 +1,15 @@
+# A schema-constrained answer arrives wrapped as `{"value": ...}`, and the
+# provider unwraps it without checking its type -- the run validates it, one layer
+# further in. So the second answer is recorded exactly as the model produced it
+# and is then rejected, which is what lets a 0.3 cassette hold a **model** failure
+# without the format moving. `Interaction` has no field for an error and does not
+# need one for this.
+answers = [
+  '{"value":7}',
+  '{"value":"I could not tell from this."}',
+  '{"value":4}',
+  '{"alpha":7,"beta":0,"gamma":4}',
+]
+
+[inputs]
+items = ["alpha", "beta", "gamma"]

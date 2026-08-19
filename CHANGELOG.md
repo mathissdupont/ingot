@@ -8,6 +8,107 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
 
 ## [Unreleased]
 
+### A failure an iteration can absorb
+
+`else` gives one attempt a value to use when it fails. **Language 0.4, Agent IR
+0.4, Runtime 0.7. The cassette does not move and no crate API changes shape.**
+[GAP-044](docs/gaps.md#gap-044) narrows to the general handler;
+[RFC-0022](rfcs/0022-a-failure-an-iteration-can-absorb.md).
+
+```ingot
+writeup = call fs.read_file("${incident.id}.md") else "no write-up was filed"
+```
+
+**The case it exists for is partial data in a fan-out**, and until now that case
+was expensive rather than merely awkward. Three incidents, one write-up never
+filed: the run ended on the missing file *after paying for the other two
+summaries*, because iterations are drained rather than cancelled so a failing run's
+cost does not depend on the schedule. A fan-out that lost one element spent the
+whole fan-out and returned nothing. Now the iteration absorbs its own failure, the
+fan-out does not fail, and the list keeps one entry per element.
+
+**The fallback must be pure, and that restriction is the feature.** Because it
+reaches nothing, the attempt is still exactly one step — so the `steps` bound the
+compiler proved does not move — the policy an operator reads still describes one
+sequence of calls rather than a union over two paths, and a recording still has one
+row per attempt. Four of the five questions [GAP-044](docs/gaps.md#gap-044) raised
+stop existing rather than getting answers.
+
+**What `else` will not swallow is the part worth reading.** A capability the policy
+denies, a budget that ran out, an approval a person refused, a `verify` that did not
+hold, a malformed artifact — and, added while building it, a stale cassette, a
+missing credential, an unusable model, a tool no host provides, and a sub-agent
+whose own failure was none of the absorbable kinds. The first would make `deny`
+advisory; the stale cassette would let `ingot test` pass on a digest of defaults
+after somebody edited a prompt. It is a match on an error type with no wildcard arm,
+so a new failure kind does not compile until somebody decides which side it is on,
+and the generated Python program inverts the same idea — unabsorbable unless
+something marked it otherwise. A forgotten classification costs a run that stops
+when it could have continued, never a guarantee that quietly became a default.
+
+**A recovered failure is in the record.** One new event, `fallbackTaken`, carrying
+the node and the *kind* of failure (`model`, `tool`, `agent`) and never its text.
+Counting them tells a reviewer how much of a result was made of defaults, which is
+the first question to ask of one. Both backends emit it, and the conformance case
+`fallback-taken` holds them to the same stream from a **cassette 0.3** recording.
+
+**One new assignability widening came with it: `string` → `text`**, joining
+`int` → `float` and `markdown` → `text`. All three go the same way, from the more
+specific type to the less, and a string is text in exactly the sense markdown is.
+
+It is here because without it `else` did not reach the program it was designed for.
+The shipped filesystem tool reads a file as `text`, so the RFC's own motivating line
+— `call fs.read_file("…") else "no write-up was filed"` — was `ING3001`, and the
+workaround was to declare the tool `-> string` so that some *flow* could have a
+fallback. A declaration should describe the tool. `string` → `markdown` is
+deliberately **not** admitted: that one narrows rather than widens, and admitting it
+would leave no ground to refuse `text` → `markdown` either, at which point
+`markdown` and `text` are one type with two names. Additive — programs compile that
+did not, and nothing that compiled behaves differently.
+
+**Three of the RFC's claims did not survive the code.** The not-caught list was
+incomplete (above). "No cassette change" held, but for a narrower reason than
+stated — a *model* failure that returned no value is not recordable at any cassette
+version, which is now [GAP-046](docs/gaps.md#gap-046). And the RFC's second example
+does not compile at all: there is no record construction in this language, so a
+fallback for a record or for `markdown`, `json` or `file` still cannot be written.
+That is [GAP-045](docs/gaps.md#gap-045), narrowed by the widening above and stated
+in the specification and the guide rather than glossed.
+
+**Verified against the program that motivated it.** The trial agent that found this
+gap on 2026-08-18 — a fan-out over incident write-ups where one was never filed —
+now runs to completion against a local model with the `else` line written exactly as
+its author first wanted it, tool declaration untouched. Three entries, one of them
+built from the fallback, one `fallbackTaken` in the record. The same program
+yesterday spent the whole fan-out and returned nothing.
+
+### Fixed
+
+- **The Python conformance adapter was compiling artifacts with a stale binary.**
+  It looked in `target/debug` and fell back to whatever `ingot` was on `PATH`, so a
+  checkout that sets `CARGO_TARGET_DIR` — which this repository has to, because
+  cargo and a OneDrive-synchronised `target/` do not get along — tested a different
+  build and `the_python_backend_conforms` passed anyway. On this machine it was
+  compiling with **0.5.0**. The adapter now takes `INGOT_BIN`, refuses a value that
+  is not a file rather than falling back from it, and honours `CARGO_TARGET_DIR`;
+  the test names the binary under test explicitly. A suite that reports something it
+  did not check is worse than no suite.
+- **`bless.py` pointed at a directory that had moved.** The conformance cases left
+  `specs/conformance/cases` for `crates/ingot-conformance/cases` so that
+  `cargo package` would carry them, and the fixture regenerator was not updated —
+  so regenerating a fixture, which the contributing notes tell you to do after any
+  change to the event stream, could not work. It now resolves the cases relative to
+  itself and exits loudly if they are not there, and finds `ingot` the same way the
+  adapter does.
+
+### Added
+
+- `ToolError::Cassette`, mirroring `ProviderError::Cassette`, so "this recording no
+  longer matches this run" is distinguishable from "the tool failed". Additive; the
+  enum was not previously exhaustively matched outside this crate.
+- Register entries [GAP-045](docs/gaps.md#gap-045) and
+  [GAP-046](docs/gaps.md#gap-046).
+
 ## [0.8.0] — 2026-08-18
 
 The release where `parallel map` means something.
