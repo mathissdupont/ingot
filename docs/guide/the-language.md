@@ -434,3 +434,131 @@ for *which framing should the report take*.
 already existed, for `emit` and for `ask`, and the reasons transfer unchanged.
 See [Language 0.3](../../specs/language/v0.3.md) and
 [RFC-0020](../../rfcs/0020-a-person-in-the-loop.md).
+
+## When something fails
+
+Every failure ends the run, and that is usually right: *summarise this document*
+should fail loudly rather than invent a summary.
+
+The case where it is wrong is partial data, and it is the most ordinary case there
+is. A fan-out over three incidents where one write-up was never filed used to end
+the run on the missing file — **after paying for the other two summaries**, because
+iterations are drained rather than cancelled so that a failing run's cost does not
+depend on the schedule. The run spent the whole fan-out and returned nothing.
+
+`else` gives one attempt a value to use when it fails:
+
+```ingot
+language 0.4
+
+tool fs.read_file(path: string) -> string !filesystem_read
+
+/// Digests incident write-ups, including the ones nobody filed.
+agent Digest(incidents: string[]) -> digest<markdown> {
+  tools {
+    mcp fs.read_file
+  }
+
+  budget {
+    steps <= 20
+    tokens <= 40000
+  }
+
+  policy {
+    filesystem_read allow
+    network deny
+  }
+
+  flow {
+    notes = parallel map incidents as incident {
+      writeup = call fs.read_file(incident) else "no write-up was filed"
+      ask<string>("Summarise this incident in one line.", context: writeup)
+    }
+    emit digest = ask<markdown>("Collect these into a digest.", context: notes)
+  }
+}
+```
+
+The iteration no longer fails, so the fan-out no longer fails, and the collected
+list keeps **one entry per element** — a missing file becomes a line saying so
+rather than a hole you cannot see.
+
+### The value after `else` reaches nothing
+
+It is a literal, a list, something already bound, or arithmetic over those. No
+`ask`, no `call`, no `consult`. That restriction is not a limitation waiting to be
+lifted; three things depend on it:
+
+* the attempt is still exactly one step, so the `steps` budget the compiler proved
+  does not move;
+* the fallback reaches nothing, so the policy you read still describes one sequence
+  of calls rather than a union over two paths;
+* a recording still has one row for the attempt.
+
+If the second path genuinely needs to reach something — *search the web, and if
+that fails read the cache* — that is a larger feature and it is not in the language
+yet. Run the flow, let it fail, and decide outside the artifact.
+
+### What `else` will not swallow
+
+This is the part worth knowing before you rely on it. `else` absorbs a failure of
+the *attempt*: a tool that failed, a provider that could not be reached, an answer
+that did not match its type, a sub-agent that failed for one of those reasons.
+
+It will not absorb a capability your policy denies, a budget that ran out, an
+approval somebody refused, a `verify` that did not hold, a stale cassette, a
+missing API key, or a tool no host provides. Each of those still ends the run.
+
+The first one is the reason the rest of the list exists: if `else` could route
+around a denial, `deny` would be advice.
+
+### The record says a default was used
+
+A run that quietly succeeded on a default is a run whose record does not say what
+happened, so every fallback emits an event:
+
+```json
+{"event":"fallbackTaken","node":"n1","because":"tool"}
+```
+
+Counting those tells you how much of a digest was made of defaults, which is the
+first thing to ask of one. A digest built entirely from *no write-up was filed* is
+a successful run and a useless answer, and the event stream is where you can see
+the difference.
+
+### What you cannot put after `else` yet
+
+A fallback has to be a value the language can write, which means a literal type —
+`string`, `int`, `float`, `bool`, lists of those — or `text`, which a string widens
+into. That covers a tool returning a file's contents and an `ask` for a number,
+which is most of what the feature is for.
+
+What it does not cover is prose and records:
+
+```
+summary = ask<markdown>("Summarise this.") else "nothing to say"
+#         error[ING3001]: the fallback is `string` and the attempt is `markdown`
+```
+
+`markdown` is the more specific type, and a bare string does not get to claim it —
+if it did, a `text` value would have as good a claim, and then `markdown` and `text`
+would be one type with two names. There is no record literal either, so
+`ask<rating>(…) else rating { … }` does not parse.
+
+The shape that works is to ask for `string` and let the step that assembles the
+document produce the markdown, which is what the example above does. The rest is
+[GAP-045](../gaps.md#gap-045).
+
+### One widening came with this
+
+`string` now widens to `text`, joining `int` → `float` and `markdown` → `text`. A
+string is text in the same sense markdown is.
+
+It is here because without it the example above did not compile: the filesystem
+tool reads a file as `text`, and the alternative was to declare the tool
+`-> string` so that a flow could have a fallback — which makes a tool's signature
+depend on how somebody uses it.
+
+See [Language 0.4](../../specs/language/v0.4.md),
+[Runtime 0.7](../../specs/runtime/v0.7.md) and
+[RFC-0022](../../rfcs/0022-a-failure-an-iteration-can-absorb.md).

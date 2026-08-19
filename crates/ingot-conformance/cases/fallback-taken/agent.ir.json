@@ -1,0 +1,149 @@
+{
+  "irVersion": "0.4",
+  "language": "0.4",
+  "agent": "conformance.absorbed.Absorbed",
+  "doc": "A fan-out whose iterations score elements, with a fallback for the ones that\ncome back unusable.\n\nThe failure this case pins is **an answer that did not match its declared\ntype** — one of the four things `else` catches, and the only one a 0.3\ncassette can hold for a model call, because `Interaction` records a value and\nhas no field for an error. The recorded answer for the second element is not\nan `int`, so both backends reject it, both use the stated fallback, and both\nmust say so in the same place in the event stream.\n\nA fan-out rather than a straight line, because the point of the feature is\nthat the *other* elements' work survives: a run that lost one element used to\nspend the whole fan-out and return nothing.",
+  "inputs": {
+    "items": "string[]"
+  },
+  "outputs": {
+    "digest": "artifact<json>"
+  },
+  "requirements": {
+    "model": {
+      "mode": "capabilities",
+      "capabilities": [
+        "structured_output"
+      ]
+    }
+  },
+  "budget": {
+    "steps": 4
+  },
+  "policy": {
+    "network": {
+      "decision": "deny"
+    }
+  },
+  "effects": [
+    "model_access"
+  ],
+  "entry": "n1",
+  "nodes": [
+    {
+      "id": "n0",
+      "kind": "llm.call",
+      "sourceSpan": {
+        "source": "main.ing",
+        "start": 1030,
+        "end": 1089
+      },
+      "binding": "$tmp0",
+      "prompt": {
+        "kind": "template",
+        "parts": [
+          {
+            "kind": "text",
+            "value": "Score "
+          },
+          {
+            "kind": "value",
+            "value": {
+              "kind": "ref",
+              "scope": "binding",
+              "path": [
+                "item"
+              ]
+            },
+            "type": "string"
+          },
+          {
+            "kind": "text",
+            "value": " out of ten. Answer with a number."
+          }
+        ]
+      },
+      "responseType": "int",
+      "fallback": {
+        "kind": "literal",
+        "type": "int",
+        "value": 0
+      },
+      "effects": [
+        "model_access"
+      ],
+      "next": null
+    },
+    {
+      "id": "n1",
+      "kind": "parallel",
+      "sourceSpan": {
+        "source": "main.ing",
+        "start": 995,
+        "end": 1102
+      },
+      "binding": "scores",
+      "body": "n0",
+      "binder": "item",
+      "source": {
+        "kind": "ref",
+        "scope": "input",
+        "path": [
+          "items"
+        ]
+      },
+      "mode": "map",
+      "next": "n2"
+    },
+    {
+      "id": "n2",
+      "kind": "llm.call",
+      "sourceSpan": {
+        "source": "main.ing",
+        "start": 1121,
+        "end": 1171
+      },
+      "binding": "$tmp1",
+      "prompt": {
+        "kind": "literal",
+        "type": "string",
+        "value": "Report these scores."
+      },
+      "responseType": "json",
+      "args": [
+        {
+          "name": "context",
+          "value": {
+            "kind": "ref",
+            "scope": "binding",
+            "path": [
+              "scores"
+            ]
+          }
+        }
+      ],
+      "effects": [
+        "model_access"
+      ],
+      "next": "n3"
+    },
+    {
+      "id": "n3",
+      "kind": "artifact.emit",
+      "sourceSpan": {
+        "source": "main.ing",
+        "start": 1107,
+        "end": 1171
+      },
+      "value": {
+        "kind": "ref",
+        "scope": "binding",
+        "path": [
+          "$tmp1"
+        ]
+      },
+      "output": "digest",
+      "next": null
+    }
+  ]
+}

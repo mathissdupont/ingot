@@ -1129,3 +1129,392 @@ agent Wasteful(topic: string) -> digest<markdown> {
         "the warning still has to fire where the value goes nowhere"
     );
 }
+
+// --- a failure an iteration can absorb (RFC-0022) -------------------------
+
+/// The prelude, at the version `else` needs.
+///
+/// A separate constant rather than moving `PRELUDE`: every other test in this
+/// file asserts something about language 0.1, and a version bump that quietly
+/// re-versioned all of them would stop them testing what they were written for.
+const PRELUDE_V4: &str = r#"language 0.4
+package heptapus.test
+
+type search_result {
+  title: string
+  url: string
+}
+
+type rating {
+  score: int
+  note: string
+}
+
+tool web.search(query: string) -> search_result[] !network
+tool fs.read_file(path: string) -> string !filesystem_read
+tool fs.read_text(path: string) -> text !filesystem_read
+
+verifier CitationCheck(draft: markdown, min_sources: int)
+"#;
+
+/// Check a 0.4 program, allowing parse errors through so a version gate or a
+/// syntax rule can be asserted on rather than tripping the harness.
+fn check_v4_raw(body: &str) -> (Vec<String>, Option<Analysis>) {
+    let source = format!("{PRELUDE_V4}\n{body}");
+    let mut map = SourceMap::new();
+    let file = map.add_virtual("test.ing", source);
+    let parsed = ingot_parser::parse(map.file(file));
+    let parse_codes: Vec<String> = parsed
+        .diagnostics
+        .iter()
+        .map(|d| d.code.to_string())
+        .collect();
+    if parsed.diagnostics.has_errors() {
+        return (parse_codes, None);
+    }
+    (parse_codes, Some(analyze(&parsed.program)))
+}
+
+fn check_v4(body: &str) -> Analysis {
+    let (parse_codes, analysis) = check_v4_raw(body);
+    analysis.unwrap_or_else(|| panic!("test source must parse cleanly: {parse_codes:?}"))
+}
+
+/// An agent whose flow is `body`, with everything a fallback needs granted.
+fn absorbing(body: &str) -> String {
+    format!(
+        r#"
+agent Digester(items: string[]) -> digest<markdown> {{
+  model requires {{ structured_output }}
+
+  tools {{
+    mcp fs.read_file
+    mcp fs.read_text
+    mcp web.search
+  }}
+
+  budget {{ steps <= 40 }}
+
+  policy {{
+    filesystem_read allow
+    network allow
+  }}
+
+  flow {{
+{body}
+  }}
+}}
+"#
+    )
+}
+
+#[test]
+fn a_fallback_over_a_pure_expression_is_accepted() {
+    let analysis = check_v4(&absorbing(
+        r#"    entries = parallel map items as item {
+      writeup = call fs.read_file(item) else "no write-up was filed"
+      ask<markdown>("Summarise this.", context: writeup)
+    }
+    emit digest = ask<markdown>("Join these.", context: entries)"#,
+    ));
+    assert_clean(&analysis);
+}
+
+#[test]
+fn a_fallback_that_reaches_anything_does_not_compile() {
+    // The restriction is the whole design: a fallback that reached something
+    // would spend a second step and would make what the agent may reach the
+    // union over two paths rather than the one sequence an operator reads.
+    for reaching in [
+        r#"call fs.read_file(item) else call web.search(item)"#,
+        r#"call fs.read_file(item) else ask<string>("Make something up.")"#,
+        r#"ask<string>("Summarise.") else consult("What should this say?")"#,
+        r#"ask<string>("Summarise.") else parallel map items as x { ask<string>("hm") }"#,
+    ] {
+        let analysis = check_v4(&absorbing(&format!(
+            "    entries = parallel map items as item {{\n      value = {reaching}\n      value\n    }}\n    emit digest = ask<markdown>(\"Join.\", context: entries)"
+        )));
+        assert!(
+            codes_of(&analysis).contains(&codes::FALLBACK_NOT_PURE),
+            "expected ING6008 for `{reaching}`, got {:?}",
+            codes_of(&analysis)
+        );
+    }
+}
+
+#[test]
+fn a_pure_fallback_may_read_something_already_bound() {
+    // Pure does not mean literal. What it means is *reaches nothing*.
+    let analysis = check_v4(&absorbing(
+        r#"    placeholder = "nothing was filed"
+    entries = parallel map items as item {
+      call fs.read_file(item) else placeholder
+    }
+    emit digest = ask<markdown>("Join these.", context: entries)"#,
+    ));
+    assert_clean(&analysis);
+}
+
+#[test]
+fn else_on_something_that_cannot_fail_does_not_compile() {
+    let analysis = check_v4(&absorbing(
+        r#"    count = len(items) else 0
+    emit digest = ask<markdown>("Report ${count}.")"#,
+    ));
+    assert!(
+        codes_of(&analysis).contains(&codes::ELSE_NOT_APPLICABLE),
+        "expected ING6009, got {:?}",
+        codes_of(&analysis)
+    );
+}
+
+#[test]
+fn else_on_a_consult_does_not_compile() {
+    // A consultation *can* fail, and it is still refused: a person was asked and
+    // did not answer, so continuing with a default is continuing without them.
+    let analysis = check_v4(&absorbing(
+        r#"    framing = consult("Which framing?") else "executive"
+    emit digest = ask<markdown>("Write it ${framing}.")"#,
+    ));
+    assert!(
+        codes_of(&analysis).contains(&codes::ELSE_NOT_APPLICABLE),
+        "expected ING6009, got {:?}",
+        codes_of(&analysis)
+    );
+}
+
+#[test]
+fn else_on_a_whole_fan_out_does_not_compile() {
+    // A fallback for a fan-out is a handler around a block, which is the larger
+    // feature RFC-0022 deliberately left out. The `else` belongs on the
+    // statement inside the body, where the other elements' work survives.
+    let analysis = check_v4(&absorbing(
+        r#"    entries = parallel map items as item {
+      call fs.read_file(item)
+    } else []
+    emit digest = ask<markdown>("Join.", context: entries)"#,
+    ));
+    assert!(
+        codes_of(&analysis).contains(&codes::ELSE_NOT_APPLICABLE),
+        "expected ING6009, got {:?}",
+        codes_of(&analysis)
+    );
+}
+
+#[test]
+fn both_sides_of_an_else_must_share_a_type() {
+    // Whatever reads the binding must not have to ask which path ran.
+    let analysis = check_v4(&absorbing(
+        r#"    entries = parallel map items as item {
+      call fs.read_file(item) else 0
+    }
+    emit digest = ask<markdown>("Join.", context: entries)"#,
+    ));
+    assert!(
+        codes_of(&analysis).contains(&codes::TYPE_MISMATCH),
+        "expected ING3001, got {:?}",
+        codes_of(&analysis)
+    );
+}
+
+#[test]
+fn a_fallback_reaches_exactly_the_types_the_language_can_write() {
+    // What `else` covers is decided by which types have a literal, and that is
+    // narrower than RFC-0022 assumed. `string`, `int`, `float`, `bool` and lists
+    // of those can be written; `markdown`, `text`, `json` and a declared record
+    // cannot, because the language has no literal for one and `string` is not
+    // assignable to any of them.
+    //
+    // So `else` covers the case both real programs needed -- a tool returning
+    // `string` -- and not the second example the RFC wrote. See GAP-045.
+    let writable = check_v4(&absorbing(
+        r#"    scores = parallel map items as item {
+      ask<int>("Score this out of ten.", context: item) else 0
+    }
+    emit digest = ask<markdown>("Report these.", context: scores)"#,
+    ));
+    assert_clean(&writable);
+
+    // A prose answer has no literal to fall back to, so the type check refuses
+    // every fallback an author can currently write for one.
+    let prose = check_v4(&absorbing(
+        r#"    entries = parallel map items as item {
+      ask<markdown>("Summarise this.", context: item) else "nothing to say"
+    }
+    emit digest = ask<markdown>("Join.", context: entries)"#,
+    ));
+    assert!(
+        codes_of(&prose).contains(&codes::TYPE_MISMATCH),
+        "a string literal is not `markdown`, and this is the wall GAP-045 records: {:?}",
+        codes_of(&prose)
+    );
+    assert!(
+        !codes_of(&prose).contains(&codes::ELSE_NOT_APPLICABLE),
+        "the `else` itself is fine -- it is the fallback's type that is not"
+    );
+
+    // Nor does a record, for the same reason: there is no record literal.
+    let (parse_codes, _) = check_v4_raw(&absorbing(
+        r#"    entries = parallel map items as item {
+      ask<rating>("Rate this.", context: item) else rating { score: 0, note: "unrated" }
+    }
+    emit digest = ask<markdown>("Join.", context: entries)"#,
+    ));
+    assert!(
+        !parse_codes.is_empty(),
+        "the RFC's second example does not parse, because record construction is          not in the language: {parse_codes:?}"
+    );
+}
+
+#[test]
+fn a_fallback_does_not_move_the_static_step_bound() {
+    // The attempt is the step and the fallback is an expression, so a `steps`
+    // budget that fits without the `else` still fits with it. If a fallback ever
+    // counted, this is the test that would fail rather than a bound quietly
+    // doubling.
+    let with = check_v4(
+        r#"
+agent Tight(items: string[]) -> digest<markdown> {
+  model requires { structured_output }
+  tools { mcp fs.read_file }
+  budget { steps <= 2 }
+  policy {
+    filesystem_read allow
+  }
+  flow {
+    writeup = call fs.read_file("a.md") else "nothing"
+    emit digest = ask<markdown>("Summarise.", context: writeup)
+  }
+}
+"#,
+    );
+    assert_clean(&with);
+    assert!(
+        !codes_of(&with).contains(&codes::STATIC_STEPS_EXCEED_BUDGET),
+        "two calls under a bound of two: {:?}",
+        codes_of(&with)
+    );
+}
+
+#[test]
+fn a_fallback_requires_language_0_4() {
+    // Before 0.4 every failure ends the run, which is the right behaviour for
+    // work whose job is to produce something correct or nothing.
+    let source = r#"language 0.3
+package heptapus.test
+
+tool fs.read_file(path: string) -> string !filesystem_read
+
+agent Old() -> digest<markdown> {
+  model requires { structured_output }
+  tools { mcp fs.read_file }
+  budget { steps <= 4 }
+  policy {
+    model_access allow
+    filesystem_read allow
+  }
+  flow {
+    writeup = call fs.read_file("a.md") else "nothing"
+    emit digest = ask<markdown>("Summarise.", context: writeup)
+  }
+}
+"#;
+    let mut map = SourceMap::new();
+    let file = map.add_virtual("old.ing", source.to_string());
+    let parsed = ingot_parser::parse(map.file(file));
+    let found: Vec<&str> = parsed.diagnostics.iter().map(|d| d.code).collect();
+    assert!(
+        found.contains(&codes::UNSUPPORTED_LANGUAGE_VERSION),
+        "expected the version gate to fire, got {found:?}"
+    );
+}
+
+#[test]
+fn else_does_not_chain() {
+    // A fallback is pure, so it cannot fail and cannot need a fallback of its
+    // own. Refused rather than silently grouped.
+    let (parse_codes, _) = check_v4_raw(&absorbing(
+        r#"    writeup = call fs.read_file("a.md") else "one" else "two"
+    emit digest = ask<markdown>("Summarise.", context: writeup)"#,
+    ));
+    assert!(
+        parse_codes
+            .iter()
+            .any(|code| code == codes::UNEXPECTED_TOKEN),
+        "expected a syntax error for a chained `else`, got {parse_codes:?}"
+    );
+}
+
+#[test]
+fn else_is_allowed_on_a_sub_agent_call_and_has_no_writable_fallback() {
+    // `else` may follow a sub-agent call -- it is one of the three attempts that
+    // can fail. But an agent's output is always an artifact content type
+    // (`text`, `markdown`, `json`, `file`), and the language has a literal for
+    // none of them, so there is currently nothing an author can put after the
+    // `else`. The permission is real and the coverage is not; GAP-045 is that
+    // gap, and this test is what will start passing when it closes.
+    let analysis = check_v4(
+        r##"
+agent Child(topic: string) -> note<markdown> {
+  model requires { structured_output }
+  budget { steps <= 2 }
+  flow {
+    emit note = ask<markdown>("Write about ${topic}.")
+  }
+}
+
+agent Parent(topic: string) -> digest<markdown> {
+  model requires { structured_output }
+  budget { steps <= 4 }
+  flow {
+    child = call Child(topic) else "# nothing to report"
+    emit digest = ask<markdown>("Wrap it.", context: child)
+  }
+}
+"##,
+    );
+    let found = codes_of(&analysis);
+    assert!(
+        !found.contains(&codes::ELSE_NOT_APPLICABLE),
+        "a sub-agent call may carry an `else`: {found:?}"
+    );
+    assert!(
+        found.contains(&codes::TYPE_MISMATCH),
+        "and the only fallback that can be written for one is the wrong type: {found:?}"
+    );
+}
+
+#[test]
+fn the_motivating_example_compiles_against_a_text_returning_tool() {
+    // The line RFC-0022 was written to make possible, against the signature the
+    // shipped filesystem server actually declares: `read_file` returns `text`,
+    // not `string`. Without `string` -> `text` in the assignability table this is
+    // `ING3001`, and the only workaround is to declare the tool `-> string` so
+    // that a *flow* can have a fallback -- which gets a declaration backwards.
+    let analysis = check_v4(&absorbing(
+        r#"    entries = parallel map items as item {
+      writeup = call fs.read_text("${item}.md") else "no write-up was filed"
+      ask<string>("Summarise this incident.", context: writeup)
+    }
+    emit digest = ask<markdown>("Collect these.", context: entries)"#,
+    ));
+    assert_clean(&analysis);
+}
+
+#[test]
+fn a_string_fallback_does_not_reach_a_markdown_attempt() {
+    // The other side of the same line. `markdown` is the more specific type, and
+    // a bare string does not get to claim it -- see GAP-045 for why admitting it
+    // would collapse `markdown` and `text` into one type with two names.
+    let analysis = check_v4(&absorbing(
+        r#"    entries = parallel map items as item {
+      ask<markdown>("Summarise this.", context: item) else "nothing to say"
+    }
+    emit digest = ask<markdown>("Join.", context: entries)"#,
+    ));
+    assert!(
+        codes_of(&analysis).contains(&codes::TYPE_MISMATCH),
+        "expected ING3001, got {:?}",
+        codes_of(&analysis)
+    );
+}

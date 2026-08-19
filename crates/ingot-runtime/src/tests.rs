@@ -2800,3 +2800,869 @@ fn a_cassette_recorded_from_a_fan_out_is_byte_identical_run_to_run() {
     let twice = record_fan_out(json!(["a", "b", "c"]), answers);
     assert_eq!(once.to_canonical_json(), twice.to_canonical_json());
 }
+
+// --- a failure an iteration can absorb (RFC-0022) -------------------------
+//
+// The rule these pin is not an ergonomic one. `else` absorbs a failure of the
+// *attempt*; a backend that let it absorb a policy denial, a budget trip, a
+// refused approval or a failed `verify` would turn every guarantee in the
+// language into a default value. So there is a test per variant rather than a
+// sentence in a specification.
+
+/// A tool host whose only tool is broken, so a fallback has something to absorb.
+fn broken_tools() -> StaticToolHost {
+    StaticToolHost::new().with("web.search", |_| {
+        Err(crate::ToolError::Failed("the index is offline".into()))
+    })
+}
+
+/// `searcher`, with a fallback on its tool call.
+fn searcher_with_fallback(decision: Option<Decision>, fallback: IrValue) -> AgentIr {
+    let mut ir = searcher(decision);
+    let node = ir
+        .nodes
+        .iter_mut()
+        .find(|node| node.kind == NodeKind::ToolCall)
+        .expect("the searcher makes a tool call");
+    node.fallback = Some(fallback);
+    ir
+}
+
+fn empty_list() -> IrValue {
+    IrValue::List { items: Vec::new() }
+}
+
+#[test]
+fn a_tool_failure_is_absorbed_and_the_run_continues() {
+    let ir = searcher_with_fallback(Some(Decision::Allow), empty_list());
+    let mut provider = ScriptedProvider::new(vec![json!("# Nothing found")]);
+    let mut tools = broken_tools();
+    let (result, events) = run_with(
+        &ir,
+        &mut provider,
+        &mut tools,
+        [("query".to_string(), json!("compilers"))].into(),
+    );
+
+    let report = result.expect("the fallback should absorb the tool failure");
+    assert_eq!(
+        String::from_utf8(report.outputs["report"].to_bytes()).unwrap(),
+        "# Nothing found",
+        "the flow past the failure should have run"
+    );
+    // The attempt is the step, and there is exactly one of it. A fallback that
+    // spent a second step would make `steps` stop bounding the work a run does.
+    assert_eq!(report.steps, 2, "one tool attempt and one model call");
+    assert!(
+        events.iter().any(
+            |event| matches!(event, RunEvent::FallbackTaken { node, because }
+                if node == "n0" && because == "tool")
+        ),
+        "the record must say the value was replaced: {events:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, RunEvent::ToolCall { .. })),
+        "a call that failed did not succeed, so it emits no toolCall event"
+    );
+}
+
+#[test]
+fn a_model_failure_is_absorbed_and_the_fallback_is_typed() {
+    // The failure is an answer that did not match its declared type, which is
+    // one of the four things `else` catches -- and the one a 0.3 cassette can
+    // already record, which is what keeps the format still.
+    let mut ir = summarizer();
+    ir.nodes[0].response_type = Some("int".into());
+    ir.nodes[0].fallback = Some(IrValue::int(0));
+    ir.outputs.insert("summary".into(), "artifact<json>".into());
+
+    let mut provider = ScriptedProvider::new(vec![json!("not an int at all")]);
+    let mut tools = DenyAllTools;
+    let (result, events) = run_with(
+        &ir,
+        &mut provider,
+        &mut tools,
+        [("document".to_string(), json!("a long document"))].into(),
+    );
+
+    let report = result.expect("a mistyped answer should be absorbed");
+    assert_eq!(
+        report.outputs["summary"].value,
+        json!(0),
+        "the binding takes the fallback, at the fallback's type"
+    );
+    assert!(events.iter().any(
+        |event| matches!(event, RunEvent::FallbackTaken { because, .. } if because == "model")
+    ));
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, RunEvent::ModelCall { .. })),
+        "an answer that was thrown away is not a modelCall in the record"
+    );
+}
+
+#[test]
+fn a_policy_denial_is_not_absorbed() {
+    // The one that matters most: if `else` routed around a denial, `deny` would
+    // become advisory, which is the one thing this project exists to refuse.
+    let ir = searcher_with_fallback(Some(Decision::Deny), empty_list());
+    let mut provider = ScriptedProvider::new(vec![json!("# Nothing found")]);
+    let mut tools = broken_tools();
+    let (result, events) = run_with(
+        &ir,
+        &mut provider,
+        &mut tools,
+        [("query".to_string(), json!("compilers"))].into(),
+    );
+
+    assert!(
+        matches!(result, Err(RunError::CapabilityDenied { .. })),
+        "a denied capability must end the run: {result:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, RunEvent::FallbackTaken { .. })),
+        "and must leave no trace of having been absorbed"
+    );
+}
+
+#[test]
+fn an_absent_policy_rule_is_not_absorbed_either() {
+    // An absent rule is a denial, so it lands on the same side of the match.
+    let ir = searcher_with_fallback(None, empty_list());
+    let mut provider = ScriptedProvider::new(vec![json!("# Nothing found")]);
+    let mut tools = broken_tools();
+    let (result, _) = run_with(
+        &ir,
+        &mut provider,
+        &mut tools,
+        [("query".to_string(), json!("compilers"))].into(),
+    );
+    assert!(matches!(
+        result,
+        Err(RunError::CapabilityDenied {
+            explicit: false,
+            ..
+        })
+    ));
+}
+
+#[test]
+fn a_budget_trip_is_not_absorbed() {
+    // A budget bounds the run, not a statement. A statement that could absorb
+    // one would make a budget a suggestion with extra steps.
+    let mut ir = searcher_with_fallback(Some(Decision::Allow), empty_list());
+    ir.budget.steps = Some(0);
+    let mut provider = ScriptedProvider::new(vec![json!("# Nothing found")]);
+    let mut tools = broken_tools();
+    let (result, events) = run_with(
+        &ir,
+        &mut provider,
+        &mut tools,
+        [("query".to_string(), json!("compilers"))].into(),
+    );
+
+    assert!(
+        matches!(&result, Err(RunError::BudgetExceeded { budget, .. }) if budget == "steps"),
+        "an exhausted budget must end the run: {result:?}"
+    );
+    assert!(!events
+        .iter()
+        .any(|event| matches!(event, RunEvent::FallbackTaken { .. })));
+}
+
+#[test]
+fn a_refused_approval_is_not_absorbed() {
+    // A person said no. Continuing with a default is continuing without them.
+    let mut ir = gated();
+    let call = ir
+        .nodes
+        .iter_mut()
+        .find(|node| node.kind == NodeKind::ToolCall)
+        .expect("the gated agent makes a tool call");
+    call.fallback = Some(IrValue::bool(false));
+
+    let mut provider = ScriptedProvider::new(vec![json!("sent it")]);
+    let mut tools = StaticToolHost::new().with("mailer.send", |_| Ok(json!(true)));
+    let mut sink = CollectingSink::default();
+    let registry = BTreeMap::new();
+    let result = run(
+        &ir,
+        &registry,
+        &mut provider,
+        &mut tools,
+        &mut sink,
+        RunOptions {
+            approval: HumanChannel::Deny,
+            ..RunOptions::default()
+        },
+    );
+
+    assert!(
+        matches!(result, Err(RunError::ApprovalDenied { .. })),
+        "a refused approval must end the run: {result:?}"
+    );
+    assert!(!sink
+        .events
+        .iter()
+        .any(|event| matches!(event, RunEvent::FallbackTaken { .. })));
+}
+
+#[test]
+fn a_failed_verify_is_not_absorbed() {
+    // The failure most worth recovering from and the one where recovering is
+    // most suspect: the property either holds or the run is not entitled to its
+    // output.
+    //
+    // Two rules meet here. `else` cannot attach to a `verify` at all, so an
+    // artifact that puts one there is refused outright. And a `verify` reached
+    // *after* a fallback was taken still ends the run -- the absorbed failure
+    // does not buy the run its output.
+    let mut refused = verifying();
+    let check = refused
+        .nodes
+        .iter_mut()
+        .find(|node| node.kind == NodeKind::Verify)
+        .expect("the verifying agent has a check");
+    check.condition = Some(IrValue::bool(false));
+    check.fallback = Some(IrValue::bool(true));
+
+    let mut provider = ScriptedProvider::new(vec![json!("# Draft")]);
+    let mut tools = DenyAllTools;
+    let (result, _) = run_with(
+        &refused,
+        &mut provider,
+        &mut tools,
+        [("topic".to_string(), json!("compilers"))].into(),
+    );
+    match result {
+        Err(RunError::MalformedIr(message)) => assert!(
+            message.contains("verify") && message.contains("fallback"),
+            "the refusal should name what it refused: {message}"
+        ),
+        other => panic!("a `verify` carrying a fallback must be refused, got {other:?}"),
+    }
+
+    // And the failure itself is not absorbable, wherever it is reached from.
+    assert!(!RunError::VerificationFailed {
+        node: "n1".into(),
+        verifier: "CitationCheck".into(),
+    }
+    .is_absorbable());
+
+    let mut after = fanned_with_fallback();
+    let mut gate = Node::new("n3", NodeKind::Verify);
+    gate.verifier = Some("NothingFellBack".into());
+    gate.condition = Some(IrValue::bool(false));
+    after
+        .nodes
+        .iter_mut()
+        .find(|node| node.id == "n0")
+        .expect("the fan-out node")
+        .next = Some("n3".into());
+    gate.next = Some("n2".into());
+    after.nodes.push(gate);
+
+    let mut provider = ScriptedProvider::new(Vec::new());
+    let mut tools = partial_disk();
+    let (result, events) = run_with(
+        &after,
+        &mut provider,
+        &mut tools,
+        [("items".to_string(), json!(["INC-1.md", "INC-2.md"]))].into(),
+    );
+    assert!(
+        matches!(result, Err(RunError::VerificationFailed { .. })),
+        "a check that did not hold must end the run even after a fallback: {result:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, RunEvent::FallbackTaken { .. })),
+        "the fallback did happen, which is what makes this the interesting case"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, RunEvent::Emitted { .. })),
+        "and the run is not entitled to its output"
+    );
+}
+
+#[test]
+fn the_five_failures_a_fallback_may_not_absorb() {
+    // The rule as a table, so it is readable in one place as well as enforced.
+    // Absorbing the first alone would make `deny` advisory.
+    let not_absorbable: Vec<RunError> = vec![
+        RunError::CapabilityDenied {
+            node: "n0".into(),
+            effect: "network".into(),
+            explicit: true,
+        },
+        RunError::BudgetExceeded {
+            budget: "steps".into(),
+            limit: "4".into(),
+            node: "n0".into(),
+        },
+        RunError::ApprovalDenied {
+            node: "n0".into(),
+            reason: "a person said no".into(),
+        },
+        RunError::VerificationFailed {
+            node: "n0".into(),
+            verifier: "CitationCheck".into(),
+        },
+        RunError::MalformedIr("something is wrong with the artifact".into()),
+    ];
+    for error in &not_absorbable {
+        assert!(
+            !error.is_absorbable(),
+            "`else` must not absorb this: {error}"
+        );
+    }
+
+    // And the ones it exists for.
+    assert!(RunError::Tool {
+        node: "n0".into(),
+        source: crate::ToolError::Failed("offline".into()),
+    }
+    .is_absorbable());
+    assert!(RunError::Provider {
+        node: "n0".into(),
+        source: ProviderError::InvalidResponse("not an int".into()),
+    }
+    .is_absorbable());
+}
+
+#[test]
+fn a_sub_agents_denial_cannot_be_laundered_through_a_fallback() {
+    // Not in RFC-0022's list, and it should have been: without the recursive
+    // half of the rule, moving a denied call into a sub-agent and putting `else`
+    // on the caller would absorb the denial after all.
+    let mut child = searcher(Some(Decision::Deny));
+    child.agent = "test.Child".into();
+
+    let mut parent = base("test.Parent");
+    parent.inputs.insert("query".into(), "string".into());
+    parent
+        .outputs
+        .insert("out".into(), "artifact<markdown>".into());
+    parent.entry = Some("n0".into());
+
+    let mut call = Node::new("n0", NodeKind::AgentCall);
+    call.binding = Some("child".into());
+    call.agent = Some("test.Child".into());
+    call.args = vec![Argument {
+        name: "query".into(),
+        value: IrValue::Ref {
+            scope: RefScope::Input,
+            path: vec!["query".into()],
+        },
+    }];
+    call.fallback = Some(IrValue::string("# Nothing"));
+    call.next = Some("n1".into());
+    parent.nodes = vec![call, emit("n1", "out", "child", None)];
+
+    let mut provider = ScriptedProvider::new(vec![json!("# Nothing found")]);
+    let mut tools = broken_tools();
+    let mut sink = CollectingSink::default();
+    let registry: crate::AgentRegistry = [("test.Child".to_string(), child)].into();
+    let result = run(
+        &parent,
+        &registry,
+        &mut provider,
+        &mut tools,
+        &mut sink,
+        RunOptions {
+            inputs: [("query".to_string(), json!("compilers"))].into(),
+            ..RunOptions::default()
+        },
+    );
+
+    let error = result.expect_err("a laundered denial must still end the run");
+    assert!(
+        matches!(&error, RunError::SubAgent { source, .. }
+            if matches!(**source, RunError::CapabilityDenied { .. })),
+        "expected the child's denial to survive: {error:?}"
+    );
+    assert!(!sink
+        .events
+        .iter()
+        .any(|event| matches!(event, RunEvent::FallbackTaken { .. })));
+}
+
+#[test]
+fn a_sub_agents_own_failure_is_absorbed() {
+    // The other half of the same rule: a callee that failed for a reason a
+    // fallback may stand in for is absorbed like any other attempt.
+    let mut child = summarizer();
+    child.agent = "test.Child".into();
+    // The child asks for an `int` and is answered with prose, so its own failure
+    // is a provider that did not answer in the declared type -- absorbable.
+    child.nodes[0].response_type = Some("int".into());
+    child
+        .outputs
+        .insert("summary".into(), "artifact<json>".into());
+
+    let mut parent = base("test.Parent");
+    parent
+        .outputs
+        .insert("out".into(), "artifact<markdown>".into());
+    parent.entry = Some("n0".into());
+
+    let mut call = Node::new("n0", NodeKind::AgentCall);
+    call.binding = Some("child".into());
+    call.agent = Some("test.Child".into());
+    call.args = vec![Argument {
+        name: "document".into(),
+        value: IrValue::string("a long document"),
+    }];
+    call.fallback = Some(IrValue::string("# Nothing"));
+    call.next = Some("n1".into());
+    parent.nodes = vec![call, emit("n1", "out", "child", None)];
+
+    let mut provider = ScriptedProvider::new(vec![json!("prose, not an int")]);
+    let mut tools = DenyAllTools;
+    let mut sink = CollectingSink::default();
+    let registry: crate::AgentRegistry = [("test.Child".to_string(), child)].into();
+    let report = run(
+        &parent,
+        &registry,
+        &mut provider,
+        &mut tools,
+        &mut sink,
+        RunOptions::default(),
+    )
+    .expect("a sub-agent's own failure should be absorbed");
+
+    assert_eq!(report.outputs["out"].value, json!("# Nothing"));
+    assert!(sink.events.iter().any(
+        |event| matches!(event, RunEvent::FallbackTaken { because, .. } if because == "agent")
+    ));
+}
+
+/// A fan-out that reads a file per element, with a fallback on the read.
+///
+/// This is the shape RFC-0022 exists for: three incidents, one write-up never
+/// filed, and the other two summaries paid for and then thrown away.
+fn fanned_with_fallback() -> AgentIr {
+    let mut ir = base("test.Fanned");
+    ir.inputs.insert("items".into(), "string[]".into());
+    ir.outputs.insert("out".into(), "artifact<json>".into());
+    ir.tools = vec![ToolBinding {
+        reference: "mcp:fs.read_file".into(),
+        name: "fs.read_file".into(),
+        transport: "mcp".into(),
+        scopes: BTreeMap::new(),
+        effects: vec!["filesystem_read".into()],
+        signature: ToolSignature {
+            params: vec![FieldType {
+                name: "path".into(),
+                ty: "string".into(),
+            }],
+            result: "string".into(),
+        },
+    }];
+    ir.policy.insert(
+        "filesystem_read".into(),
+        PolicyRule {
+            decision: Decision::Allow,
+            values: Vec::new(),
+            qualifier: None,
+        },
+    );
+    ir.effects = vec!["model_access".into(), "filesystem_read".into()];
+    ir.entry = Some("n0".into());
+
+    let mut map = Node::new("n0", NodeKind::Parallel);
+    map.binding = Some("results".into());
+    map.mode = Some("map".into());
+    map.binder = Some("item".into());
+    map.source = Some(IrValue::Ref {
+        scope: RefScope::Input,
+        path: vec!["items".into()],
+    });
+    map.body = Some("n1".into());
+    map.next = Some("n2".into());
+
+    let mut read = Node::new("n1", NodeKind::ToolCall);
+    read.binding = Some("writeup".into());
+    read.tool = Some("mcp:fs.read_file".into());
+    read.effects = vec!["filesystem_read".into()];
+    read.args = vec![Argument {
+        name: "path".into(),
+        value: IrValue::Ref {
+            scope: RefScope::Binding,
+            path: vec!["item".into()],
+        },
+    }];
+    read.fallback = Some(IrValue::string("no write-up was filed"));
+
+    let mut emit_node = Node::new("n2", NodeKind::ArtifactEmit);
+    emit_node.output = Some("out".into());
+    emit_node.value = Some(IrValue::Ref {
+        scope: RefScope::Binding,
+        path: vec!["results".into()],
+    });
+
+    ir.nodes = vec![map, read, emit_node];
+    ir
+}
+
+/// A disk where `INC-2.md` was never filed.
+fn partial_disk() -> StaticToolHost {
+    StaticToolHost::new().with("fs.read_file", |invocation| {
+        match invocation
+            .arguments
+            .get("path")
+            .and_then(|path| path.as_str())
+        {
+            Some("INC-2.md") => Err(crate::ToolError::Failed(
+                "INC-2.md: The system cannot find the file specified. (os error 2)".into(),
+            )),
+            Some(path) => Ok(json!(format!("write-up for {path}"))),
+            None => Err(crate::ToolError::Failed("no path was passed".into())),
+        }
+    })
+}
+
+#[test]
+fn a_fan_out_whose_iteration_falls_back_does_not_fail() {
+    let ir = fanned_with_fallback();
+    let mut provider = ScriptedProvider::new(Vec::new());
+    let mut tools = partial_disk();
+    let (result, _) = run_with(
+        &ir,
+        &mut provider,
+        &mut tools,
+        [(
+            "items".to_string(),
+            json!(["INC-1.md", "INC-2.md", "INC-3.md"]),
+        )]
+        .into(),
+    );
+    result.expect("one missing element must not end the whole fan-out");
+}
+
+#[test]
+fn a_fan_out_that_fell_back_collects_one_entry_per_element() {
+    // The other shape the evidence suggested -- a failing iteration contributing
+    // nothing and shortening the list -- was rejected: `len(x) >= len(items)` is
+    // exactly the check an author writes to catch a lost element.
+    let ir = fanned_with_fallback();
+    let mut provider = ScriptedProvider::new(Vec::new());
+    let mut tools = partial_disk();
+    let (result, events) = run_with(
+        &ir,
+        &mut provider,
+        &mut tools,
+        [(
+            "items".to_string(),
+            json!(["INC-1.md", "INC-2.md", "INC-3.md"]),
+        )]
+        .into(),
+    );
+
+    let report = result.expect("the fan-out should finish");
+    assert_eq!(
+        report.outputs["out"].value,
+        json!([
+            "write-up for INC-1.md",
+            "no write-up was filed",
+            "write-up for INC-3.md"
+        ]),
+        "one entry per element, in index order, with the default in the gap"
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, RunEvent::FallbackTaken { .. }))
+            .count(),
+        1,
+        "exactly the one element that failed"
+    );
+}
+
+#[test]
+fn the_fallback_is_visible_in_the_event_stream() {
+    // A run that quietly succeeded on a default is a run whose record does not
+    // say what happened, and the record is what this project sells. So the event
+    // lands after the failing node's own events and before anything continues.
+    let ir = fanned_with_fallback();
+    let mut provider = ScriptedProvider::new(Vec::new());
+    let mut tools = partial_disk();
+    let (result, events) = run_with(
+        &ir,
+        &mut provider,
+        &mut tools,
+        [("items".to_string(), json!(["INC-2.md", "INC-3.md"]))].into(),
+    );
+    result.expect("the fan-out should finish");
+
+    let shape: Vec<String> = events
+        .iter()
+        .map(|event| match event {
+            RunEvent::RunStarted { .. } => "runStarted".to_string(),
+            RunEvent::NodeStarted { node, kind } => format!("nodeStarted {node} {kind}"),
+            RunEvent::MapIteration { index, .. } => format!("mapIteration {index}"),
+            RunEvent::ToolCall { node, .. } => format!("toolCall {node}"),
+            RunEvent::FallbackTaken { node, because } => format!("fallbackTaken {node} {because}"),
+            RunEvent::Emitted { output, .. } => format!("emitted {output}"),
+            RunEvent::RunFinished { .. } => "runFinished".to_string(),
+            other => format!("{other:?}"),
+        })
+        .collect();
+
+    assert_eq!(
+        shape,
+        vec![
+            "runStarted",
+            "nodeStarted n0 parallel",
+            "mapIteration 0",
+            "nodeStarted n1 tool.call",
+            // The attempt emitted no `toolCall` event because it did not
+            // succeed, and the replacement is stated immediately after it.
+            "fallbackTaken n1 tool",
+            "mapIteration 1",
+            "nodeStarted n1 tool.call",
+            "toolCall n1",
+            "nodeStarted n2 artifact.emit",
+            "emitted out",
+            "runFinished",
+        ],
+        "the record must read as what was tried and then what stood in for it"
+    );
+}
+
+#[test]
+fn a_recorded_failure_replays_as_a_failure_and_falls_back() {
+    // The cassette is unchanged: `ToolExchange` has carried `error` since 0.2,
+    // precisely so a recording can hold the behaviour most worth testing.
+    let ir = fanned_with_fallback();
+    let items = json!(["INC-1.md", "INC-2.md"]);
+    let inputs: BTreeMap<String, serde_json::Value> = [("items".to_string(), items.clone())].into();
+
+    let mut recording = RecordingProvider::new(ScriptedProvider::new(Vec::new()), &ir.agent)
+        .with_inputs(inputs.clone());
+    let mut recording_tools = crate::RecordingTools::new(partial_disk());
+    let mut recorded = CollectingSink::default();
+    let registry = BTreeMap::new();
+    run(
+        &ir,
+        &registry,
+        &mut recording,
+        &mut recording_tools,
+        &mut recorded,
+        RunOptions {
+            inputs: inputs.clone(),
+            ..RunOptions::default()
+        },
+    )
+    .expect("recording the run should succeed");
+
+    let mut cassette = recording.finish();
+    cassette.tool_calls = recording_tools.finish();
+
+    assert_eq!(cassette.cassette_version, "0.3", "no format moved");
+    assert!(
+        cassette
+            .tool_calls
+            .iter()
+            .any(|call| call.error.is_some() && call.value.is_none()),
+        "the recording must hold the failure: {:?}",
+        cassette.tool_calls
+    );
+
+    // A 0.3 recording, replayed: the failure is served again, the fallback runs
+    // again, and the run comes out the same.
+    let mut replay = ReplayProvider::new(cassette.clone());
+    let mut replay_tools = crate::ReplayToolHost::new(cassette.tool_calls.clone());
+    let mut replayed = CollectingSink::default();
+    let report = run(
+        &ir,
+        &registry,
+        &mut replay,
+        &mut replay_tools,
+        &mut replayed,
+        RunOptions {
+            inputs,
+            ..RunOptions::default()
+        },
+    )
+    .expect("the recorded failure should replay as a failure");
+
+    assert_eq!(
+        report.outputs["out"].value,
+        json!(["write-up for INC-1.md", "no write-up was filed"])
+    );
+    // Everything after `runStarted`, which names the provider and is the one
+    // line a replay is supposed to differ on.
+    assert_eq!(
+        &replayed.events[1..],
+        &recorded.events[1..],
+        "a replay reproduces the record it was made from, fallback included"
+    );
+}
+
+#[test]
+fn a_fallback_on_a_node_kind_that_cannot_carry_one_is_refused() {
+    // The compiler does not emit this, so an artifact carrying it came from
+    // something else -- and a field a runner does not understand is refused
+    // rather than ignored, which is the rule the IR version check applies too.
+    //
+    // A `state.read` that was never written is the failure to hang it on: it is
+    // a program error, so it is not absorbable either way, and what is asserted
+    // is that the runtime names the fallback rather than the read.
+    let mut ir = summarizer();
+    ir.state.insert("notes".into(), "string".into());
+
+    let mut read = Node::new("nx", NodeKind::StateRead);
+    read.binding = Some("notes".into());
+    read.field = Some("notes".into());
+    read.fallback = Some(IrValue::string("anything"));
+    read.next = Some("n0".into());
+    ir.entry = Some("nx".into());
+    ir.nodes.push(read);
+
+    let mut provider = ScriptedProvider::new(vec![json!("# Summary")]);
+    let mut tools = DenyAllTools;
+    let (result, _) = run_with(
+        &ir,
+        &mut provider,
+        &mut tools,
+        [("document".to_string(), json!("a document"))].into(),
+    );
+
+    match result {
+        Err(RunError::MalformedIr(message)) => assert!(
+            message.contains("state.read") && message.contains("fallback"),
+            "the refusal should name what it refused: {message}"
+        ),
+        other => panic!("expected a malformed-artifact refusal, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_stale_recording_is_not_absorbed() {
+    // Found by reading the code rather than the RFC, and it is the finding worth
+    // keeping: a replay whose recording no longer matches the run reaches the
+    // interpreter as an ordinary provider failure. Absorbing it would let
+    // `ingot test` pass on a digest of defaults after somebody edited a prompt,
+    // which is the exact failure the request digest exists to prevent.
+    let ir = fanned_with_fallback();
+    let items = json!(["INC-1.md", "INC-2.md"]);
+    let inputs: BTreeMap<String, serde_json::Value> = [("items".to_string(), items.clone())].into();
+
+    let mut recording_tools = crate::RecordingTools::new(partial_disk());
+    let mut sink = CollectingSink::default();
+    let registry = BTreeMap::new();
+    let mut provider = ScriptedProvider::new(Vec::new());
+    run(
+        &ir,
+        &registry,
+        &mut provider,
+        &mut recording_tools,
+        &mut sink,
+        RunOptions {
+            inputs: inputs.clone(),
+            ..RunOptions::default()
+        },
+    )
+    .expect("recording the run should succeed");
+    let recorded = recording_tools.finish();
+
+    // The recording is now stale: the run reads three files and the tape holds
+    // two. A third element is not a tool that failed.
+    let mut replay_tools = crate::ReplayToolHost::new(recorded);
+    let mut replay = ScriptedProvider::new(Vec::new());
+    let mut replayed = CollectingSink::default();
+    let result = run(
+        &ir,
+        &registry,
+        &mut replay,
+        &mut replay_tools,
+        &mut replayed,
+        RunOptions {
+            inputs: [(
+                "items".to_string(),
+                json!(["INC-1.md", "INC-2.md", "INC-3.md"]),
+            )]
+            .into(),
+            ..RunOptions::default()
+        },
+    );
+
+    assert!(
+        matches!(&result, Err(RunError::Tool { source, .. })
+            if matches!(source, crate::ToolError::Cassette(_))),
+        "a run past the end of its recording must say so, not fall back: {result:?}"
+    );
+    assert_eq!(
+        replayed
+            .events
+            .iter()
+            .filter(|event| matches!(event, RunEvent::FallbackTaken { .. }))
+            .count(),
+        1,
+        "the genuinely missing file is still absorbed; only the stale row is not"
+    );
+}
+
+#[test]
+fn a_tool_no_host_provides_is_not_absorbed() {
+    // The artifact requires the tool. This is a host that was not wired up
+    // rather than a call that failed, and a run that quietly produced defaults
+    // instead of saying so would hide a setup mistake somebody can fix.
+    let ir = searcher_with_fallback(Some(Decision::Allow), empty_list());
+    let mut provider = ScriptedProvider::new(vec![json!("# Nothing found")]);
+    let mut tools = DenyAllTools;
+    let (result, events) = run_with(
+        &ir,
+        &mut provider,
+        &mut tools,
+        [("query".to_string(), json!("compilers"))].into(),
+    );
+
+    assert!(
+        matches!(&result, Err(RunError::Tool { source, .. })
+            if matches!(source, crate::ToolError::NotAvailable(_))),
+        "no host provides the tool, so there is nothing to absorb: {result:?}"
+    );
+    assert!(!events
+        .iter()
+        .any(|event| matches!(event, RunEvent::FallbackTaken { .. })));
+}
+
+#[test]
+fn a_missing_api_key_is_not_absorbed() {
+    // A run with no key that produced a digest of defaults would look like a run
+    // that worked. `ProviderError::Configuration` is the operator's to fix.
+    assert!(!RunError::Provider {
+        node: "n0".into(),
+        source: ProviderError::Configuration("ANTHROPIC_API_KEY is not set".into()),
+    }
+    .is_absorbable());
+
+    // And the transport failures around it are exactly what `else` is for.
+    for source in [
+        ProviderError::Transport("connection reset".into()),
+        ProviderError::RateLimited {
+            retry_after_seconds: Some(30),
+        },
+        ProviderError::Refused {
+            category: Some("safety".into()),
+            explanation: None,
+        },
+        ProviderError::Truncated { limit: 4096 },
+    ] {
+        let error = RunError::Provider {
+            node: "n0".into(),
+            source,
+        };
+        assert!(error.is_absorbable(), "should be absorbable: {error}");
+    }
+}

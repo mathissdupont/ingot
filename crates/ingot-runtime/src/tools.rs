@@ -43,6 +43,16 @@ pub enum ToolError {
     Failed(String),
     /// The tool returned something that is not its declared type.
     InvalidResult(String),
+    /// Cassette replay could not serve this call.
+    ///
+    /// Its own variant rather than a [`ToolError::Failed`] with a different
+    /// message, and the reason is [`crate::RunError::is_absorbable`]: a tool that
+    /// failed is what `else` exists for, and a recording that no longer matches
+    /// the run is not. Without the distinction, editing a call's arguments would
+    /// make `ingot test` pass on a digest of defaults — which is the exact
+    /// failure the digest check exists to prevent. The mirror of
+    /// [`crate::ProviderError::Cassette`].
+    Cassette(String),
 }
 
 impl fmt::Display for ToolError {
@@ -57,6 +67,7 @@ impl fmt::Display for ToolError {
             ToolError::InvalidResult(message) => {
                 write!(f, "the tool returned an unexpected value: {message}")
             }
+            ToolError::Cassette(message) => write!(f, "cassette replay failed: {message}"),
         }
     }
 }

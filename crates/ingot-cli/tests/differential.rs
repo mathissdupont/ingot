@@ -585,3 +585,87 @@ fn the_generated_program_is_valid_python_before_it_is_run() {
         String::from_utf8_lossy(&checked.stderr)
     );
 }
+
+#[test]
+fn a_fallback_agrees_across_both_backends() {
+    // RFC-0022 puts the whole weight of `fallbackTaken` on this: a run that
+    // quietly succeeded on a default is a run whose record does not say what
+    // happened, and a record only means something if both backends write it the
+    // same way. The conformance suite checks this through an adapter; this checks
+    // it with no `ingot` in the second process at all.
+    //
+    // The artifact and its recording come from the `fallback-taken` conformance
+    // case rather than being written again here, so the two cannot drift.
+    let Some(python) = python() else { return };
+
+    let case = repo_root().join("crates/ingot-conformance/cases/fallback-taken");
+    let source = case.join("main.ing").display().to_string();
+    let cassette = case.join("cassette.json").display().to_string();
+
+    let work = TempDir::new("diff-fallback");
+    let build = work.path().join("build");
+    let reference_out = work.path().join("reference").display().to_string();
+    let python_out = work.path().join("python").display().to_string();
+
+    let built = build_python(&source, &build, &[]);
+    assert_eq!(code(&built), EXIT_OK, "{}", stderr(&built));
+
+    let shared = [
+        "--cassette",
+        cassette.as_str(),
+        "--input",
+        "items=[\"alpha\",\"beta\",\"gamma\"]",
+        "--events",
+        "json",
+    ];
+
+    let mut reference_args = vec!["run", source.as_str(), "--provider", "replay"];
+    reference_args.extend_from_slice(&shared);
+    reference_args.extend_from_slice(&["--out-dir", reference_out.as_str(), "--no-history"]);
+    let first = run_env(&reference_args, &[]);
+    assert_eq!(code(&first), EXIT_OK, "{}", stderr(&first));
+
+    let mut python_args = shared.to_vec();
+    python_args.extend_from_slice(&["--out-dir", python_out.as_str()]);
+    let second = run_generated(&python, &only_program(&build), &python_args, &[]);
+    assert!(
+        second.status.success(),
+        "{}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+
+    let events = |text: &str| -> Vec<serde_json::Value> {
+        text.lines()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .filter(|event| event.get("event").is_some())
+            .collect()
+    };
+    let left = events(&stderr(&first));
+    let right = events(&String::from_utf8_lossy(&second.stderr));
+
+    // The whole event, not only its kind: `because` is part of the record, and a
+    // backend that emitted the right event with the wrong reason would pass a
+    // comparison of kinds alone.
+    assert_eq!(
+        left, right,
+        "the two backends disagree about what the run did"
+    );
+    assert_eq!(
+        left.iter()
+            .filter(|event| event["event"] == "fallbackTaken")
+            .count(),
+        1,
+        "the case is only worth running if a fallback was taken: {left:?}"
+    );
+    assert!(left
+        .iter()
+        .any(|event| event["event"] == "fallbackTaken" && event["because"] == "model"));
+
+    let one = std::fs::read(Path::new(&reference_out).join("digest.json"))
+        .expect("the reference wrote it");
+    let two = std::fs::read(Path::new(&python_out).join("digest.json")).expect("python wrote it");
+    assert_eq!(
+        one, two,
+        "a run made partly of defaults still has to produce the same bytes"
+    );
+}

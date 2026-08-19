@@ -27,10 +27,36 @@ ROOT = Path(__file__).resolve().parents[3]
 
 
 def ingot() -> str:
-    for candidate in ("ingot.exe", "ingot"):
-        path = ROOT / "target" / "debug" / candidate
-        if path.is_file():
-            return str(path)
+    """The compiler to build the artifact with.
+
+    `INGOT_BIN` wins, and the suite's own tests set it to the binary under test.
+    That is not a convenience: this looked in `target/debug` and fell back to
+    whatever `ingot` was on PATH, so a checkout that sets `CARGO_TARGET_DIR` --
+    which this repository has to, because cargo and a OneDrive-synchronised
+    `target/` do not get along -- compiled the artifact with a *stale* binary and
+    still reported that the python backend conformed. A suite that reports
+    something it did not check is worse than no suite.
+    """
+    named = os.environ.get("INGOT_BIN")
+    if named:
+        # Refused rather than fallen back from. Somebody who named a compiler
+        # meant that one, and quietly using a different build is the failure this
+        # whole function exists to stop.
+        if not Path(named).is_file():
+            sys.exit("INGOT_BIN is set to %r, which is not a file" % named)
+        return named
+
+    roots = []
+    override = os.environ.get("CARGO_TARGET_DIR")
+    if override:
+        roots.append(Path(override))
+    roots.append(ROOT / "target")
+    for root in roots:
+        for candidate in ("ingot.exe", "ingot"):
+            path = root / "debug" / candidate
+            if path.is_file():
+                return str(path)
+    # For an adapter run outside a checkout, which is the case a third party has.
     return "ingot"
 
 

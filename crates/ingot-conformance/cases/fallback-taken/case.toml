@@ -1,0 +1,9 @@
+what = "An answer that did not match its declared type, absorbed by the fallback the program states: the run continues, the fan-out keeps one entry per element, and the record says a default stood in."
+outcome = "finished"
+pins = [
+  "Runtime 0.7 §2 — `else` absorbs a failure of the attempt, and an answer that did not match its declared type is one",
+  "Runtime 0.7 §2 — `fallbackTaken` is emitted after the failing node's own events and before execution continues",
+  "Runtime 0.7 §2 — `because` is the kind of failure and never its text",
+  "Runtime 0.7 §3 — an iteration that falls back does not fail, so the collected list keeps one entry per element",
+  "Agent IR 0.4 §4 — the fallback is a value on the node, so the graph does not branch and the attempt is still one step",
+]

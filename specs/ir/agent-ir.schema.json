@@ -261,6 +261,10 @@
         "prompt": { "$ref": "#/$defs/value" },
         "responseType": { "type": "string" },
         "args": { "type": "array", "items": { "$ref": "#/$defs/argument" } },
+        "fallback": {
+          "description": "The value to bind when this call fails. Only on `llm.call`, `tool.call` and `agent.call`; a fallback on any other kind makes the artifact malformed. A pure value rather than a node id, so the graph does not branch and the attempt is still one step. What it may not absorb is normative: Runtime 0.7 section 2.1.",
+          "$ref": "#/$defs/value"
+        },
         "condition": { "$ref": "#/$defs/value" },
         "then": { "type": "string" },
         "else": { "type": "string" },

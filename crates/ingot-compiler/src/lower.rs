@@ -612,6 +612,23 @@ impl<'a> Lowerer<'a> {
                 }
                 Some(node)
             }
+            // `call fs.read_file(p) else "nothing"`. The attempt is the node; the
+            // fallback is a value on it, which is the whole point of restricting
+            // it to a pure expression — the graph does not branch here.
+            //
+            // The fallback is lowered *before* the attempt's node is pushed, so
+            // any `state.read` it needs lands ahead of the call rather than
+            // inside a region only one of two paths reaches. A pure read is
+            // idempotent, so performing it whether or not the fallback is taken
+            // costs nothing and keeps the node sequence the same either way.
+            Expr::Fallback {
+                attempt, fallback, ..
+            } => {
+                let lowered = self.lower_value(level, fallback);
+                let mut node = self.lower_call_like(level, attempt, binding)?;
+                node.fallback = Some(lowered);
+                Some(node)
+            }
             _ => None,
         }
     }
@@ -690,11 +707,14 @@ impl<'a> Lowerer<'a> {
                 rhs: Box::new(self.lower_value(level, rhs)),
             },
             Expr::Error { .. } => Value::Unknown,
-            // Handled above by `produces_node`.
+            // Handled above by `produces_node`. A `Fallback` reaches here only
+            // when its attempt was not something that produces a node, which the
+            // checker has already refused with `ING6009`.
             Expr::Ask { .. }
             | Expr::Consult { .. }
             | Expr::Call { .. }
-            | Expr::ParallelMap { .. } => Value::Unknown,
+            | Expr::ParallelMap { .. }
+            | Expr::Fallback { .. } => Value::Unknown,
         }
     }
 
@@ -962,6 +982,13 @@ fn collect_store_reads(expr: &Expr, out: &mut Vec<(StateScope, String)>) {
                 collect_store_reads(item, out);
             }
         }
+        // Both sides, because a fallback is pure and can therefore read a store.
+        Expr::Fallback {
+            attempt, fallback, ..
+        } => {
+            collect_store_reads(attempt, out);
+            collect_store_reads(fallback, out);
+        }
         // A guard is a pure expression: the checker refuses an `ask`, a `call`
         // or a `parallel map` in one, so there is nothing else that can read a
         // store. A string literal's interpolations cannot appear in a boolean.
@@ -983,8 +1010,15 @@ fn ref_scope(scope: StateScope) -> Option<RefScope> {
 
 /// Whether an expression becomes a node of its own rather than a pure value.
 fn produces_node(expr: &Expr) -> bool {
-    matches!(
-        expr,
-        Expr::Ask { .. } | Expr::Consult { .. } | Expr::Call { .. } | Expr::ParallelMap { .. }
-    )
+    match expr {
+        Expr::Ask { .. } | Expr::Consult { .. } | Expr::Call { .. } | Expr::ParallelMap { .. } => {
+            true
+        }
+        // Whatever the attempt is. A fallback adds a field to the attempt's node
+        // and never a node of its own, so it never changes this answer -- and an
+        // attempt the checker refused still lowers as one node rather than
+        // silently becoming a pure value.
+        Expr::Fallback { attempt, .. } => produces_node(attempt),
+        _ => false,
+    }
 }

@@ -614,7 +614,7 @@ impl ToolHost for ReplayToolHost {
 
     fn call(&mut self, invocation: &ToolInvocation) -> Result<Value, ToolError> {
         let Some(recorded) = self.calls.get(self.position) else {
-            return Err(ToolError::Failed(format!(
+            return Err(ToolError::Cassette(format!(
                 "the cassette records {} tool call(s) and the run asked for another: `{}`;                  re-record it",
                 self.calls.len(),
                 invocation.name
@@ -625,13 +625,13 @@ impl ToolHost for ReplayToolHost {
         // Checked before the digest: a different tool is a specific, nameable
         // difference, and saying so beats "something about the call changed".
         if recorded.tool != invocation.name {
-            return Err(ToolError::Failed(format!(
+            return Err(ToolError::Cassette(format!(
                 "tool call {} recorded `{}` and the run called `{}`; re-record the cassette",
                 recorded.index, recorded.tool, invocation.name
             )));
         }
         if self.strict && recorded.invocation_digest != invocation_digest(invocation) {
-            return Err(ToolError::Failed(format!(
+            return Err(ToolError::Cassette(format!(
                 "tool call {} recorded different arguments for `{}`.                  The call changed since recording — re-record the cassette and review the diff.",
                 recorded.index, recorded.tool
             )));
@@ -640,7 +640,9 @@ impl ToolHost for ReplayToolHost {
         match (&recorded.value, &recorded.error) {
             (Some(value), _) => Ok(value.clone()),
             (None, Some(error)) => Err(ToolError::Failed(error.clone())),
-            (None, None) => Err(ToolError::InvalidResult(format!(
+            // A row that records neither is a malformed recording, not a tool
+            // that failed — so it is not something a fallback may stand in for.
+            (None, None) => Err(ToolError::Cassette(format!(
                 "tool call {} for `{}` recorded neither a value nor an error",
                 recorded.index, recorded.tool
             ))),

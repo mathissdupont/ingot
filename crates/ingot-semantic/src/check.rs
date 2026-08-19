@@ -1904,6 +1904,11 @@ impl<'a> Checker<'a> {
                 (Ty::String, effects)
             }
             Expr::Call { callee, args, span } => self.infer_call(ctx, callee, args, *span, policy),
+            Expr::Fallback {
+                attempt,
+                fallback,
+                span,
+            } => self.infer_fallback(ctx, attempt, fallback, *span, policy),
             Expr::ParallelMap {
                 source,
                 binder,
@@ -2649,6 +2654,94 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// `call fs.read_file(path) else "no write-up was filed"`.
+    ///
+    /// Three rules, and the second is the one the rest of the design rests on.
+    ///
+    /// 1. The attempt is an `ask`, a tool `call` or a sub-agent `call`. Those are
+    ///    the expressions whose attempt can fail.
+    /// 2. The fallback is **pure**. It reaches nothing, so the attempt is still
+    ///    exactly one step and the artifact's policy still describes one
+    ///    sequence of nodes rather than a union over paths.
+    /// 3. Both sides have the same type, by the ordinary assignability rule.
+    ///
+    /// The expression's effects are the attempt's and only the attempt's, which
+    /// is rule 2 restated where the effect set is built.
+    ///
+    /// See [RFC-0022](../../../rfcs/0022-a-failure-an-iteration-can-absorb.md).
+    fn infer_fallback(
+        &mut self,
+        ctx: &mut FlowCtx,
+        attempt: &Expr,
+        fallback: &Expr,
+        span: Span,
+        policy: &BTreeMap<PolicySubject, PolicyRuleInfo>,
+    ) -> (Ty, EffectSet) {
+        // Checked first and unconditionally: an attempt that may not carry an
+        // `else` is still an expression the rest of the agent depends on, and
+        // suppressing its own diagnostics would turn one error into several.
+        let attempt_ty = self.check_expr(ctx, attempt, policy);
+        let effects = self
+            .exprs
+            .get(&attempt.span())
+            .map(|info| info.effects.clone())
+            .unwrap_or_default();
+
+        if let Some(reason) = else_refusal(attempt) {
+            self.error(
+                Diagnostic::error(
+                    codes::ELSE_NOT_APPLICABLE,
+                    format!("`else` cannot follow {}", reason.what),
+                )
+                .with_primary(attempt.span(), reason.primary)
+                .with_secondary(span, "the fallback belongs to this expression")
+                .with_note(reason.note)
+                .with_help(reason.help),
+            );
+        }
+
+        if let Some(impure) = first_impure_expr(fallback, false) {
+            self.error(
+                Diagnostic::error(
+                    codes::FALLBACK_NOT_PURE,
+                    "a fallback must be a pure expression",
+                )
+                .with_primary(impure, "this reaches something")
+                .with_secondary(attempt.span(), "the attempt it stands in for")
+                .with_note(
+                    "a fallback that reached something would spend a second step, and would \
+                     make what this agent may reach the union over two paths rather than the \
+                     one sequence an operator reads in the policy",
+                )
+                .with_help(
+                    "use a literal, a record, a list, something already bound, or arithmetic \
+                     over those",
+                ),
+            );
+        }
+
+        let fallback_ty = self.check_expr(ctx, fallback, policy);
+        if !fallback_ty.is_assignable_to(&attempt_ty)
+            && !attempt_ty.is_unknown()
+            && !fallback_ty.is_unknown()
+        {
+            self.error(
+                Diagnostic::error(
+                    codes::TYPE_MISMATCH,
+                    format!("the fallback is `{fallback_ty}` and the attempt is `{attempt_ty}`"),
+                )
+                .with_primary(fallback.span(), format!("this is `{fallback_ty}`"))
+                .with_secondary(attempt.span(), format!("this is `{attempt_ty}`"))
+                .with_note(
+                    "both sides of an `else` produce the value the binding takes, so whatever \
+                     reads it must not have to ask which path ran",
+                ),
+            );
+        }
+
+        (attempt_ty, effects)
+    }
+
     fn infer_call(
         &mut self,
         ctx: &mut FlowCtx,
@@ -3078,6 +3171,14 @@ fn collect_agent_calls(
                 visit_expr(source, signatures, out);
                 collect_agent_calls(body, signatures, out);
             }
+            // Both sides. The attempt can be a sub-agent call, and the recursion
+            // check has to see it even though a fallback cannot contain one.
+            Expr::Fallback {
+                attempt, fallback, ..
+            } => {
+                visit_expr(attempt, signatures, out);
+                visit_expr(fallback, signatures, out);
+            }
             Expr::List { items, .. } => {
                 for item in items {
                     visit_expr(item, signatures, out);
@@ -3204,7 +3305,8 @@ fn first_impure_expr(expr: &Expr, allow_helper_call: bool) -> Option<Span> {
         Expr::Ask { span, .. }
         | Expr::Consult { span, .. }
         | Expr::Call { span, .. }
-        | Expr::ParallelMap { span, .. } => Some(*span),
+        | Expr::ParallelMap { span, .. }
+        | Expr::Fallback { span, .. } => Some(*span),
         Expr::List { items, .. } => items
             .iter()
             .find_map(|item| first_impure_expr(item, allow_helper_call)),
@@ -3220,6 +3322,48 @@ fn first_impure_expr(expr: &Expr, allow_helper_call: bool) -> Option<Span> {
         | Expr::Bool { .. }
         | Expr::Path(_)
         | Expr::Error { .. } => None,
+    }
+}
+
+/// Why an attempt may not carry an `else`, when it may not.
+struct ElseRefusal {
+    what: &'static str,
+    primary: &'static str,
+    note: &'static str,
+    help: &'static str,
+}
+
+/// Whether `else` may follow this attempt, and why not when it may not.
+///
+/// `None` means it may: an `ask`, a tool `call` or a sub-agent `call`. Every
+/// other expression gets a reason, because "not allowed here" is not a reason
+/// and each of these three is refused for a different one.
+fn else_refusal(attempt: &Expr) -> Option<ElseRefusal> {
+    match attempt {
+        Expr::Ask { .. } | Expr::Call { .. } => None,
+        Expr::Consult { .. } => Some(ElseRefusal {
+            what: "a `consult`",
+            primary: "a person was asked here",
+            note: "a consultation can fail, and it is still refused: a person was asked and \
+                   did not answer, so continuing with a default is continuing without them",
+            help: "if the flow can proceed without an answer, ask it before the work that \
+                   needs it and branch on what came back",
+        }),
+        Expr::ParallelMap { .. } => Some(ElseRefusal {
+            what: "a `parallel map`",
+            primary: "this is a whole fan-out, not one attempt",
+            note: "a fallback for a fan-out would be a handler around a block, which is a \
+                   larger feature and not this one",
+            help: "put the `else` on the statement inside the body — that is where the failure \
+                   is, and the other elements' work is still worth keeping",
+        }),
+        _ => Some(ElseRefusal {
+            what: "an expression that cannot fail",
+            primary: "this always produces a value",
+            note: "`else` may only follow an `ask`, a tool `call` or a sub-agent `call`",
+            help: "remove the `else`; a fallback here would be unreachable text that looks \
+                   like a safety net",
+        }),
     }
 }
 
@@ -3251,6 +3395,10 @@ fn min_steps(statements: &[Stmt]) -> i64 {
             }
             // The source list may be empty, so the body contributes nothing.
             Expr::ParallelMap { source, .. } => expr_steps(source),
+            // The attempt is the step and the fallback is an expression, so a
+            // fallback does not move the bound the compiler proves. That is
+            // rule 2 of `infer_fallback` showing up where it is load-bearing.
+            Expr::Fallback { attempt, .. } => expr_steps(attempt),
             Expr::List { items, .. } => items.iter().map(expr_steps).sum(),
             Expr::Builtin { args, .. } => args.iter().map(expr_steps).sum(),
             Expr::FunctionCall { args, .. } => args.iter().map(|arg| expr_steps(&arg.value)).sum(),
