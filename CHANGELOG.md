@@ -8,6 +8,22 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-08-19
+
+The release where a program can say what to do when something fails.
+
+**Minor rather than patch, and two things force it.** The language surface moved
+— Language 0.4, Agent IR 0.4, Runtime 0.7 — and `ToolError` gained a variant.
+That enum is public and not `#[non_exhaustive]`, so anything matching it
+exhaustively has to add an arm. In 0.x a minor bump is what signals a break, and
+this one was going out as 0.8.1 until the enum was counted.
+
+**It also carries the two unreleased fixes from 0.8.0.** `cargo install
+ingot-cli` has, since 0.8.0, given a CLI that refused a declared `network` reach
+and sent operators to a register entry that closed in 0.4.0 (#39), and a gap
+register that did not yet name the absence this release fills (#38). Anybody who
+followed the README between the two releases hit the first one.
+
 ### A failure an iteration can absorb
 
 `else` gives one attempt a value to use when it fails. **Language 0.4, Agent IR
@@ -1894,7 +1910,8 @@ Backends, packaging and the language server are not part of this release.
 - `Ingot` is a working name. Trademark, domain and registry clearance has not
   been carried out and requires legal review before any public release.
 
-[Unreleased]: https://github.com/mathissdupont/ingot/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/mathissdupont/ingot/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/mathissdupont/ingot/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/mathissdupont/ingot/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/mathissdupont/ingot/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/mathissdupont/ingot/compare/v0.5.2...v0.6.0
