@@ -1,15 +1,65 @@
+<div align="center">
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./docs/assets/branding/ingot-lang-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="./docs/assets/branding/ingot-lang-light.png">
+  <img src="./docs/assets/branding/ingot-lang-light.png" alt="Ingot Lang" width="360">
+</picture>
+
 # Ingot
 
-[![CI](https://github.com/mathissdupont/ingot/actions/workflows/ci.yml/badge.svg)](https://github.com/mathissdupont/ingot/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/mathissdupont/ingot?include_prereleases&sort=semver)](https://github.com/mathissdupont/ingot/releases)
-[![Licence](https://img.shields.io/badge/licence-Apache--2.0-blue)](LICENSE)
+### A compiler and toolchain for agents that have to keep their promises
 
-**An agent's permissions, its budget and its behaviour — checked before it runs,
-and enforced while it does.**
+**Open source, portable and default-deny.** Ingot turns a small declarative
+language into a checked artifact: what an agent may reach, what it can cost at
+most, and what it must produce.
+
+<p>
+  <em>Rust · Agent IR · MCP · OCI · replayable cassettes · policy-derived containers</em>
+</p>
+
+<p>
+  <a href="https://github.com/mathissdupont/ingot/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/mathissdupont/ingot/ci.yml?style=flat-square&label=CI&labelColor=3b2923&color=d56b31"></a>
+  <a href="https://github.com/mathissdupont/ingot/releases"><img alt="Release" src="https://img.shields.io/github/v/release/mathissdupont/ingot?include_prereleases&sort=semver&style=flat-square&labelColor=3b2923&color=d56b31"></a>
+  <a href="./LICENSE"><img alt="Licence: Apache-2.0" src="https://img.shields.io/badge/licence-Apache--2.0-d56b31.svg?style=flat-square&labelColor=3b2923"></a>
+  <img alt="Status: pre-1.0" src="https://img.shields.io/badge/status-pre--1.0-f4e4c9.svg?style=flat-square&labelColor=3b2923">
+  <img alt="Platforms: Linux, macOS and Windows" src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-f4e4c9.svg?style=flat-square&labelColor=3b2923">
+</p>
+
+</div>
+
+---
+
+> [!NOTE]
+> **An agent does not get permissions because it asked.** Ingot checks types,
+> effects, policy and budgets before a run, enforces the policy at the container
+> boundary, and records the run so it can be replayed without a model key.
+
+## Contents
+
+- [What it is](#what-it-is)
+- [Start in thirty seconds](#start-in-thirty-seconds)
+- [Why a small language](#deliberately-not-a-general-purpose-language)
+- [A person in the loop](#a-person-in-the-loop-without-losing-the-run)
+- [Example](#an-example)
+- [Install](#install)
+- [Commands](#commands)
+- [Architecture](#how-it-fits-together)
+- [Documentation and specifications](#documentation)
+- [Roadmap and known gaps](#roadmap)
+
+## What it is
 
 Ingot compiles a small declarative language to **Agent IR**: a portable artifact
 that states what an agent may reach, what it will cost at most, and what it
-produces. It is a compiler and a toolchain, not a framework and not a runtime.
+produces. It is a compiler and a toolchain, not an agent framework.
+
+- **Checked before it runs.** Types, effects, policy, budgets and outputs are
+  compiler errors rather than conventions in a prompt.
+- **Enforced while it runs.** A policy can become a real container boundary with
+  a filtering proxy and no unlisted route out.
+- **Replayable after it runs.** Model answers, tool results and human decisions
+  are recorded in cassettes for offline, keyless tests.
 
 The point is what it refuses:
 
@@ -30,7 +80,7 @@ at compile time — and then **enforced at run time**, by a filtering proxy on a
 container network with no other route out. A tool server that ignores the proxy
 reaches nothing, rather than reaching everything.
 
-## Thirty seconds, and no API key
+## Start in thirty seconds
 
 ```bash
 cargo install ingot-cli
@@ -49,8 +99,9 @@ export ANTHROPIC_API_KEY=…          # or OPENAI_API_KEY, or GEMINI_API_KEY
 ingot run --input topic="compiler design"
 ```
 
-And `ingot studio` puts the whole thing on one page — every project, what
-compiles, what it may reach, and every run it has had.
+And `ingot studio` puts the whole thing on one page: create or open projects,
+inspect what compiles and what each agent may reach, start and record runs,
+answer questions, and build the boundary image without leaving the page.
 
 ## Deliberately not a general-purpose language
 
