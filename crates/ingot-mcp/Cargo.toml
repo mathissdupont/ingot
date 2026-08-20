@@ -9,6 +9,26 @@ repository.workspace = true
 homepage.workspace = true
 authors.workspace = true
 
+# `cargo binstall <crate>` fetches the release archive instead of compiling the
+# workspace on somebody's machine. It costs nothing to support: the archives are
+# already named this way and already carry all three binaries, so this is only
+# telling `cargo-binstall` where to look and what is inside.
+#
+# Unaffected by the releases being marked pre-release, because the version is
+# resolved from crates.io rather than from GitHub's `releases/latest` — which
+# returns 404 here, and is the wall a hand-written installer hits first.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/ingot-{ version }-{ target }{ archive-suffix }"
+pkg-fmt = "tgz"
+bin-dir = "ingot-{ version }-{ target }/{ bin }{ binary-ext }"
+
+# The Windows zip is flat where the tarballs carry a top-level directory
+# (`7z a ... "./dist/$name/*"` against `tar -C dist "$name"`). Both are already
+# published that way, so the difference is described rather than corrected.
+[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+pkg-fmt = "zip"
+bin-dir = "{ bin }{ binary-ext }"
+
 [features]
 default = []
 # The Streamable HTTP transport. Off by default, mirroring `ingot-runtime`'s

@@ -616,12 +616,43 @@ fn inspect_containment(target: &Target, checks: &mut Vec<Check>) {
             Some(runtime)
         }
         Err(error) => {
+            // Which advice depends on which case it is, and the runtime layer
+            // already separated them: a command that is not there and a daemon
+            // that is not answering need different things done about them.
+            // Telling somebody to install what they have installed is how a
+            // report loses their trust — and on Windows the part that is
+            // actually missing is usually not the installation but the switch
+            // to Linux containers ([GAP-020](../../../docs/gaps.md#gap-020)).
+            let fix = match &error {
+                ingot_sandbox::ExecutorError::NoRuntime => {
+                    if cfg!(windows) {
+                        concat!(
+                            "install Docker Desktop or Podman, then set it to Linux containers; ",
+                            "a read-only root filesystem and `--network none` are ",
+                            "Linux-container features, so a Windows-container daemon cannot ",
+                            "express the boundary",
+                        )
+                    } else {
+                        "install Docker or Podman, then run `ingot doctor` again"
+                    }
+                }
+                _ => {
+                    if cfg!(windows) {
+                        concat!(
+                            "start it — on Windows that means Docker Desktop running *and* ",
+                            "switched to Linux containers rather than Windows containers",
+                        )
+                    } else {
+                        "start it, then run `ingot doctor` again"
+                    }
+                }
+            };
             checks.push(Check::new(
                 "container.runtime",
                 Status::Fail,
                 error.to_string(),
                 "PATH",
-                Some("install and start Docker or Podman with Linux containers".to_string()),
+                Some(fix.to_string()),
             ));
             None
         }

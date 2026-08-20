@@ -338,6 +338,30 @@ pub fn read(out_dir: &Path, id: &str) -> Result<RunDetail> {
     Ok(RunDetail { summary, events })
 }
 
+/// The record a running process is writing, if it has opened one.
+///
+/// A launch and a record are the same run seen from two ends: this process
+/// knows a child by its process id, and the child names its own record. They
+/// meet because a record id ends with the process id that opened it — see
+/// [`RunRecorder::begin`] — so the join needs no new bookkeeping and no
+/// message from the child.
+///
+/// Two things keep the join honest. The suffix is matched rather than the id
+/// parsed, because the timestamp half is not this caller's business. And a
+/// record older than the launch is not a candidate: an operating system reuses
+/// process ids, so a finished run from a previous process with the same id is
+/// exactly what a bare suffix match would find for a launch that has not
+/// written its first line yet.
+///
+/// `records` is expected newest first, as [`list`] returns them.
+pub fn of_process(records: &[RunSummary], pid: u32, not_before: u64) -> Option<String> {
+    let suffix = format!("-{pid}");
+    records
+        .iter()
+        .find(|record| record.id.ends_with(&suffix) && record.started_unix >= not_before)
+        .map(|record| record.id.clone())
+}
+
 /// Remove one record.
 pub fn delete(out_dir: &Path, id: &str) -> Result<()> {
     let path = record_path(out_dir, id)?;
@@ -515,5 +539,37 @@ mod tests {
         let ids: Vec<String> = list(&dir.0).into_iter().map(|run| run.id).collect();
         assert_eq!(ids, ["0000000009-1", "0000000005-1", "0000000001-1"]);
         assert_eq!(count(&dir.0), 3);
+    }
+
+    #[test]
+    fn a_launch_is_joined_to_its_own_record_and_not_to_a_reused_process_id() {
+        let dir = Dir::new("join");
+        let directory = dir.0.join(RUNS_DIR);
+        std::fs::create_dir_all(&directory).expect("a runs directory");
+        // Two records written by process 4242: one long finished, one this
+        // launch's own. An operating system reuses process ids, so both exist.
+        for (id, started) in [("0000000100-4242", 100), ("0000000900-4242", 900)] {
+            std::fs::write(
+                directory.join(format!("{id}.jsonl")),
+                format!(
+                    "{{\"record\":\"started\",\"agent\":\"A\",\"startedUnix\":{started}}}
+"
+                ),
+            )
+            .expect("a record");
+        }
+        let records = list(&dir.0);
+
+        assert_eq!(
+            of_process(&records, 4242, 900).as_deref(),
+            Some("0000000900-4242"),
+            "a launch must find the record opened after it started"
+        );
+        assert_eq!(
+            of_process(&records, 4242, 1500),
+            None,
+            "a launch that has not written its first line has no record yet, and              the old one belonging to a reused id is not it"
+        );
+        assert_eq!(of_process(&records, 7, 0), None, "no record, no join");
     }
 }

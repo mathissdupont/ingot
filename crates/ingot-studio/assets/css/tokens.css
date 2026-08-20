@@ -1,0 +1,55 @@
+/* Every colour and measure the page uses, in one place.
+   Warm paper, one earth accent, and status colours that stay out of its way.
+   The accent is brick rather than the coral every AI product settled on, and
+   the failure red is a cooler crimson so a refusal never reads as the accent —
+   which is the whole cost of having a warm accent, paid here once. */
+
+:root {
+  color-scheme: light dark;
+
+  --bg: #fbf8f4;
+  --surface: #ffffff;
+  --surface-sunk: #f4efe8;
+  --ink: #22201d;
+  --muted: #6f685f;
+  --faint: #a09789;
+  --line: #ece5db;
+  --line-strong: #dbd2c5;
+  --accent: #9e4429;
+  --accent-soft: #f9ece6;
+  --ok: #2c7a52;
+  --ok-soft: #e8f3ec;
+  --warn: #b07a12;
+  --warn-soft: #fdf4e0;
+  --fail: #b02a3c;
+  --fail-soft: #fbe9ec;
+
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  --sans: ui-sans-serif, system-ui, "Segoe UI", Inter, Roboto, "Helvetica Neue", sans-serif;
+  --radius: 12px;
+  --radius-sm: 9px;
+  --sidebar: 268px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14120f;
+    --surface: #1c1a16;
+    --surface-sunk: #221f1a;
+    --ink: #efeae2;
+    --muted: #a29a8e;
+    --faint: #746c60;
+    --line: #2a2620;
+    --line-strong: #3a352d;
+    /* Dusty rather than bright: a warm accent brightened for a dark ground
+       walks straight back into the colour this one exists to avoid. */
+    --accent: #c4664c;
+    --accent-soft: #2b1712;
+    --ok: #5fc48d;
+    --ok-soft: #16251c;
+    --warn: #e5b658;
+    --warn-soft: #2c2210;
+    --fail: #f0788a;
+    --fail-soft: #2a1518;
+  }
+}

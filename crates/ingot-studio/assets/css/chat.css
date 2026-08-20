@@ -1,0 +1,123 @@
+/* The conversation.
+
+   The rule for this whole region: what a person and an agent said to each other
+   is a turn and gets a shape; everything the machinery did is a quiet line
+   between them. A transcript where a loop counter looks as loud as a question is
+   one nobody reads twice. */
+
+.chat-head {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  padding: 14px 16px;
+  margin-bottom: 16px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.chat-head .grow { flex: 1; min-width: 0; }
+.chat-head .sub { color: var(--muted); font-size: 12.5px; }
+.chat-head .stand { flex: 0 0 auto; }
+
+.chat { padding: 6px 0; max-height: 68vh; overflow: auto; }
+
+/* A turn. The agent's arrives from the left with its face on it; a person's is
+   pulled to the right and wears the accent, which is the one place on this page
+   the accent means "you". */
+.chat .turn { display: flex; gap: 10px; padding: 8px 16px; align-items: flex-start; }
+.chat .turn .said {
+  max-width: 74%;
+  padding: 9px 13px;
+  border-radius: var(--radius);
+  background: var(--surface-sunk);
+  border: 1px solid var(--line);
+  min-width: 0;
+}
+.chat .turn .said .line { white-space: pre-wrap; word-break: break-word; }
+.chat .turn .said .meta { font-size: 11.5px; color: var(--faint); margin-top: 5px; }
+.chat .turn .sprite { flex: 0 0 auto; margin-top: 1px; }
+.chat .turn .tags { margin-top: 7px; }
+
+.chat .turn.mine { justify-content: flex-end; }
+.chat .turn.mine .said {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+/* A gate is not a turn anybody took: it is the policy stopping the run. Amber,
+   the same amber the waiting panel uses, because amber here means one thing. */
+.chat .turn.stop .said {
+  background: var(--warn-soft);
+  border-color: var(--warn);
+  max-width: 100%;
+  flex: 1;
+}
+
+/* The machinery. Aligned to the same left edge as a turn so the eye can skip
+   the whole column. */
+.chat .note {
+  display: flex;
+  gap: 10px;
+  padding: 3px 16px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.chat .note .kind { color: var(--faint); flex: 0 0 96px; text-align: right; }
+.chat .note .what { white-space: pre-wrap; word-break: break-word; min-width: 0; }
+
+/* How the run ended, as a line across the transcript rather than a chip
+   somewhere else. */
+.chat .closed {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 12px 16px 6px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.chat .closed::before {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--line);
+}
+.chat .closed::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--line);
+}
+.chat .closed.pass { color: var(--ok); }
+.chat .closed.warn { color: var(--warn); }
+.chat .closed.fail { color: var(--fail); }
+.chat .closed span { text-align: center; max-width: 70%; }
+
+/* The one thing on this page that is waiting for you sits at the end of the
+   transcript, in the flow, where the next thing to happen belongs. */
+.chat .live { padding: 4px 16px 14px; }
+
+/* The mark on the tab. It has to be legible from the other tabs, which is the
+   whole reason it exists, so it is a dot with a word behind it rather than a
+   colour change nobody notices. */
+.tab .dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  margin-left: 7px;
+  vertical-align: 1px;
+  background: var(--line-strong);
+}
+.tab .dot.waiting { background: var(--warn); }
+.tab .dot.live { background: var(--accent); }
+
+/* A pulse only for the one that needs a person. Something merely running does
+   not need to move. */
+@media (prefers-reduced-motion: no-preference) {
+  .tab .dot.waiting { animation: waiting-pulse 1.8s ease-in-out infinite; }
+}
+@keyframes waiting-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}

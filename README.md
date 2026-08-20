@@ -240,9 +240,40 @@ Four complete examples live in [`examples/`](examples/).
 
 ## Install
 
+### One line, no toolchain
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/mathissdupont/ingot/main/scripts/install.sh | sh
+```
+
+```powershell
+irm https://raw.githubusercontent.com/mathissdupont/ingot/main/scripts/install.ps1 | iex
+```
+
+It works out which archive fits the machine, **verifies it against the release's
+`SHA256SUMS`**, and puts `ingot`, `ingot-mcp-fs` and `ingot-lsp` in one
+directory. No root, nothing written elsewhere, and no `PATH` changed without
+being asked. A download that does not match its checksum is not installed, and
+there is no flag to skip that.
+
+Piping a script into a shell is a thing worth being suspicious of, so:
+[`scripts/install.sh`](scripts/install.sh) and
+[`scripts/install.ps1`](scripts/install.ps1) are what run, and reading them first
+costs one extra command:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/mathissdupont/ingot/main/scripts/install.sh
+less install.sh && sh install.sh
+```
+
+`INGOT_VERSION` pins a version and `INGOT_BIN_DIR` chooses where it lands
+(`-Version` and `-BinDir` on Windows).
+
 ### With cargo
 
-Requires a stable Rust toolchain (MSRV 1.85).
+Requires a stable Rust toolchain (MSRV 1.85). `cargo install` compiles the
+workspace on your machine, which is why the one-liner above exists;
+`cargo binstall ingot-cli` fetches the same release archive instead.
 
 ```bash
 cargo install ingot-cli          # the `ingot` binary
@@ -263,8 +294,9 @@ cargo install --git https://github.com/mathissdupont/ingot ingot-cli
 
 ### A prebuilt archive
 
-Each release carries `ingot`, `ingot-mcp-fs` and `ingot-lsp` for Linux, macOS
-(Intel and Apple silicon) and Windows. Download the archive for your platform from
+What the one-liner above does by hand. Each release carries `ingot`,
+`ingot-mcp-fs` and `ingot-lsp` for Linux (x86-64 and arm64), macOS (Intel and
+Apple silicon) and Windows. Download the archive for your platform from
 [Releases](https://github.com/mathissdupont/ingot/releases), verify it, and put
 the binaries on your `PATH`:
 
@@ -272,6 +304,12 @@ the binaries on your `PATH`:
 sha256sum -c SHA256SUMS --ignore-missing
 tar -xzf ingot-*-x86_64-unknown-linux-gnu.tar.gz
 ```
+
+Two things worth knowing before scripting against this yourself. A tarball
+unpacks into an `ingot-<version>-<target>/` directory and the Windows zip is
+flat, so a script has to look for both. And every release is marked as a
+pre-release, which means GitHub's `releases/latest` — the endpoint an installer
+reaches for first — answers **404**; ask `releases?per_page=1` instead.
 
 Pre-1.0: the language, the Agent IR and the artifact format may change between
 releases.

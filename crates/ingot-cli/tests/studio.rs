@@ -842,7 +842,7 @@ fn a_gate_reaches_the_page_and_answering_it_lets_the_run_finish() {
 
     let (status, body) = studio.send_json(
         "POST",
-        &format!("/api/approval?path={}&pid={}", encoded(dir.path()), pid),
+        &format!("/api/answer?path={}&pid={}", encoded(dir.path()), pid),
         &format!(r#"{{"node":"{node}","allowed":true}}"#),
     );
     assert_eq!(status, 200, "{body}");
@@ -863,7 +863,7 @@ fn a_gate_refused_from_the_page_stops_the_run_before_the_effect() {
 
     let (status, body) = studio.send_json(
         "POST",
-        &format!("/api/approval?path={}&pid={}", encoded(dir.path()), pid),
+        &format!("/api/answer?path={}&pid={}", encoded(dir.path()), pid),
         &format!(r#"{{"node":"{node}","allowed":false}}"#),
     );
     assert_eq!(status, 200, "{body}");
@@ -886,7 +886,7 @@ fn an_answer_naming_a_gate_the_run_is_not_at_is_refused() {
 
     let (status, body) = studio.send_json(
         "POST",
-        &format!("/api/approval?path={}&pid={}", encoded(dir.path()), pid),
+        &format!("/api/answer?path={}&pid={}", encoded(dir.path()), pid),
         r#"{"node":"a-gate-from-another-run","allowed":true}"#,
     );
     assert_eq!(status, 400, "{body}");
@@ -907,7 +907,7 @@ fn an_answer_the_page_invented_a_field_for_is_refused() {
 
     let (status, body) = studio.send_json(
         "POST",
-        &format!("/api/approval?path={}&pid={}", encoded(dir.path()), pid),
+        &format!("/api/answer?path={}&pid={}", encoded(dir.path()), pid),
         &format!(r#"{{"node":"{node}","allowed":true,"forever":true}}"#),
     );
     assert_eq!(status, 400, "{body}");
@@ -927,11 +927,192 @@ fn answering_a_process_this_studio_did_not_start_is_refused() {
 
     let (status, body) = studio.send_json(
         "POST",
-        &format!("/api/approval?path={}&pid=999999", encoded(dir.path())),
+        &format!("/api/answer?path={}&pid=999999", encoded(dir.path())),
         r#"{"node":"n0","allowed":true}"#,
     );
     assert_eq!(status, 400, "{body}");
     assert!(body.contains("did not start"), "{body}");
+}
+
+// --- a question -------------------------------------------------------------
+//
+// The other half of [RFC-0020](../../../rfcs/0020-a-person-in-the-loop.md), and
+// the difference that matters: a gate is answered with a decision, and a
+// question is answered with **a string the flow then reads**. So `--yes` can
+// settle a gate and can never settle one of these, and neither can a page that
+// only knows how to say yes.
+
+/// An agent that asks a person how to frame a report, then writes it that way.
+const ASKING_AGENT: &str = r#"language 0.3
+
+/// Asks a person how to frame a report, then writes it that way.
+agent Framing(topic: string) -> report<markdown> {
+  model requires {
+    structured_output
+  }
+
+  budget {
+    steps <= 6
+    tokens <= 20000
+  }
+
+  policy {
+    human allow
+    network deny
+  }
+
+  flow {
+    framing = consult("Which framing should the report take?", choices: ["technical", "executive"])
+    emit report = ask<markdown>("Write about ${topic} as ${framing}.")
+  }
+}
+"#;
+
+/// A studio pointed at a stub, and a project that stops to ask a person.
+fn asking(tag: &str) -> (TempDir, StubProvider, Serving) {
+    let dir = TempDir::new(&format!("studio-{tag}"));
+    std::fs::write(dir.path().join("main.ing"), ASKING_AGENT).expect("writing the source");
+    std::fs::write(
+        dir.path().join("ingot.toml"),
+        "[project]\nname = \"framing\"\n",
+    )
+    .expect("writing the manifest");
+
+    let stub = stub_provider(vec![text_reply("# The harbour\n\nShort.\n")]);
+    let studio = Serving::start_with(
+        tag,
+        &[
+            ("ANTHROPIC_API_KEY", "stub-key"),
+            ("INGOT_ANTHROPIC_BASE_URL", &stub.url),
+        ],
+    );
+    studio.post(&format!("/api/projects?path={}", encoded(dir.path())));
+    (dir, stub, studio)
+}
+
+/// Start the asking run and wait until the page is offering its question.
+fn until_asked(studio: &Serving, dir: &Path) -> (u32, String) {
+    let (status, body) = studio.send_json(
+        "POST",
+        &format!("/api/run?path={}", encoded(dir)),
+        r#"{"provider":"anthropic","inputs":{"topic":"the harbour"}}"#,
+    );
+    assert_eq!(status, 200, "{body}");
+
+    let answer = studio.until(dir, |answer| answer["launches"][0]["pending"].is_object());
+    let launch = &answer["launches"][0];
+    assert_eq!(
+        launch["state"], "running",
+        "a run waiting at a question is still running: {launch}"
+    );
+    (
+        launch["pid"].as_u64().expect("a pid") as u32,
+        launch["pending"]["node"]
+            .as_str()
+            .expect("the question names its node")
+            .to_string(),
+    )
+}
+
+#[test]
+fn a_question_reaches_the_page_as_a_question_and_not_as_a_gate() {
+    let (dir, _stub, studio) = asking("ask-shape");
+    let (_pid, _node) = until_asked(&studio, dir.path());
+
+    // What the person is shown: the question itself and the answers it offers.
+    // A surface that could only render a gate would show this as an effect to
+    // allow, and there is no effect here to allow.
+    let answer = studio.get(&format!("/api/runs?path={}", encoded(dir.path())));
+    let asked = &answer["launches"][0]["pending"];
+    assert_eq!(asked["waitingFor"], "question", "{asked}");
+    assert_eq!(
+        asked["question"], "Which framing should the report take?",
+        "{asked}"
+    );
+    assert_eq!(asked["choices"][0], "technical", "{asked}");
+    assert_eq!(asked["choices"][1], "executive", "{asked}");
+}
+
+#[test]
+fn the_answer_the_page_gives_is_the_one_the_flow_reads() {
+    let (dir, _stub, studio) = asking("ask-answer");
+    let (pid, node) = until_asked(&studio, dir.path());
+
+    let (status, body) = studio.send_json(
+        "POST",
+        &format!("/api/answer?path={}&pid={}", encoded(dir.path()), pid),
+        &format!(r#"{{"node":"{node}","answer":"executive"}}"#),
+    );
+    assert_eq!(status, 200, "{body}");
+
+    studio.until(dir.path(), |answer| {
+        answer["launches"][0]["state"] == "exited"
+    });
+
+    // Asserted from the record rather than from the page, because the record is
+    // what outlives the studio — and it is the same file `--events json` prints.
+    let runs = dir.path().join("target/ingot/runs");
+    let record = std::fs::read_dir(&runs)
+        .expect("a run directory")
+        .filter_map(Result::ok)
+        .map(|entry| std::fs::read_to_string(entry.path()).expect("reading a record"))
+        .collect::<String>();
+    let answered: Vec<Value> = record
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|value| value.get("event").and_then(Value::as_str) == Some("consultationAnswered"))
+        .collect();
+    assert_eq!(answered.len(), 1, "one question, one answer: {record}");
+    assert_eq!(answered[0]["answer"], "executive", "{record}");
+}
+
+#[test]
+fn a_question_cannot_be_settled_with_a_decision() {
+    // The shape of a stale page, or of a client written against schema 1: it
+    // knows how to allow a gate and nothing else. Guessing would put `true`
+    // into a value the flow reads.
+    let (dir, _stub, studio) = asking("ask-decision");
+    let (pid, node) = until_asked(&studio, dir.path());
+
+    let (status, body) = studio.send_json(
+        "POST",
+        &format!("/api/answer?path={}&pid={}", encoded(dir.path()), pid),
+        &format!(r#"{{"node":"{node}","allowed":true}}"#),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert!(body.contains("question"), "{body}");
+
+    // Still waiting, rather than answered with something nobody chose.
+    let answer = studio.get(&format!("/api/runs?path={}", encoded(dir.path())));
+    assert_eq!(answer["launches"][0]["pending"]["node"], node.as_str());
+}
+
+#[test]
+fn an_answer_the_question_did_not_offer_is_refused_naming_the_ones_it_did() {
+    let (dir, _stub, studio) = asking("ask-unoffered");
+    let (pid, node) = until_asked(&studio, dir.path());
+
+    let (status, body) = studio.send_json(
+        "POST",
+        &format!("/api/answer?path={}&pid={}", encoded(dir.path()), pid),
+        &format!(r#"{{"node":"{node}","answer":"casual"}}"#),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert!(
+        body.contains("technical") && body.contains("executive"),
+        "the refusal names what was offered: {body}"
+    );
+
+    // And an empty answer is refused for the same reason: the flow reads it.
+    let (status, body) = studio.send_json(
+        "POST",
+        &format!("/api/answer?path={}&pid={}", encoded(dir.path()), pid),
+        &format!(r#"{{"node":"{node}","answer":"   "}}"#),
+    );
+    assert_eq!(status, 400, "{body}");
+
+    let answer = studio.get(&format!("/api/runs?path={}", encoded(dir.path())));
+    assert_eq!(answer["launches"][0]["pending"]["node"], node.as_str());
 }
 
 // --- the canvas -------------------------------------------------------------
