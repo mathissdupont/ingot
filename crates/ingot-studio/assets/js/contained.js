@@ -152,6 +152,113 @@ function containedGuidance(detail) {
             ]),
           ])))
         : null,
+      imageBlock(),
     ]),
     el("span", { class: "chip " + (readiness.ready ? "pass" : "warn"), text: readiness.ready ? "available" : "not available here" }));
+}
+
+// --- the image ------------------------------------------------------------
+//
+// The readiness report can say the image is missing. It cannot say whether this
+// machine could ever produce one, and that is the fact people need: **a released
+// binary has no source checkout**, and `ingot image build` needs one. So somebody
+// who installed Ingot and wants a contained run is not one command away from it —
+// they need the repository at this exact version, until an image can be acquired
+// with a signature ([GAP-029](../../../docs/gaps.md#gap-029)).
+//
+// Saying that out loud is the point of this block. A Build button that only some
+// people can use, with no explanation for the rest, would be worse than no
+// button.
+function imageBlock() {
+  if (!state.image) return el("div", { class: "sub", text: "Asking this machine about the image…" });
+  const report = state.image.image;
+  const job = state.image.job;
+
+  const rows = [];
+  rows.push(imageFact(
+    report.present === true ? "pass" : report.present === false ? "fail" : "warn",
+    report.present === true
+      ? "The image is here: " + report.image
+      : report.present === false
+        ? "The image is not on this machine: " + report.image
+        : "Whether " + report.image + " is here cannot be asked without a runtime"));
+
+  rows.push(imageFact(
+    report.runtime ? "pass" : "fail",
+    report.runtime ? "Containers: " + report.runtime : "No container runtime answered",
+    report.runtimeProblem));
+
+  rows.push(report.source
+    ? imageFact("pass", "It can be built here, from " + report.source)
+    : imageFact("fail",
+        "There is no Ingot source checkout to build it from, and Ingot never downloads one.",
+        report.sourceProblem));
+
+  const canBuild = Boolean(report.source) && Boolean(report.runtime) &&
+    !(job && job.state === "running");
+
+  const build = el("button", {
+    class: "action",
+    text: job && job.state === "running" ? "Building…" : "Build the image",
+    disabled: !canBuild,
+    onclick: async () => {
+      try {
+        state.image = await api("image", { method: "POST", headers: { "X-Ingot-Token": TOKEN } });
+        state.error = null;
+      } catch (error) { failed("The build did not start", error); }
+      render();
+      startPollingIfLive();
+    },
+  });
+
+  const stop = job && job.state === "running"
+    ? el("button", {
+        class: "action quiet",
+        text: "Stop",
+        onclick: async () => {
+          try {
+            state.image = await api("image", { method: "DELETE", headers: { "X-Ingot-Token": TOKEN } });
+          } catch (error) { failed("The build was not stopped", error); }
+          render();
+        },
+      })
+    : null;
+
+  return el("div", { class: "image" }, [
+    el("div", { class: "checks" }, rows),
+    el("div", { class: "add", style: "margin-top:12px" }, [
+      build,
+      stop,
+      el("span", { class: "sub", text: "It builds the version-matched image from the repository's own Dockerfile. It takes minutes and prints as it goes." }),
+    ]),
+    job ? imageJob(job) : null,
+  ]);
+}
+
+function imageFact(status, text, detail) {
+  return el("div", { class: "line" }, [
+    el("span", { class: "stripe " + status }),
+    el("div", { class: "grow" }, [
+      el("div", { text: text }),
+      detail ? el("div", { class: "where", text: detail }) : null,
+    ]),
+  ]);
+}
+
+// The build, as it goes. The log is the whole point: a container build that says
+// nothing for four minutes is indistinguishable from one that has hung.
+function imageJob(job) {
+  const JOB_CHIP = { running: "warn", done: "pass", failed: "fail" };
+  const JOB_WORD = { running: "going", done: "built", failed: "failed" };
+  return el("div", { class: "job" }, [
+    el("div", { class: "job-head" }, [
+      el("span", { class: "chip " + JOB_CHIP[job.state], text: JOB_WORD[job.state] }),
+      el("span", { class: "sub", text: job.label + "  ·  process " + job.pid +
+        (job.state === "failed" && job.exitCode !== null ? "  ·  exit " + job.exitCode : "") }),
+    ]),
+    job.log
+      ? el("pre", { class: "block", text: job.log.trimEnd() })
+      : el("div", { class: "sub", text: "Nothing printed yet." }),
+    job.truncated ? el("div", { class: "fix", text: "the earlier output was longer than the studio keeps" }) : null,
+  ]);
 }

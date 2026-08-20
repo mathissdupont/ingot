@@ -1,0 +1,28 @@
+/* The panel that writes a project, and the one that builds an image. Both are
+   forms with an explanation attached, which is the shape everything on this page
+   that *changes* something takes: what it will write, before it writes it. */
+
+label.field { display: flex; gap: 10px; align-items: center; margin-bottom: 10px; }
+label.field > .sub { flex: 0 0 96px; color: var(--muted); }
+
+/* --- the image build ---------------------------------------------------- */
+
+.image { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
+
+.job { margin-top: 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); overflow: hidden; }
+.job-head {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 12px;
+  background: var(--surface-sunk);
+  border-bottom: 1px solid var(--line);
+}
+.job-head .sub { color: var(--muted); font-size: 12.5px; }
+
+/* A build's log is read from the bottom: the last line is the one that says
+   what is happening now, so it scrolls and it is tall enough to be worth
+   scrolling. */
+.job pre.block { max-height: 320px; overflow: auto; }
+.job > .sub { padding: 10px 12px; color: var(--muted); }
+.job > .fix { padding: 0 12px 10px; font-size: 12.5px; color: var(--muted); }

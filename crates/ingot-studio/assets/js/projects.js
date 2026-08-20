@@ -22,7 +22,12 @@ function renderProjects(inner) {
     render();
   }
 
-  inner.appendChild(card("Add a project", el("div", { class: "body" }, [
+  // Creating comes first, and adding second, because somebody with nothing is
+  // the person this page has to serve. Somebody who already has a project knows
+  // where it is.
+  inner.appendChild(createPanel());
+
+  inner.appendChild(card("Add a project you already have", el("div", { class: "body" }, [
     el("div", { class: "add" }, [input, el("button", { class: "action", text: "Add", onclick: add })]),
   ])));
 

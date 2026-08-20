@@ -15,12 +15,14 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc::{sync_channel, Receiver, RecvTimeoutError};
 use std::time::Duration;
 
+use ingot_runtime::tools::{ConsultError, ConsultRequest};
 use ingot_runtime::{ApprovalRequest, HumanChannel, ModelProvider, RunEvent};
 
 use crate::protocol::{
-    version_mismatch, ApprovalCall, ApprovalReply, Failed, Finished, GuestLine, Hello, HostLine,
-    ModelCall, ModelReply, RunConfig, WireError, CALL_APPROVAL, CALL_CONFIG, CALL_MODEL,
-    NOTIFY_EVENT, NOTIFY_FAILED, NOTIFY_FINISHED, PROTOCOL_VERSION,
+    version_mismatch, ApprovalCall, ApprovalReply, ConsultCall, ConsultReply, Failed, Finished,
+    GuestLine, Hello, HostLine, ModelCall, ModelReply, RunConfig, WireError, CALL_APPROVAL,
+    CALL_CONFIG, CALL_CONSULT, CALL_MODEL, NOTIFY_EVENT, NOTIFY_FAILED, NOTIFY_FINISHED,
+    PROTOCOL_VERSION,
 };
 
 /// How a supervised run ended, as the run itself reported it.
@@ -422,6 +424,30 @@ fn answer(
             let allowed = decide(supervisor.approval, &call.into_request());
             HostLine::ok(seq, serde_json::json!(ApprovalReply { allowed }))
         }
+        // The half of RFC-0020 the boundary was missing. The protocol defined
+        // `consult`, the guest sent it, and this end answered *the run called
+        // `consult`, which this host does not implement* — so a contained run
+        // could not ask a person anything, while an uncontained one could. A
+        // boundary that changes what a program can do is not a boundary, it is a
+        // different runtime.
+        CALL_CONSULT => {
+            let call: ConsultCall = match serde_json::from_value(params.clone()) {
+                Ok(call) => call,
+                Err(error) => {
+                    return HostLine::err(
+                        seq,
+                        WireError::protocol(format!("the `consult` call was malformed: {error}")),
+                    )
+                }
+            };
+            match ask(supervisor.approval, &call.into_request()) {
+                Ok(answer) => HostLine::ok(seq, serde_json::json!(ConsultReply { answer })),
+                // Reported rather than defaulted. A gate has a safe side and a
+                // question does not, so there is nothing to fall back to and the
+                // run inside is told exactly that.
+                Err(error) => HostLine::err(seq, WireError::protocol(error.to_string())),
+            }
+        }
         other => HostLine::err(
             seq,
             WireError::protocol(format!(
@@ -440,6 +466,26 @@ fn decide(approval: &mut HumanChannel, request: &ApprovalRequest) -> bool {
         HumanChannel::AssumeYes => true,
         HumanChannel::Deny => false,
         HumanChannel::Ask(handler) => handler.approve(request),
+    }
+}
+
+/// A question, put to whoever is outside the boundary.
+///
+/// The three cases are the interpreter's own, kept rather than reinvented: a
+/// channel answers, `--yes` cannot (it approves a gate, and there is no safe side
+/// to guess at a question), and a denied run has nobody to ask. The boundary must
+/// not change which of them applies — see `interp.rs`, which states the same three
+/// with the same words.
+fn ask(approval: &mut HumanChannel, request: &ConsultRequest) -> Result<String, ConsultError> {
+    match approval {
+        HumanChannel::Ask(handler) => handler.consult(request),
+        HumanChannel::AssumeYes => Err(ConsultError::NoChannel(
+            "`--yes` approves a gate and cannot answer a question; there is no safe side to guess"
+                .to_string(),
+        )),
+        HumanChannel::Deny => Err(ConsultError::NoChannel(
+            "this run has no channel to a person".to_string(),
+        )),
     }
 }
 
@@ -567,7 +613,7 @@ fn describe(command: &Command) -> String {
 mod tests {
     use super::*;
     use ingot_runtime::provider::{CompletionRequest, CompletionResponse, ProviderError, Usage};
-    use ingot_runtime::{Artifact, ScriptedApprovals};
+    use ingot_runtime::{Artifact, ScriptedAnswers, ScriptedApprovals};
     use serde_json::json;
 
     struct Fixed(&'static str);
@@ -903,6 +949,43 @@ mod tests {
             assert!(
                 written.contains(&format!("\"allowed\":{expected}")),
                 "{mode:?} should answer {expected}:\n{written}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_question_is_answered_here_and_not_in_there() {
+        // The regression that mattered: this arm was missing, so a contained run
+        // that reached a `consult` was told the host does not implement it — and
+        // an artifact that ran uncontained could not run contained, which is the
+        // one thing a boundary must never change.
+        let question = serde_json::to_string(&GuestLine::call(
+            2,
+            CALL_CONSULT,
+            json!({"node": "n0", "index": 0, "question": "Which framing?",
+                   "choices": ["technical", "narrative"]}),
+        ))
+        .unwrap();
+
+        let (_, written, _) = exchange(
+            &[hello(1), question.clone(), finished()],
+            &mut Fixed("x"),
+            &mut HumanChannel::Ask(Box::new(ScriptedAnswers::new(vec!["narrative"]))),
+        );
+        assert!(written.contains(r#""answer":"narrative""#), "{written}");
+
+        // And the two channels that cannot answer one say so rather than
+        // inventing a value. `--yes` is the interesting half: it approves every
+        // gate and still has no answer to give here.
+        for mut mode in [HumanChannel::AssumeYes, HumanChannel::Deny] {
+            let (_, written, _) = exchange(
+                &[hello(1), question.clone(), finished()],
+                &mut Fixed("x"),
+                &mut mode,
+            );
+            assert!(
+                written.contains(r#""err""#) && !written.contains(r#""answer":"#),
+                "{mode:?} must refuse rather than answer:\n{written}"
             );
         }
     }

@@ -31,6 +31,9 @@ async function load() {
         state.run = await api("run?" + q({ path: state.path, id: state.runId }));
       }
       if (state.tab === "conversation") await refreshChat();
+      // The boundary tab is the only one that asks about the image, because
+      // asking means asking a container runtime, and that is a subprocess.
+      if (state.tab === "boundary") state.image = await api("image");
       startPollingIfLive();
     }
   } catch (error) {
@@ -73,9 +76,12 @@ async function refreshChat() {
 function startPollingIfLive() {
   const runs = state.runs || [];
   const reading = state.tab === "conversation" ? state.chat : state.runId ? state.run : null;
+  const building = state.tab === "boundary" && state.image && state.image.job &&
+    state.image.job.state === "running";
   const live = (state.launches || []).some((launch) => launch.state === "running") ||
     (reading && reading.state === "unfinished") ||
-    (runs.length > 0 && runs[0].state === "unfinished");
+    (runs.length > 0 && runs[0].state === "unfinished") ||
+    building;
   if (!live) return;
   state.poll = setTimeout(async () => {
     if (document.hidden) return startPollingIfLive();
@@ -85,6 +91,7 @@ function startPollingIfLive() {
         state.run = await api("run?" + q({ path: state.path, id: state.runId }));
       }
       if (state.tab === "conversation") await refreshChat();
+      if (state.tab === "boundary") state.image = await api("image");
       render();
       startPollingIfLive();
     } catch (_) { /* the studio went away; stop quietly */ }

@@ -33,6 +33,7 @@ function startPanel() {
     provider: "auto",
     cassette: "",
     inputs: {},
+    record: "",
     contained: false,
     sandbox: false,
   };
@@ -75,6 +76,22 @@ function startPanel() {
     cassetteBox,
   ]);
 
+  // Recording, which is the other direction from replaying and not its opposite:
+  // this is how a run somebody watched becomes a test that needs no key. Offered
+  // here rather than only in a terminal, because the moment you want it is the
+  // moment after a run went well.
+  const recordBox = el("input", {
+    class: "text",
+    placeholder: "tests/cassettes/example.json",
+    spellcheck: "false",
+    oninput: (event) => { chosen.record = event.target.value; },
+  });
+  const recordRow = el("label", { style: "display:flex;gap:10px;align-items:center;margin-top:12px" }, [
+    el("span", { class: "sub", style: "flex:0 0 132px", text: "record to" }),
+    recordBox,
+    el("span", { class: "sub", text: "optional" }),
+  ]);
+
   // The two boundaries, offered where the run is started rather than only
   // described on the tab that draws them.
   //
@@ -86,6 +103,11 @@ function startPanel() {
     const sandbox = sandboxReadiness(state.detail);
     const signature = JSON.stringify([contained, sandbox]);
     if (boundaries.dataset.signature === signature) return;
+    // A recording of a contained run is refused by the run itself: the model
+    // exchanges happen out here and the tool results happen in there, so the
+    // cassette would claim to be of a contained run and not be one. Saying it
+    // here saves somebody a refusal they cannot see coming.
+    recordRow.style.display = chosen.contained || chosen.sandbox ? "none" : "flex";
     boundaries.dataset.signature = signature;
     boundaries.textContent = "";
 
@@ -98,7 +120,13 @@ function startPanel() {
       "Put the agent in a container",
       "It runs behind a boundary built from its own policy. The model call and any question it asks you cross it; nothing else does.",
       contained,
-      (on) => { chosen.contained = on; }));
+      (on) => {
+        chosen.contained = on;
+        // Live, because the checkbox is what somebody just touched. The line in
+        // `drawBoundaries` sets the same thing when the panel is built or the
+        // machine's answer changes.
+        recordRow.style.display = on || chosen.sandbox ? "none" : "flex";
+      }));
     // A switch for something this project does not have would be a puzzle
     // rather than an option, so a project with no tool server simply has one
     // switch.
@@ -107,7 +135,10 @@ function startPanel() {
         "Put each tool server in its own container",
         "Every declared server runs behind a boundary derived from the policy of the agent that calls it.",
         sandbox,
-        (on) => { chosen.sandbox = on; }));
+        (on) => {
+          chosen.sandbox = on;
+          recordRow.style.display = chosen.contained || on ? "none" : "flex";
+        }));
     }
   }
 
@@ -117,6 +148,7 @@ function startPanel() {
     try {
       const body = { provider: chosen.provider, inputs: chosen.inputs };
       if (chosen.agent) body.agent = chosen.agent;
+      if (chosen.record.trim() && !chosen.contained && !chosen.sandbox) body.record = chosen.record.trim();
       if (chosen.contained) body.contained = true;
       if (chosen.sandbox) body.sandbox = true;
       if (chosen.provider === "replay" && chosen.cassette) body.cassette = chosen.cassette;
@@ -146,6 +178,7 @@ function startPanel() {
         providerPicker,
       ]),
       cassetteRow,
+      recordRow,
       inputsBox,
       boundaries,
       el("div", { style: "margin-top:14px;display:flex;gap:10px;align-items:center" }, [
