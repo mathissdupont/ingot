@@ -17,7 +17,7 @@ function renderProjects(inner) {
       input.value = "";
       state.error = null;
     } catch (error) {
-      state.error = String(error.message || error);
+      failed("That path was not added", error);
     }
     render();
   }
@@ -46,7 +46,7 @@ function renderProjects(inner) {
         try {
           state.projects = (await api("projects?" + q({ path: project.path }), { method: "DELETE" })).projects;
           if (state.path === project.path) { state.view = "projects"; state.path = null; }
-        } catch (error) { state.error = String(error.message || error); }
+        } catch (error) { failed("That bookmark was not removed", error); }
         render();
       },
     }),

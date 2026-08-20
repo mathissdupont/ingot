@@ -18,6 +18,17 @@ const BLOCK_LABEL = {
   unknown: "not drawn",
 };
 
+// A block by id, at any depth: a container's steps are its children rather than
+// siblings, so an edge may name one the top level does not hold.
+function findBlock(blocks, id) {
+  for (const block of blocks || []) {
+    if (block.id === id) return block;
+    const inside = findBlock(block.children, id);
+    if (inside) return inside;
+  }
+  return null;
+}
+
 /// The lines an edit touches, before and after.
 ///
 /// Shown for every gesture, because applying an edit without showing it is the
@@ -56,7 +67,7 @@ async function applyProposed() {
     // The file changed, so everything read from it is stale.
     state.detail = null;
   } catch (error) {
-    state.error = String(error.message || error);
+    failed("That edit was not applied", error);
   }
   render();
 }
@@ -143,16 +154,35 @@ function renderCanvas(inner) {
     el("div", { style: "padding:12px 16px" }, drawn.blocks.map((block) => renderBlock(source, block)))));
 
   if (drawn.edges.length) {
+    // `b0 → b1   framing` was accurate and told nobody anything. The block ids
+    // are this drawing's own bookkeeping; what a person is reading is which step
+    // set a name and which step reads it.
+    const named = (id) => {
+      const block = findBlock(drawn.blocks, id);
+      return block ? (BLOCK_LABEL[block.kind] || block.kind) : id;
+    };
     inner.appendChild(card("What reads what",
       el("div", { class: "edges", style: "padding:12px 16px" },
-        drawn.edges.map((edge) => el("div", { text: edge.from + " → " + edge.to + "   " + edge.name })))));
+        drawn.edges.map((edge) => el("div", {}, [
+          el("code", { text: edge.name }),
+          " — set by ",
+          el("b", { text: named(edge.from) }),
+          ", read by ",
+          el("b", { text: named(edge.to) }),
+        ])))));
   }
 
   if (drawn.policy.length) {
     inner.appendChild(card("Policy",
       el("div", { style: "padding:12px 16px" }, drawn.policy.map((rule) =>
         el("div", { class: "block" }, [
-          el("div", { class: "what", text: rule.subject }),
+          // The subject as the source spells it, because this panel edits the
+          // source — with what it means beside it, because `filesystem_read` is
+          // not a sentence.
+          el("div", { class: "what" }, [
+            el("code", { text: rule.subject }),
+            el("span", { class: "sub", text: "  " + effectWords(rule.subject) }),
+          ]),
           ...rule.leaves.filter((leaf) => leaf.role === "action").map((leaf) => leafField(source, leaf)),
         ])))));
   }

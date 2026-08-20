@@ -129,7 +129,7 @@ function startPanel() {
       state.launches = answer.launches;
       state.error = null;
     } catch (error) {
-      state.error = String(error.message || error);
+      failed("The run did not start", error);
     }
     button.disabled = false;
     render();

@@ -36,4 +36,13 @@ async function api(route, options) {
   return parsed;
 }
 
+// A refusal with the thing that failed in front of it.
+//
+// The server answers with its context chain and no subject: `reading the answer:
+// expected value at line 1 column 1` never says that a run refused an answer.
+// Every caller knows what it was trying to do, so every caller says it.
+function failed(doing, error) {
+  state.error = doing + " — " + String((error && error.message) || error);
+}
+
 const q = (params) => new URLSearchParams(params).toString();

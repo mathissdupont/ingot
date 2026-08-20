@@ -511,6 +511,21 @@ mod tests {
                     PAGE.contains(contents.trim_end()),
                     "`{relative}` is not in the page: add it to `PAGE`"
                 );
+                // A control character in an asset is not a style question. One
+                // reached `waiting.js` as a separator between two strings and
+                // survived review, because git treats a file holding a NUL as
+                // binary and shows no diff for it — and it was then served
+                // inside the page. Tab and newline are the only ones a source
+                // file has any business carrying.
+                if let Some(bad) = contents
+                    .chars()
+                    .find(|c| c.is_control() && *c != '\n' && *c != '\t' && *c != '\r')
+                {
+                    panic!(
+                        "`{relative}` holds the control character {:?}; a source file may not",
+                        bad
+                    );
+                }
                 checked += 1;
             }
         }

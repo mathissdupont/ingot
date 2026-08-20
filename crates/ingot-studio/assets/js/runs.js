@@ -6,8 +6,8 @@ function renderLaunches(inner) {
     el("span", { class: "stripe " + LAUNCH_CHIP[launch.state] }),
     el("div", { class: "grow" }, [
       el("div", {}, [
-        el("b", { text: launch.agent || "(default agent)" }),
-        el("span", { class: "sub", text: "  pid " + launch.pid + "  ·  " + launch.provider + "  ·  " + when(launch.startedUnix) }),
+        el("b", { text: launch.agent ? splitName(launch.agent).short : "the agent it declares" }),
+        el("span", { class: "sub", text: "  process " + launch.pid + "  ·  " + launch.provider + "  ·  " + when(launch.startedUnix) }),
       ]),
       launch.state === "failed"
         ? el("div", { class: "fix", text: "exit " + launch.exitCode + " — the log below is what it said" })
@@ -37,7 +37,7 @@ function renderLaunches(inner) {
               const answer = await api("launch?" + q({ path: state.path, pid: launch.pid }), { method: "DELETE" });
               state.runs = answer.runs;
               state.launches = answer.launches;
-            } catch (error) { state.error = String(error.message || error); }
+            } catch (error) { failed("That run was not stopped", error); }
             render();
           },
         })
@@ -55,7 +55,7 @@ function renderLaunches(inner) {
               const answer = await api("launches?" + q({ path: state.path }), { method: "POST" });
               state.runs = answer.runs;
               state.launches = answer.launches;
-            } catch (error) { state.error = String(error.message || error); }
+            } catch (error) { failed("The finished runs were not cleared", error); }
             render();
           },
         })
@@ -74,7 +74,10 @@ function renderRuns(inner) {
   const items = state.runs.map((run) => el("div", { class: "row click", onclick: () => show("project", { tab: "runs", runId: run.id, run: null }) }, [
     el("span", { class: "stripe " + STATE_CHIP[run.state] }),
     el("div", { class: "grow" }, [
-      el("div", {}, [el("b", { text: run.agent }), el("span", { class: "sub", text: "  " + when(run.startedUnix) })]),
+      el("div", {}, [
+        el("b", { text: splitName(run.agent).short }),
+        el("span", { class: "sub", text: "  " + when(run.startedUnix) }),
+      ]),
       el("div", { class: "sub", text: [run.provider, run.contained ? "contained" : null, lasted(run)].filter(Boolean).join("  ·  ") }),
       run.reason ? el("div", { class: "fix", text: run.reason }) : null,
     ]),
@@ -105,7 +108,7 @@ function renderRun(inner) {
         try {
           await api("run?" + q({ path: state.path, id: run.id }), { method: "DELETE" });
           show("project", { tab: "runs", runId: null, run: null, runs: null });
-        } catch (error) { state.error = String(error.message || error); render(); }
+        } catch (error) { failed("That record was not deleted", error); render(); }
       },
     }),
   ]));
@@ -113,6 +116,9 @@ function renderRun(inner) {
   inner.appendChild(card("Run",
     el("div", { class: "body" }, [
       el("dl", { class: "facts" }, [
+        // The facts list keeps the qualified name: it is the one place on the
+        // page that answers "which agent exactly", and a package is half of that
+        // answer.
         el("dt", { text: "agent" }), el("dd", { text: run.agent }),
         el("dt", { text: "provider" }), el("dd", { text: run.provider }),
         el("dt", { text: "started" }), el("dd", { text: when(run.startedUnix) }),

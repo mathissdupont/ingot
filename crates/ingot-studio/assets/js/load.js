@@ -4,7 +4,7 @@ async function refreshProjects() {
   try {
     state.projects = (await api("projects")).projects;
   } catch (error) {
-    state.error = String(error.message || error);
+    failed("The project list could not be read", error);
   }
   render();
 }
@@ -34,7 +34,7 @@ async function load() {
       startPollingIfLive();
     }
   } catch (error) {
-    state.error = String(error.message || error);
+    failed("This project could not be read", error);
   }
   render();
 }
