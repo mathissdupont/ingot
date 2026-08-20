@@ -55,6 +55,7 @@ to you*.
 | [GAP-044](#gap-044) | A program cannot say what to do when something fails | Absent | RFC-0022 built it for one attempt; a general handler closes it |
 | [GAP-045](#gap-045) | A fallback cannot be written for `markdown`, `json`, `file` or a record | Refused | a literal for those, or a narrowing rule with its own argument |
 | [GAP-046](#gap-046) | A model call that returned nothing cannot be recorded | Absent | an error on a recorded interaction, at a new cassette version |
+| [GAP-047](#gap-047) | A question's `choices` cannot be computed, so an agent cannot offer options it worked out | Refused | a way to state the answer space without listing it |
 
 ---
 
@@ -1820,3 +1821,82 @@ way to count.
 [GAP-007]: #gap-007
 [GAP-013]: #gap-013
 [GAP-018]: #gap-018
+
+---
+
+### GAP-047
+
+**A question's `choices` cannot be computed, so an agent cannot offer the person
+options it worked out for itself.**
+
+`consult`'s question text may be any string expression, including one a model
+wrote — this compiles today:
+
+```text
+question = ask<string>("What is the one thing you must ask before proceeding?")
+answer = consult(question)
+```
+
+`choices` may not. It is a list of string literals (`ING3015`).
+
+*The stated reason does not survive the question being computable, and that is
+worth saying plainly.* [Language 0.3 §1.2](../specs/language/v0.3.md) gives two
+justifications. The first — that a reviewer can see everything a recording could
+contain before anybody is asked — **does not hold**: the question itself is
+already arbitrary model-authored text that no reviewer sees in advance, so the
+interaction is not reviewable and the answer menu being literal does not make it
+so. The second does hold, and it is the real one: `choices` is not data, it is a
+**constraint on what may come back**, and the runtime enforces it. Ingot states
+constraints in the artifact for the same reason it states `budget` and `policy`
+there — a constraint that can be computed at run time is a hope rather than a
+promise.
+
+So the rule is defensible on the second ground alone. What it is not is
+sufficient.
+
+*How it shows up, and why "write the choices in advance" is not an answer.* The
+shape it refuses is the ordinary one for an agent that does some work and then
+needs a decision: *"these three call sites could carry the change — which?"* The
+options **are** the agent's findings. Nobody can write them in the source,
+because knowing them in advance would mean not needing the agent. An author
+cannot enumerate the questions a coding agent will reach, let alone their menus.
+
+What is left today is a free-text `consult` whose *question* carries the options,
+since the question may be computed:
+
+```text
+question = ask<string>("Name the three candidate call sites as a question.")
+choice = consult(question)
+```
+
+That works, and it gives up exactly what `choices` buys: the studio renders a
+text box instead of buttons, and the runtime no longer guarantees the answer is
+one of the offered ones — so the agent gets whatever was typed and has to
+interpret it, which is the interpretation step `choices` existed to remove.
+
+*Why it is Refused rather than Absent.* The compiler names it, at compile time,
+with the form it wanted — so nobody discovers this during a run.
+
+*What closing it needs.* Not permitting a value where a literal is required:
+that trades the enforced constraint for nothing. The shape worth an RFC states
+the **bound** in the source while the **members** are computed, so the artifact
+still promises something a reviewer can read:
+
+```text
+choice = consult("Which call site?", among: candidates, at_most: 5)
+```
+
+A reviewer then knows the answer is one of at most five strings this run
+produced — weaker than a literal list, and strictly stronger than free text. Three
+questions such an RFC has to answer, and they are the work: what a run does when
+the computed set arrives **empty** (today an empty literal list is refused at
+compile time, and at run time there is nothing to pick from); what the cassette
+digest covers, given the set is part of what determined the answer; and whether
+`at_most` charges against `budget`.
+
+*Found by.* The author, on 2026-08-20, asking how a coding agent would work —
+and then pointing out that the justification above is inconsistent with a
+computable question. Both halves of this entry are his.
+
+*Recorded in.* [Language 0.3 §1.2](../specs/language/v0.3.md),
+[RFC-0020](../rfcs/0020-a-person-in-the-loop.md).
