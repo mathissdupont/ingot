@@ -10,7 +10,7 @@
 //!
 //! Docker has a daemon holding a list. Ingot has no such thing: a project is a
 //! directory, a provider is an environment variable, a run is a process. The
-//! studio keeps exactly two things, and is deliberately awkward about both:
+//! studio keeps exactly three things, and is deliberately awkward about them:
 //!
 //! * **A bookmark file**, holding paths and nothing else. Every fact about a
 //!   project is read from the project when it is asked for, so losing the file
@@ -18,6 +18,8 @@
 //! * **Run records**, written by `ingot run` itself into the project's build
 //!   directory — see [`crate::runs`]. The studio reads them; it does not own
 //!   them, and a project with no studio still has its history.
+//! * **One long-running image-build job**, held only while this studio process
+//!   lives so its bounded output can be polled and the process can be stopped.
 //!
 //! # Nothing is written that a person did not write
 //!
@@ -41,6 +43,7 @@ use ingot_studio::{Answers, Head, Method, Reply, Studio};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use crate::jobs;
 use crate::launch;
 use crate::manifest::{resolve_target, MANIFEST_NAME};
 use crate::runs;
@@ -111,6 +114,9 @@ struct Routes {
     /// The runs this studio started, for as long as it is running. See
     /// [`crate::launch`] for why a launch is not the same thing as a record.
     launcher: launch::Launcher,
+    /// The one long command that is not a run — building the reference image.
+    /// See [`crate::jobs`] for why it is a slot rather than a list.
+    jobs: jobs::Jobs,
 }
 
 impl Answers for Routes {
@@ -138,6 +144,15 @@ impl Answers for Routes {
                 self.run_list(path)
             }),
             (Method::Get, "machine") => machine(),
+            // Creating a project is the one thing the page does that did not
+            // exist before it: everything else it shows is a directory read
+            // twice. It calls the same function `ingot new` calls with no
+            // provider, so the starter it writes is the starter the command
+            // writes.
+            (Method::Post, "create") => create(body),
+            (Method::Get, "image") => self.image_report(),
+            (Method::Post, "image") => self.image_build(),
+            (Method::Delete, "image") => self.image_stop(),
             _ => return Reply::Unknown,
         };
         match result {
@@ -200,6 +215,49 @@ impl Routes {
         };
         self.launcher.stop(&resolve(path), pid)?;
         self.run_list(path)
+    }
+
+    /// What this machine can say about the reference image, plus any build.
+    fn image_report(&self) -> Result<String> {
+        let mut image = crate::image::report();
+        // The canonical path is the one to build from; the readable one is the
+        // one to show. `resolve` is where that difference is explained.
+        image.source = image.source.map(|root| resolve(&root));
+        Ok(serde_json::to_string(&json!({
+            "schemaVersion": STUDIO_SCHEMA_VERSION,
+            "image": image,
+            "job": self.jobs.view(),
+        }))?)
+    }
+
+    /// Start `ingot image build`, in the slot.
+    ///
+    /// Spawned rather than called in this thread, and not for parallelism: a
+    /// build takes minutes and prints as it goes, and a route that ran it inline
+    /// would hold a connection open for all of them with nothing to show until
+    /// the end. It is also the only way to stop one.
+    fn image_build(&self) -> Result<String> {
+        let report = crate::image::report();
+        if let Some(problem) = &report.source_problem {
+            bail!("{problem}");
+        }
+        self.jobs.start(
+            "building the image",
+            crate::launch::own_binary()?,
+            vec![
+                "image".into(),
+                "build".into(),
+                "--color".into(),
+                "never".into(),
+            ],
+        )?;
+        self.image_report()
+    }
+
+    /// Stop a build, and answer with what the slot now holds.
+    fn image_stop(&self) -> Result<String> {
+        self.jobs.stop()?;
+        self.image_report()
     }
 
     /// Answer the one gate a run is stopped at.
@@ -354,6 +412,73 @@ fn bookmark(path: &Path, add: bool) -> Result<String> {
     }
     save_bookmarks(&projects)?;
     bookmarked()
+}
+
+/// What the page asked to be created.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CreateRequest {
+    /// The directory to create, absolute.
+    directory: String,
+    /// `brief` or `document-workflow`. Absent means the workflow decides, as it
+    /// does on the command line.
+    #[serde(default)]
+    template: Option<String>,
+    /// What the agent is for, in the person's own words. Used for the
+    /// description and, when no template was named, to choose one.
+    #[serde(default)]
+    workflow: String,
+}
+
+/// Write a starter project, then bookmark it.
+///
+/// The one route that creates something rather than reporting on it, so the
+/// three rules it keeps are worth stating. It writes **only** what
+/// `ingot new --template … ` writes, by calling the same function — a studio that
+/// grew its own starter would be a second answer to "what does a new project
+/// look like". It refuses a relative path, because the page cannot see this
+/// process's working directory and a file appearing somewhere unexpected is the
+/// worst outcome here. And it overwrites nothing: the shared writer refuses a
+/// path that exists, one file at a time.
+///
+/// No model is involved. `ingot new` can author from a workflow with a provider;
+/// that spends money and needs a key, and neither belongs behind a button whose
+/// label is "Create".
+fn create(body: &[u8]) -> Result<String> {
+    let request: CreateRequest =
+        serde_json::from_slice(body).context("reading the request to create a project")?;
+
+    let directory = PathBuf::from(request.directory.trim());
+    if directory.as_os_str().is_empty() {
+        bail!("name the directory to create");
+    }
+    if directory.is_relative() {
+        bail!(
+            "`{}` is relative; name the whole path, because this page cannot see \
+             which directory the studio was started in",
+            directory.display()
+        );
+    }
+
+    let workflow = request.workflow.trim();
+    let template = match request.template.as_deref() {
+        Some("brief") => crate::StarterTemplate::Brief,
+        Some("document-workflow") => crate::StarterTemplate::DocumentWorkflow,
+        Some(other) => bail!("`{other}` is not a template; try `brief` or `document-workflow`"),
+        None => crate::StarterTemplate::for_workflow(workflow),
+    };
+
+    let name = crate::project_name_for_dir(&directory);
+    let description = if workflow.is_empty() {
+        "Created from the studio".to_string()
+    } else {
+        format!("Authored from workflow: {workflow}")
+    };
+    crate::create_starter_project(&directory, &name, template, &description)?;
+
+    // Bookmarked in the same request, because a project the page just created
+    // and cannot find is a worse outcome than one it never created.
+    bookmark(&directory, true)
 }
 
 /// An absolute path a person would recognise as theirs.

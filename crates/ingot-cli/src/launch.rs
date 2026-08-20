@@ -93,6 +93,13 @@ pub struct StartRequest {
     /// A cassette to replay, relative to the project.
     #[serde(default)]
     pub cassette: Option<String>,
+    /// Where to write a cassette *of* this run, relative to the project.
+    ///
+    /// The other direction from `cassette`, and not its opposite: a run either
+    /// replays somebody's recording or makes one, and `--record` is what turns a
+    /// run somebody watched into a test that needs no key.
+    #[serde(default)]
+    pub record: Option<String>,
     /// Declared input name to value.
     #[serde(default)]
     pub inputs: std::collections::BTreeMap<String, String>,
@@ -249,14 +256,17 @@ struct Launch {
 }
 
 /// A bounded copy of one stream.
+///
+/// Shared with [`crate::jobs`], which holds a child of a different kind and has
+/// the same problem: unbounded output held in memory for a page to poll.
 #[derive(Default)]
-struct Capture {
-    text: String,
-    truncated: bool,
+pub struct Capture {
+    pub text: String,
+    pub truncated: bool,
 }
 
 impl Capture {
-    fn push(&mut self, chunk: &str) {
+    pub fn push(&mut self, chunk: &str) {
         if self.text.len() >= MAX_CAPTURE {
             self.truncated = true;
             return;
@@ -520,6 +530,18 @@ fn arguments(project: &Path, request: &StartRequest) -> Result<Vec<std::ffi::OsS
         );
     }
 
+    // Contradictory modes are rejected before resolving either path. Otherwise
+    // a missing replay file can hide the more useful fact that the requested
+    // run could never have started even if that file existed.
+    if request.record.is_some() && request.provider == "replay" {
+        bail!("a replayed run has nothing of its own to record");
+    }
+    if request.record.is_some() && (request.contained || request.sandbox) {
+        bail!(
+            "a supervised run cannot be recorded; record without a boundary, or replay a cassette into one"
+        );
+    }
+
     let mut argv: Vec<std::ffi::OsString> = vec![
         "run".into(),
         project.as_os_str().to_os_string(),
@@ -543,6 +565,12 @@ fn arguments(project: &Path, request: &StartRequest) -> Result<Vec<std::ffi::OsS
         argv.push(path.into_os_string());
     } else if request.provider == "replay" {
         bail!("replaying needs a cassette; name one relative to the project");
+    }
+
+    if let Some(record) = &request.record {
+        let path = recording_inside(project, record)?;
+        argv.push("--record".into());
+        argv.push(path.into_os_string());
     }
 
     for (name, value) in &request.inputs {
@@ -579,7 +607,7 @@ fn arguments(project: &Path, request: &StartRequest) -> Result<Vec<std::ffi::OsS
     Ok(argv)
 }
 
-fn own_binary() -> Result<PathBuf> {
+pub fn own_binary() -> Result<PathBuf> {
     std::env::current_exe().context("finding this ingot binary")
 }
 
@@ -605,11 +633,88 @@ fn cassette_inside(project: &Path, cassette: &str) -> Result<PathBuf> {
     Ok(resolved)
 }
 
+/// Where a recording will be written, checked to be inside the project.
+///
+/// [`cassette_inside`] cannot serve this: it canonicalises the file, and the
+/// point of a recording is that the file is not there yet — nor, often, is the
+/// directory, which the cassette writer creates. So the path is first resolved
+/// lexically against the canonical root. Its deepest existing ancestor is then
+/// canonicalised too, so a symlink or junction cannot turn an apparently local
+/// recording into a write outside the project.
+///
+/// `..` is followed rather than rejected outright, and then checked: `a/../b.json`
+/// is a fine way to say `b.json`, while `../b.json` is a page writing outside the
+/// project it named.
+fn recording_inside(project: &Path, name: &str) -> Result<PathBuf> {
+    use std::path::Component;
+
+    let root = project
+        .canonicalize()
+        .with_context(|| format!("resolving {}", project.display()))?;
+    let mut path = root.clone();
+    for component in Path::new(name).components() {
+        match component {
+            Component::Normal(part) => path.push(part),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                path.pop();
+            }
+            // A prefix or a root means an absolute path arrived where a relative
+            // one was asked for, and guessing which was meant is not this end's
+            // business.
+            Component::Prefix(_) | Component::RootDir => {
+                bail!("`{name}` is absolute; a recording is named relative to the project")
+            }
+        }
+        if !path.starts_with(&root) {
+            bail!("`{name}` leaves the project; a recording is written inside it");
+        }
+    }
+    if path == root {
+        bail!("`{name}` names the project directory rather than a file in it");
+    }
+
+    // Canonicalise as much of the destination as exists. `exists()` cannot be
+    // used here: it is false for a dangling symlink, exactly the case that must
+    // be refused rather than followed when the cassette is written.
+    let mut ancestor = path;
+    let mut missing = Vec::new();
+    loop {
+        match std::fs::symlink_metadata(&ancestor) {
+            Ok(_) => break,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let part = ancestor
+                    .file_name()
+                    .ok_or_else(|| anyhow::anyhow!("`{name}` has no writable file name"))?
+                    .to_os_string();
+                missing.push(part);
+                ancestor.pop();
+            }
+            Err(error) => {
+                return Err(error).with_context(|| format!("inspecting {}", ancestor.display()))
+            }
+        }
+    }
+    let mut resolved = ancestor
+        .canonicalize()
+        .with_context(|| format!("resolving {}", ancestor.display()))?;
+    if !resolved.starts_with(&root) {
+        bail!(
+            "{} resolves outside the project; a recording is written inside it",
+            ancestor.display()
+        );
+    }
+    for part in missing.into_iter().rev() {
+        resolved.push(part);
+    }
+    Ok(resolved)
+}
+
 /// Copy one child stream into a bounded buffer, on its own thread.
 ///
 /// A child whose pipe fills up stops, so both streams are read whether or not
 /// anybody is looking at them yet.
-fn drain<R: Read + Send + 'static>(stream: Option<R>, into: Arc<Mutex<Capture>>) {
+pub fn drain<R: Read + Send + 'static>(stream: Option<R>, into: Arc<Mutex<Capture>>) {
     let Some(mut stream) = stream else { return };
     std::thread::spawn(move || {
         let mut buffer = [0u8; 8192];
@@ -728,7 +833,7 @@ fn gate_event(line: &str) -> Option<Event> {
     }
 }
 
-fn now() -> u64 {
+pub fn now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|since| since.as_secs())
@@ -745,6 +850,7 @@ mod tests {
             provider: provider.to_string(),
             cassette: None,
             inputs: Default::default(),
+            record: None,
             contained: false,
             sandbox: false,
         }
@@ -772,6 +878,70 @@ mod tests {
             argv.windows(2).any(|pair| pair == ["--approvals", "stdin"]),
             "{argv:?}"
         );
+    }
+
+    #[test]
+    fn a_recording_is_written_inside_the_project_and_nowhere_else() {
+        let root = std::env::temp_dir();
+        assert!(recording_inside(&root, "tests/cassettes/new.json").is_ok());
+        // The directory need not exist: the cassette writer creates it, and a
+        // studio that demanded it first would refuse the ordinary case.
+        assert!(recording_inside(&root, "a/b/c/new.json").is_ok());
+        assert!(recording_inside(&root, "a/../new.json").is_ok());
+
+        for hostile in ["../escape.json", "a/../../escape.json", "/etc/passwd"] {
+            assert!(
+                recording_inside(&root, hostile).is_err(),
+                "`{hostile}` must not be a recording path"
+            );
+        }
+        assert!(
+            recording_inside(&root, ".").is_err(),
+            "a directory is not a file"
+        );
+    }
+
+    #[test]
+    fn a_replayed_run_cannot_be_asked_to_record_itself() {
+        // Both flags together describe a run that reads its own answers back:
+        // the child refuses it too, and saying so here saves a process.
+        let mut start = request("replay");
+        start.cassette = Some("tests/cassettes/example.json".into());
+        start.record = Some("tests/cassettes/other.json".into());
+        let error = arguments(Path::new("."), &start).expect_err("a replayed recording");
+        assert!(error.to_string().contains("nothing of its own"), "{error}");
+    }
+
+    #[test]
+    fn a_supervised_run_cannot_be_asked_to_record_itself() {
+        for boundary in ["contained", "sandbox"] {
+            let mut start = request("auto");
+            start.record = Some("tests/cassettes/new.json".into());
+            start.contained = boundary == "contained";
+            start.sandbox = boundary == "sandbox";
+            let error = arguments(Path::new("."), &start).expect_err("a supervised recording");
+            assert!(error.to_string().contains("cannot be recorded"), "{error}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_recording_cannot_escape_through_a_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let base =
+            std::env::temp_dir().join(format!("ingot-recording-path-{}", std::process::id()));
+        let project = base.join("project");
+        let outside = base.join("outside");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        symlink(&outside, project.join("elsewhere")).unwrap();
+
+        let error = recording_inside(&project, "elsewhere/cassette.json")
+            .expect_err("the symlink leaves the project");
+        assert!(error.to_string().contains("outside the project"), "{error}");
+
+        std::fs::remove_dir_all(&base).unwrap();
     }
 
     #[test]

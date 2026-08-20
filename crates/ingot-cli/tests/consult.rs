@@ -252,6 +252,29 @@ fn a_recorded_answer_replays_with_nobody_to_ask() {
 }
 
 #[test]
+fn a_recorded_answer_replays_under_ingot_test() {
+    // The claim RFC-0020 makes about CI, tested against the command that *is*
+    // CI. It was previously only tested through `ingot run --provider replay`,
+    // and `ingot test` denied every question — so an artifact holding a
+    // `consult` had a cassette it could not be tested with.
+    let dir = project("consult-under-test");
+    let cassettes = dir.path().join("tests").join("cassettes");
+    std::fs::create_dir_all(&cassettes).expect("a cassette directory");
+    let recorded = record(dir.path(), "executive", "# The harbour, for an executive\n");
+    std::fs::rename(&recorded, cassettes.join("recorded.json")).expect("moving the cassette");
+
+    let output = run_env(&["test", &dir.path().display().to_string()], &[]);
+
+    assert_eq!(code(&output), EXIT_OK, "{}", stderr(&output));
+    assert!(
+        stdout(&output).contains("1 passed") || stderr(&output).contains("1 passed"),
+        "stdout: {}\nstderr: {}",
+        stdout(&output),
+        stderr(&output)
+    );
+}
+
+#[test]
 fn the_recording_keeps_a_persons_answer_in_its_own_list() {
     // The single most important thing to know about a recorded run is which
     // answers a machine produced and which a person did. One list could not

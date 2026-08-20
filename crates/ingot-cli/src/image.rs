@@ -13,8 +13,77 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{bail, Context, Result};
+use serde::Serialize;
 
 const REFERENCE_DOCKERFILE: &str = "tools/ingot.Dockerfile";
+
+/// Everything that can be said about the reference image without building it.
+///
+/// One report rather than four questions, because they are only useful together:
+/// a missing image and a missing runtime are the same wall from the outside, and
+/// the third fact — whether anything on this machine could build one — is the one
+/// nobody expects. **A released binary has no source checkout**, and
+/// `ingot image build` needs one; so for most people the honest answer to "how do
+/// I get the image" is not a command but "clone the repository at this version",
+/// until [GAP-029](../../../docs/gaps.md#gap-029) closes and an image can be
+/// acquired with a signature.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageReport {
+    /// The tag a contained run selects for this binary.
+    pub image: String,
+    /// The runtime that answered, as `docker 28.0.1`.
+    pub runtime: Option<String>,
+    /// Why nothing answered, in the runtime layer's own words.
+    pub runtime_problem: Option<String>,
+    /// Whether the image is present locally. `None` when nothing could be asked,
+    /// which is not the same as absent and must not be shown as one.
+    pub present: Option<bool>,
+    /// The source checkout a build would use.
+    ///
+    /// Canonical, which on Windows means it may arrive with a `\?\` prefix. The
+    /// studio replaces it with the form a person recognises before serving it —
+    /// see `studio::resolve`, which explains why.
+    pub source: Option<PathBuf>,
+    /// Why there is none to build from.
+    pub source_problem: Option<String>,
+}
+
+/// Ask this machine the three questions, without changing anything.
+pub fn report() -> ImageReport {
+    let image = reference_image();
+    let (runtime, runtime_problem, present) = match ingot_sandbox::detect() {
+        Ok(runtime) => {
+            let present = ingot_sandbox::image_exists(&runtime, &image).ok();
+            (
+                Some(format!("{} {}", runtime.program, runtime.version)),
+                None,
+                present,
+            )
+        }
+        Err(error) => (None, Some(error.to_string()), None),
+    };
+
+    // `ensure_matching_version` as well as finding it: a checkout of a different
+    // version is not a source this binary can build from, and finding out after
+    // a build has started is finding out expensively.
+    let (source, source_problem) = match reference_source(None) {
+        Ok(root) => match ensure_matching_version(&root) {
+            Ok(()) => (Some(readable(&root)), None),
+            Err(error) => (None, Some(format!("{error:#}"))),
+        },
+        Err(error) => (None, Some(format!("{error:#}"))),
+    };
+
+    ImageReport {
+        image,
+        runtime,
+        runtime_problem,
+        present,
+        source,
+        source_problem,
+    }
+}
 
 /// The local image selected when a contained run has no deliberate override.
 pub fn reference_image() -> String {
@@ -30,7 +99,7 @@ pub fn build(source: Option<&Path>) -> Result<u8> {
     let image = reference_image();
     eprintln!(
         "building {image} from {} with {} {}",
-        root.display(),
+        readable(&root).display(),
         runtime.program,
         runtime.version
     );
@@ -172,6 +241,24 @@ fn validate_source(path: &Path) -> Result<PathBuf> {
         );
     }
     Ok(root)
+}
+
+/// A canonical path in the form a person recognises.
+///
+/// Windows canonicalisation returns a verbatim path — `\?\C:\…` — which is the
+/// right thing to hand a program and the wrong thing to put in front of somebody.
+/// The studio keeps the same rule for the paths it serves; see `studio::resolve`,
+/// which explains it at length.
+fn readable(path: &Path) -> PathBuf {
+    if cfg!(windows) {
+        let text = path.display().to_string();
+        if let Some(rest) = text.strip_prefix(r"\?\") {
+            if rest.as_bytes().get(1) == Some(&b':') {
+                return PathBuf::from(rest);
+            }
+        }
+    }
+    path.to_path_buf()
 }
 
 fn is_reference_source(path: &Path) -> bool {

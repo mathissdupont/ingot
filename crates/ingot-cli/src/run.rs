@@ -1902,6 +1902,14 @@ pub fn test(compilation: &Compilation, config: &TestConfig) -> Result<u8> {
         // repeatable thing `ingot test` promises, and a cassette with no tool
         // calls in it is not evidence that a tool-using agent works.
         let recorded_tools = cassette.tool_calls.clone();
+        // A person's recorded answers, served the way the model's and the tools'
+        // are. Without this `ingot test` denied every question and an artifact
+        // holding a `consult` could not be tested at all — while
+        // `ingot run --provider replay` replayed the same cassette happily.
+        // [RFC-0020](../../../rfcs/0020-a-person-in-the-loop.md) settled which of
+        // those two is right: *how does an artifact containing a `consult` run in
+        // CI at all? It replays.* This is the command that is CI.
+        let recorded_answers = cassette.consultations.clone();
         let mut provider = ReplayProvider::new(cassette);
         let mut tools = ReplayTools::new(recorded_tools);
         let mut sink = ingot_runtime::CollectingSink::default();
@@ -1914,7 +1922,14 @@ pub fn test(compilation: &Compilation, config: &TestConfig) -> Result<u8> {
             &mut sink,
             RunOptions {
                 inputs,
-                approval: HumanChannel::Deny,
+                // Strict, so an edited question fails the test rather than
+                // reusing the answer somebody gave to a different one — which is
+                // the whole reason a consultation carries a digest. Gates are
+                // approved rather than denied, as they are on any replay: the
+                // effect happened once already, under somebody who said yes, and
+                // what a replayed tool call returns comes from the recording
+                // rather than from the tool.
+                approval: HumanChannel::Ask(Box::new(ReplayInterlocutor::new(recorded_answers))),
                 max_steps: 1_000,
                 // No store. A test is offline and repeatable, and a run that
                 // started from whatever a previous run happened to leave on

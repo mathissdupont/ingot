@@ -30,6 +30,10 @@ const state = {
   // The one part of that panel that must follow the machine rather than the
   // person: whether a boundary can be raised right now.
   formBoundaries: null,
+  // The panel that writes a new project, kept alive for the same reason.
+  createForm: null,
+  // What this machine can say about the reference image, and any build going.
+  image: null,
   // The same rule for the box a question is answered in: as long as the run is
   // waiting at one question, that is one live node. A rebuilt one loses a
   // half-typed answer every poll.

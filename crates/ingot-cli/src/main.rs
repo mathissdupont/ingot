@@ -24,6 +24,7 @@ mod dev;
 mod diff;
 mod doctor;
 mod image;
+mod jobs;
 mod launch;
 mod manifest;
 mod memory;

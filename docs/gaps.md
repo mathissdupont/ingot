@@ -109,6 +109,16 @@ one is an error naming `ingot image build`, and never a pull and never a host-ru
 fallback. Getting an image onto a machine is therefore a step the operator takes
 deliberately, with whatever tool they already trust.
 
+*And the sharper half, stated plainly since the installer landed.* `ingot image
+build` needs an **Ingot source checkout** — `tools/ingot.Dockerfile` beside a
+`Cargo.toml` whose workspace version matches the binary exactly. Anybody who
+installed Ingot from a release archive, `cargo install` or `cargo binstall` has no
+such checkout, so for them a contained run is not one command away: it is a clone
+of this repository at this tag away. The studio says so where it would otherwise
+offer a Build button, because a button most people cannot use with no explanation
+for the rest is worse than none. This is not a second gap — it is what "acquisition
+stays manual" costs, said in the form the person paying it experiences.
+
 *Why not yet.* A signature needs a trust root, a key custody story and a
 revocation story. None of those are a compiler's to invent, and signature
 verification without a trust root is theatre — it would look like a guarantee

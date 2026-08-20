@@ -544,17 +544,69 @@ The Boundary tab leads with the agent's own boundary **always**, not only when
 there is no tool-server plan to show. Somebody reading a plan is the person most
 likely to assume it covers the agent as well.
 
-**The fourth is deliberately not built: the studio does not build the image.**
-`ingot image build` is a long compile with output worth watching, and running it
-from a page needs a second job system — streamed output, cancellation, a record of
-what happened. Until that exists the page gives the exact command with a button
-that copies it, which is most of the distance and none of the risk of a build
-somebody cannot see or stop.
+**The fourth was deferred and then asked for, so it is built too.** The job
+system it needed turned out to be small: `crates/ingot-cli/src/jobs.rs`, one slot,
+no standard input, no gate, no history, reusing the launcher's bounded capture. A
+build takes minutes and prints as it goes, so the page shows its log and can stop
+it. One at a time deliberately — two builds of the same tag race to the same name.
 
-**Untested here: a contained run that succeeds.** This machine has Docker
-installed with its engine stopped and no `ingot/run:0.9.0` image, so what was
-exercised is the guidance and the refusal path. The happy path needs a runtime
-running and one `ingot image build`.
+**And building it surfaced the fact that matters more than the button.**
+`ingot image build` needs an **Ingot source checkout**: `tools/ingot.Dockerfile`
+beside a `Cargo.toml` whose workspace version matches the binary. Anybody who
+installed from a release archive, `cargo install` or `cargo binstall` has none —
+so for them a contained run is not one command away, it is a clone of the
+repository at this tag away. The page says exactly that where it would otherwise
+offer the button, and [GAP-029](gaps.md#gap-029) now records it in the form the
+person paying it experiences. A button most people cannot use, with no explanation
+for the rest, would have been worse than no button.
+
+## Track 13 — The three things that still needed a terminal
+
+Asked for 2026-08-20, after a sweep of what the studio still could not do. All
+three built the same day.
+
+**1. Creating a project.** The worst sentence the page could produce was the
+first one somebody with no project would read: *go and use a terminal*. `POST
+/api/create` writes a starter — the same starter `ingot new --template …` writes,
+by calling the same function, because a studio with its own idea of a starter
+would be a second answer to "what does a new project look like" and the two would
+drift. It then bookmarks it and opens it, because a project the page created and
+cannot find is worse than one it never created.
+
+No model is involved. `ingot new` can also author from a description with a
+provider; that spends money and needs a key, and neither belongs behind a button
+labelled Create. The description picks the template and becomes the project's own
+description, which is what it does on the command line without `--provider`.
+
+Two refusals worth naming: a relative path (the page cannot see which directory
+this process was started in, and a file appearing somewhere unexpected is the
+worst outcome here) and anything that already exists (the shared writer refuses a
+path that exists, one file at a time).
+
+**2. Recording a run.** The page could replay a cassette and not make one, which
+is backwards: the moment somebody wants a recording is the moment after a run went
+well. `record` on the start request, a field beside the cassette field, and the
+path is resolved **lexically** against the project root rather than canonicalised
+— the file is not there yet, and often neither is its directory, which the
+cassette writer creates. The field hides itself when the boundary switch is on,
+because the run refuses that pair and the reason is worth saying before the
+refusal rather than after.
+
+**And it found a real defect, which is why the feature is worth more than it
+looks.** A recorded run with a question in it *could not be replayed by `ingot
+test`*: `run::test` passed `HumanChannel::Deny`, so every consultation failed with
+*there is nobody to ask*, while `ingot run --provider replay` replayed the same
+cassette happily. RFC-0020 had already settled which of those is right — *how does
+an artifact containing a `consult` run in CI at all? It replays* — and `ingot test`
+is the command that is CI. Fixed, with a test that pins it, because the previous
+tests only ever went through `--provider replay`.
+
+**3. Building the image.** See Track 12 above: built, and the reason most people
+still cannot use it is now on the page rather than in a gap entry nobody reads.
+
+What still needs a terminal after this, deliberately: `ingot package`,
+`ingot conform`, and authoring with a model. The first two are release-time
+operations rather than authoring ones, and the third spends money.
 
 ## A language change is queued, and deliberately not first
 
@@ -597,13 +649,14 @@ buttons and the guarantee.
 | 6 | ~~The install script, Unix and PowerShell~~ — **done 2026-08-20** | — | — |
 | 7 | winget manifest and Homebrew tap (`cargo-binstall` **done**) | 2 days | 5 |
 | 8 | The refusals page generator | 2–3 days | — |
-| 9 | Studio: create a project from a template | 2 days | — |
+| 9 | ~~Studio: create a project from a template~~ — **done 2026-08-20** (Track 13) | — | — |
 | 10 | Studio first-run path | 2–3 days | 9 |
 | 11 | Studio: the whole run as a transcript | 3–4 days | 2 |
 | 12 | Studio: authoring by conversation, repair loop visible | 4–7 days | 9, 11 |
 | 12b | ~~The words on the screen (Track 10)~~ — **done 2026-08-20** | — | — |
 | 12c | ~~The conversation tab (Track 11)~~ — **done 2026-08-20** | — | — |
-| 12d | ~~Contained runs offered and guided (Track 12)~~ — **done 2026-08-20**, less the image build | — | — |
+| 12d | ~~Contained runs offered and guided (Track 12)~~ — **done 2026-08-20** | — | — |
+| 12e | ~~Create a project, record a run, build the image (Track 13)~~ — **done 2026-08-20** | — | — |
 | 13 | Landing page and hero | 3–5 days | Track 6 |
 | 14 | Playground integration | 3–7 days | 1 |
 | 15 | `ingot report` and artifact badges | 3–5 days | — |
