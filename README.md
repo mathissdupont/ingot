@@ -26,6 +26,10 @@ most, and what it must produce.
   <img alt="Platforms: Linux, macOS and Windows" src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-f4e4c9.svg?style=flat-square&labelColor=3b2923">
 </p>
 
+<br>
+
+<img src="./docs/assets/media/studio-overview.png" alt="Ingot Studio showing an incident-brief project ready to run" width="1240">
+
 </div>
 
 ---
@@ -38,6 +42,7 @@ most, and what it must produce.
 ## Contents
 
 - [What it is](#what-it-is)
+- [Studio](#studio)
 - [Start in thirty seconds](#start-in-thirty-seconds)
 - [Why a small language](#deliberately-not-a-general-purpose-language)
 - [A person in the loop](#a-person-in-the-loop-without-losing-the-run)
@@ -79,6 +84,34 @@ That is not a lint. `network allow ["arxiv.org"]` is checked against every call
 at compile time — and then **enforced at run time**, by a filtering proxy on a
 container network with no other route out. A tool server that ignores the proxy
 reaches nothing, rather than reaching everything.
+
+## Studio
+
+Studio is the browser surface for the same compiler and runtime. Create or add
+a project, inspect its checked artifact, start and record runs, and answer the
+questions an agent deliberately puts to a person.
+
+### Create a project
+
+Choose a starter and describe the workflow. Studio writes a compiling project,
+a replayable cassette and its local README without calling a model.
+
+<img src="./docs/assets/media/studio-create-project.png" alt="Creating a document workflow project in Ingot Studio" width="1240">
+
+### Start and follow runs
+
+Select the agent and provider, supply typed inputs, optionally record a cassette
+or enable a policy-derived container, then follow the event stream as it runs.
+
+<img src="./docs/assets/media/studio-runs.png" alt="Starting and following a run in Ingot Studio" width="1240">
+
+### Keep a person in the loop
+
+When a program uses `consult`, the run pauses at the exact question. Studio
+shows its context and permitted answers, then records the human response beside
+the rest of the run.
+
+<img src="./docs/assets/media/studio-conversation.png" alt="An Ingot Studio conversation waiting for a person's answer" width="1240">
 
 ## Start in thirty seconds
 
