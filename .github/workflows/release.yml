@@ -53,6 +53,14 @@ jobs:
         include:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
+          # An arm64 runner rather than a cross-compile from x86_64, because
+          # "The archived binary works" below actually runs what it packed, and
+          # that is the one property this job exists to hold. Cross-compiling
+          # would mean either shipping a binary nothing executed or a linker
+          # and an emulator to execute it with. Free for public repositories;
+          # if this repository ever goes private, this line is what to revisit.
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
           - target: aarch64-apple-darwin
             os: macos-latest
           # Cross-compiled from Apple silicon, because the Intel runner image
