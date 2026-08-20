@@ -1,0 +1,33 @@
+/* The agents, as characters.
+   One 16x26 sprite drawn from plain rectangles and recoloured per agent, so a
+   new agent gets a face without an image file — which matters here more than
+   it would elsewhere, because this page is forbidden from fetching anything.
+
+   `crispEdges` is the whole trick: without it the browser antialiases a
+   16-pixel drawing into mush at every size above 1x. */
+
+svg.sprite {
+  display: block;
+  shape-rendering: crispEdges;
+  image-rendering: pixelated;
+}
+
+/* Each size is an exact multiple of its own viewBox, or the pixel grid stops
+   landing on device pixels and the edges go soft even with `crispEdges`. */
+svg.sprite.bust { width: 24px; height: 24px; }   /* 12 x 12, doubled */
+svg.sprite.card { width: 32px; height: 52px; }   /* 16 x 26, doubled */
+svg.sprite.tall { width: 63px; height: 108px; }  /* 21 x 36, tripled */
+
+/* Six palettes, picked from the agent's own name so it looks like itself the
+   first time the page opens. Skin and hair vary together; the shirt carries
+   most of the difference, because at 26px the shirt is most of the sprite. */
+.av0 { --hair: #6b4226; --hair2: #8a5a33; --skin: #f0c8a0; --skin2: #d9a37c; --top: #4a7fb5; --top2: #35608f; --wrap: #7a6a55; --leg: #5c4f3f; --shoe: #40332a; }
+.av1 { --hair: #2f2a2c; --hair2: #4a4245; --skin: #c98d63; --skin2: #a97049; --top: #4f8f3a; --top2: #3a6c2a; --wrap: #8a7c62; --leg: #55493a; --shoe: #3a2f26; }
+.av2 { --hair: #a8562a; --hair2: #c5713d; --skin: #f5d7b8; --skin2: #dcb490; --top: #8b5aa8; --top2: #6a4184; --wrap: #6f6754; --leg: #4e4638; --shoe: #3a332a; }
+.av3 { --hair: #d8c88a; --hair2: #efe0ab; --skin: #8a6a52; --skin2: #6e5240; --top: #b8452f; --top2: #8f3222; --wrap: #6a6252; --leg: #4a4438; --shoe: #332e26; }
+.av4 { --hair: #4a3a5c; --hair2: #64507a; --skin: #e8b998; --skin2: #cc9673; --top: #2f7f88; --top2: #205f66; --wrap: #7e7360; --leg: #4f4739; --shoe: #383026; }
+.av5 { --hair: #7d3f3f; --hair2: #9c5252; --skin: #d8a87f; --skin2: #b8875f; --top: #6d7a2f; --top2: #515c20; --wrap: #837a63; --leg: #524a3b; --shoe: #363028; }
+
+/* The eye and outline colour is the same in every palette: a sprite whose
+   outline recolours stops reading as the same character. */
+.sprite { --edge: #3a2a24; }

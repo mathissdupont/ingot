@@ -55,9 +55,77 @@ pub use http::{Head, Method};
 
 /// The page, style and script inline, embedded in the binary.
 ///
-/// One document rather than a directory of assets: nothing then has to be
-/// fetched with the token attached, and the page cannot half-load.
-const PAGE: &str = include_str!("../assets/index.html");
+/// **Modular in the source tree, one document on the wire.** `assets/` is a
+/// directory of small files — a stylesheet per region, a script per view — and
+/// they are concatenated here at compile time.
+///
+/// The joining is not an inconvenience to be optimised away later. Two
+/// properties depend on the response being a single document:
+///
+/// * **Every request to this server carries the session token.** A page that
+///   fetched its own stylesheet would have to put the token in that URL, which
+///   means the token in a `src` attribute, in the history, and in any
+///   screenshot of the page.
+/// * **The page cannot half-load.** There is no state where the markup arrived
+///   and the script did not, so nothing has to be written to survive one.
+///
+/// The order is the order a browser needs: metadata, style, markup, behaviour.
+/// Within the script the order is dependency order — `boot` defines the helpers
+/// the views use, and `start` is last because it runs.
+const PAGE: &str = concat!(
+    include_str!("../assets/head.html"),
+    "\n<style>\n",
+    include_str!("../assets/css/tokens.css"),
+    "\n",
+    include_str!("../assets/css/base.css"),
+    "\n",
+    include_str!("../assets/css/sprite.css"),
+    "\n",
+    include_str!("../assets/css/rail.css"),
+    "\n",
+    include_str!("../assets/css/page.css"),
+    "\n",
+    include_str!("../assets/css/track.css"),
+    "\n",
+    include_str!("../assets/css/canvas.css"),
+    "\n",
+    include_str!("../assets/css/waiting.css"),
+    "\n",
+    include_str!("../assets/css/trace.css"),
+    "</style>\n\n",
+    include_str!("../assets/shell.html"),
+    "\n<script>\n",
+    include_str!("../assets/js/boot.js"),
+    "\n",
+    include_str!("../assets/js/words.js"),
+    "\n",
+    include_str!("../assets/js/sprite.js"),
+    "\n",
+    include_str!("../assets/js/track.js"),
+    "\n",
+    include_str!("../assets/js/state.js"),
+    "\n",
+    include_str!("../assets/js/load.js"),
+    "\n",
+    include_str!("../assets/js/render.js"),
+    "\n",
+    include_str!("../assets/js/projects.js"),
+    "\n",
+    include_str!("../assets/js/project.js"),
+    "\n",
+    include_str!("../assets/js/launcher-form.js"),
+    "\n",
+    include_str!("../assets/js/canvas.js"),
+    "\n",
+    include_str!("../assets/js/waiting.js"),
+    "\n",
+    include_str!("../assets/js/runs.js"),
+    "\n",
+    include_str!("../assets/js/machine.js"),
+    "\n",
+    include_str!("../assets/js/start.js"),
+    "</script>\n",
+);
 
 /// How long a connection may take to say what it wants.
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
@@ -404,6 +472,42 @@ mod tests {
     #[test]
     fn a_control_character_cannot_break_out_of_an_error_message() {
         assert_eq!(json_string("a\"b\nc"), "\"a\\\"b\\nc\"");
+    }
+
+    #[test]
+    fn every_asset_reaches_the_page() {
+        // The one hazard the split introduced: `assets/` is now a directory, so
+        // a new stylesheet or view can be written, saved, and never added to
+        // the `concat!` above — in which case it silently does nothing and the
+        // only symptom is a feature that is not there.
+        //
+        // Asserted by containment rather than by a file count, so it also
+        // catches a file that was wired in and then emptied.
+        let assets = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
+        let mut checked = 0;
+        let mut pending = vec![assets.clone()];
+        while let Some(directory) = pending.pop() {
+            for entry in std::fs::read_dir(&directory).expect("reading assets") {
+                let path = entry.expect("an entry").path();
+                if path.is_dir() {
+                    pending.push(path);
+                    continue;
+                }
+                let contents = std::fs::read_to_string(&path).expect("reading an asset");
+                let relative = path.strip_prefix(&assets).unwrap_or(&path).display();
+                assert!(
+                    !contents.trim().is_empty(),
+                    "`{relative}` is empty, so whatever it was for is missing"
+                );
+                assert!(
+                    PAGE.contains(contents.trim_end()),
+                    "`{relative}` is not in the page: add it to `PAGE`"
+                );
+                checked += 1;
+            }
+        }
+        // A floor, so the walk silently finding nothing cannot pass.
+        assert!(checked >= 20, "only {checked} assets were checked");
     }
 
     #[test]

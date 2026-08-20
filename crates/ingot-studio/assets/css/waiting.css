@@ -1,0 +1,71 @@
+/* A run stopped in front of an effect, waiting for a person. It is the only
+   thing on this page that blocks something, so it is the only thing that
+   borrows the warning colour for a whole block rather than a chip. */
+.gate {
+  margin-top: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--warn);
+  border-radius: 6px;
+  background: var(--warn-soft);
+}
+.gate .what {
+  font-family: var(--mono);
+  font-size: 12px;
+  margin-top: 6px;
+  word-break: break-all;
+}
+.gate .answer { display: flex; gap: 8px; margin-top: 10px; }
+
+/* A question the agent put to a person.
+
+   It shares the gate's amber on purpose, because amber here means one thing —
+   the run is stopped and cannot go on without you — and that is equally true of
+   both. What differs is what you hand over: a gate takes a decision, this takes
+   a value the flow then reads. That difference is carried by the character and
+   the wording rather than by hue, which leaves the accent free to mean
+   something else entirely: the app's own colour, and the next thing to do. */
+.asked {
+  margin-top: 10px;
+  padding: 16px 18px;
+  border: 1px solid var(--warn);
+  border-radius: var(--radius);
+  background: var(--warn-soft);
+  display: flex;
+  gap: 18px;
+  align-items: stretch;
+}
+.asked .grow { flex: 1; min-width: 0; }
+
+/* The agent, standing there. Bottom-aligned so it looks like it is on the
+   floor of the panel rather than floating in it. */
+.asked .stand {
+  flex: 0 0 63px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+}
+.asked .stand .who {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--warn);
+  text-align: center;
+  line-height: 1.2;
+  word-break: break-word;
+}
+
+.asked .question {
+  margin-top: 7px;
+  font-size: 18px;
+  line-height: 1.35;
+  letter-spacing: -0.01em;
+}
+.asked .what {
+  font-family: var(--mono);
+  font-size: 12px;
+  margin-top: 10px;
+  color: var(--muted);
+}
+.asked .answer { display: flex; gap: 8px; margin-top: 12px; }
+.asked .answer.wrap { flex-wrap: wrap; }
