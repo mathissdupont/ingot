@@ -119,12 +119,72 @@ pub struct GateView {
     pub reason: String,
 }
 
+/// A question the run is stopped at, waiting for a person to answer it.
+///
+/// The sibling of [`GateView`], and deliberately a separate shape: a gate is
+/// answered with a decision and this is answered with a **string the flow then
+/// reads**. Nothing here has a safe default — that is why `--yes` can approve a
+/// gate and cannot answer a question — so a surface that offers this must offer
+/// it as a question and not as something to dismiss.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuestionView {
+    /// The node the question is at. An answer names it, for the same reason a
+    /// gate's answer does.
+    pub node: String,
+    /// Which consultation this is within the run, counting from zero — the same
+    /// number a cassette matches by.
+    pub index: usize,
+    pub question: String,
+    /// The offered answers, when the program offered any. Empty means the
+    /// question takes free text.
+    pub choices: Vec<String>,
+}
+
+/// What a run has stopped for, when it has stopped for a person.
+///
+/// One value rather than two optional fields, because the interpreter reaches
+/// one of these at a time and waits there: a launch cannot be at a gate *and*
+/// at a question, and a shape that could say it was would eventually be made to
+/// say it.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "waitingFor", rename_all = "camelCase")]
+pub enum Waiting {
+    /// An effect the policy gates. Answered with a decision.
+    Approval(GateView),
+    /// A `consult` in the flow. Answered with one of its choices, or free text.
+    Question(QuestionView),
+}
+
+impl Waiting {
+    /// The node this is waiting at, whichever kind it is.
+    fn node(&self) -> &str {
+        match self {
+            Waiting::Approval(gate) => &gate.node,
+            Waiting::Question(question) => &question.node,
+        }
+    }
+}
+
 /// What the page sends back.
+///
+/// Both fields are optional and exactly one is expected, because **what is
+/// legal depends on what the run is waiting at** rather than on what the page
+/// felt like sending. The launcher matches them against the outstanding
+/// [`Waiting`] and refuses a mismatch — which is the same rule as refusing an
+/// answer that names another node, and catches the same thing: a page showing a
+/// view the run has moved on from.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AnswerRequest {
     pub node: String,
-    pub allowed: bool,
+    /// A decision, for an approval gate.
+    #[serde(default)]
+    pub allowed: Option<bool>,
+    /// An answer, for a question. Never a default: there is no safe side to
+    /// guess, so an absent one is refused rather than filled in.
+    #[serde(default)]
+    pub answer: Option<String>,
 }
 
 /// A process this studio started.
@@ -145,9 +205,9 @@ pub struct LaunchView {
     pub log: String,
     /// Whether either capture hit its ceiling.
     pub truncated: bool,
-    /// The gate this run is stopped at, when it is stopped at one.
+    /// What this run is stopped for, when it is stopped for a person.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub pending: Option<GateView>,
+    pub pending: Option<Waiting>,
 }
 
 struct Launch {
@@ -161,10 +221,10 @@ struct Launch {
     exit_code: Arc<Mutex<Option<i32>>>,
     output: Arc<Mutex<Capture>>,
     log: Arc<Mutex<Capture>>,
-    /// The gate the run is blocked on, set when `approvalRequested` arrives and
-    /// cleared when `approvalDecided` does. At most one: the interpreter reaches
-    /// one gate at a time and waits there.
-    pending: Arc<Mutex<Option<GateView>>>,
+    /// What the run is blocked on, set when `approvalRequested` or
+    /// `consultationAsked` arrives and cleared when the matching decision or
+    /// answer does. At most one: the interpreter reaches one and waits there.
+    pending: Arc<Mutex<Option<Waiting>>>,
     /// The answering end. Taken once the run finishes, so a write to a dead
     /// child is a refusal rather than a broken pipe.
     stdin: Arc<Mutex<Option<ChildStdin>>>,
@@ -366,33 +426,68 @@ impl Launcher {
             bail!("this studio did not start process {pid}");
         };
 
-        match launch.pending.lock().expect("a poisoned lock").as_ref() {
-            Some(gate) if gate.node == answer.node => {}
-            Some(gate) => bail!(
-                "this run is waiting at `{}` and the answer named `{}`; reload and answer the \
-                 gate it is actually at",
-                gate.node,
+        // Cloned rather than held, so the line is built without this lock open
+        // across the write to the child.
+        let waiting = launch.pending.lock().expect("a poisoned lock").clone();
+        let node = serde_json::to_string(&answer.node).expect("a string is always serializable");
+        let line = match waiting {
+            Some(waiting) if waiting.node() != answer.node => bail!(
+                "this run is waiting at `{}` and the answer named `{}`; reload and answer what it \
+                 is actually waiting for",
+                waiting.node(),
                 answer.node
             ),
-            None => bail!("this run is not waiting at a gate"),
-        }
+            Some(Waiting::Approval(_)) => {
+                let Some(allowed) = answer.allowed else {
+                    bail!("this run is at an approval gate, which is answered with a decision");
+                };
+                if answer.answer.is_some() {
+                    bail!("this run is at an approval gate and the answer carried text as well");
+                }
+                format!(r#"{{"node":{node},"allowed":{allowed}}}"#)
+            }
+            Some(Waiting::Question(question)) => {
+                let Some(text) = answer.answer.as_deref() else {
+                    bail!("this run is at a question, which is answered with a string");
+                };
+                if answer.allowed.is_some() {
+                    bail!("this run is at a question and the answer carried a decision as well");
+                }
+                // Empty is refused rather than sent on, for the reason the
+                // terminal refuses it: the flow *reads* this value, so an empty
+                // answer is a question silently answered with nothing.
+                if text.trim().is_empty() {
+                    bail!("a question cannot be answered with nothing");
+                }
+                // A question that offered choices takes one of them. Checked
+                // here as well as in the child because the child's recourse is
+                // to ask a terminal again, and there is no terminal to ask.
+                if !question.choices.is_empty()
+                    && !question.choices.iter().any(|choice| choice == text)
+                {
+                    bail!(
+                        "`{text}` is not one of the answers this question offers: {}",
+                        question.choices.join(", ")
+                    );
+                }
+                let text = serde_json::to_string(text).expect("a string is always serializable");
+                format!(r#"{{"node":{node},"answer":{text}}}"#)
+            }
+            None => bail!("this run is not waiting for anybody"),
+        };
 
         let mut handle = launch.stdin.lock().expect("a poisoned lock");
         let Some(stdin) = handle.as_mut() else {
             bail!("this run has finished and cannot be answered");
         };
-        writeln!(
-            stdin,
-            r#"{{"node":{},"allowed":{}}}"#,
-            serde_json::to_string(&answer.node).expect("a string is always serializable"),
-            answer.allowed
-        )
-        .and_then(|()| stdin.flush())
-        .context("answering the gate")?;
+        writeln!(stdin, "{line}")
+            .and_then(|()| stdin.flush())
+            .context("answering the run")?;
 
-        // Cleared here rather than waiting for `approvalDecided` to come back,
-        // so the button cannot be pressed twice for one gate while the child is
-        // still deciding. The event confirms it; this prevents the second write.
+        // Cleared here rather than waiting for `approvalDecided` or
+        // `consultationAnswered` to come back, so the answer cannot be sent
+        // twice for one gate or question while the child is still working
+        // through it. The event confirms it; this prevents the second write.
         launch.pending.lock().expect("a poisoned lock").take();
         Ok(())
     }
@@ -498,15 +593,15 @@ fn drain<R: Read + Send + 'static>(stream: Option<R>, into: Arc<Mutex<Capture>>)
 fn drain_events<R: Read + Send + 'static>(
     stream: Option<R>,
     into: Arc<Mutex<Capture>>,
-    pending: Arc<Mutex<Option<GateView>>>,
+    pending: Arc<Mutex<Option<Waiting>>>,
 ) {
     let Some(stream) = stream else { return };
     std::thread::spawn(move || {
         for line in BufReader::new(stream).lines() {
             let Ok(line) = line else { return };
             match gate_event(&line) {
-                Some(Event::Requested(gate)) => {
-                    *pending.lock().expect("a poisoned lock") = Some(gate);
+                Some(Event::Requested(waiting)) => {
+                    *pending.lock().expect("a poisoned lock") = Some(waiting);
                 }
                 Some(Event::Decided) => {
                     pending.lock().expect("a poisoned lock").take();
@@ -525,20 +620,25 @@ fn drain_events<R: Read + Send + 'static>(
 }
 
 enum Event {
-    Requested(GateView),
+    Requested(Waiting),
     Decided,
     Other,
 }
 
-/// What one line of the event stream says about a gate, if it is an event.
+/// What one line of the event stream says about a person being waited on, if it
+/// is an event at all.
 ///
 /// A line with no `event` key is not one: under `--events json` the model's
 /// text arrives live as lines without it, which is the documented shape rather
 /// than a quirk to guess at.
+///
+/// The two halves are read the same way and kept in one place, so a run that
+/// stops for a question cannot end up looking like a run that is working just
+/// because only one of them was handled here.
 fn gate_event(line: &str) -> Option<Event> {
     let value: serde_json::Value = serde_json::from_str(line.trim()).ok()?;
     match value.get("event")?.as_str()? {
-        "approvalRequested" => Some(Event::Requested(GateView {
+        "approvalRequested" => Some(Event::Requested(Waiting::Approval(GateView {
             node: value.get("node")?.as_str()?.to_string(),
             effects: value
                 .get("effects")
@@ -555,8 +655,28 @@ fn gate_event(line: &str) -> Option<Event> {
                 .and_then(|reason| reason.as_str())
                 .unwrap_or_default()
                 .to_string(),
-        })),
-        "approvalDecided" => Some(Event::Decided),
+        }))),
+        // `choices` is omitted when the program offered none, so its absence is
+        // a question taking free text rather than a malformed event.
+        "consultationAsked" => Some(Event::Requested(Waiting::Question(QuestionView {
+            node: value.get("node")?.as_str()?.to_string(),
+            index: value
+                .get("index")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or_default() as usize,
+            question: value.get("question")?.as_str()?.to_string(),
+            choices: value
+                .get("choices")
+                .and_then(|choices| choices.as_array())
+                .map(|choices| {
+                    choices
+                        .iter()
+                        .filter_map(|choice| choice.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default(),
+        }))),
+        "approvalDecided" | "consultationAnswered" => Some(Event::Decided),
         _ => Some(Event::Other),
     }
 }
@@ -641,6 +761,67 @@ mod tests {
             serde_json::from_str::<StartRequest>(r#"{"provider":"auto","noHistory":true}"#)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn a_question_in_the_event_stream_is_something_the_run_is_waiting_at() {
+        // The event the studio could not see before, which is why a program
+        // with a `consult` in it could be started here and never finished.
+        let line = r#"{"event":"consultationAsked","node":"n7","index":0,
+            "question":"Which framing?","choices":["technical","executive"]}"#;
+        let Some(Event::Requested(Waiting::Question(question))) = gate_event(line) else {
+            panic!("a question must be recognised as something to wait at");
+        };
+        assert_eq!(question.node, "n7");
+        assert_eq!(question.question, "Which framing?");
+        assert_eq!(question.choices, ["technical", "executive"]);
+    }
+
+    #[test]
+    fn a_question_with_no_choices_takes_free_text_rather_than_being_malformed() {
+        // `choices` is skipped when empty, so its absence has to read as "any
+        // answer" and not as an event this cannot parse.
+        let line = r#"{"event":"consultationAsked","node":"n1","index":0,"question":"Who for?"}"#;
+        let Some(Event::Requested(Waiting::Question(question))) = gate_event(line) else {
+            panic!("a question without choices is still a question");
+        };
+        assert!(question.choices.is_empty());
+    }
+
+    #[test]
+    fn an_answered_question_stops_being_something_to_wait_at() {
+        let line = r#"{"event":"consultationAnswered","node":"n7","index":0,"answer":"technical"}"#;
+        assert!(matches!(gate_event(line), Some(Event::Decided)));
+    }
+
+    #[test]
+    fn an_approval_is_still_read_as_an_approval() {
+        // The two halves share one function now, so this asserts the older one
+        // did not change shape on the way.
+        let line = r#"{"event":"approvalRequested","node":"n2","effects":["network"],
+            "reason":"reaching arxiv.org"}"#;
+        let Some(Event::Requested(Waiting::Approval(gate))) = gate_event(line) else {
+            panic!("an approval must still be an approval");
+        };
+        assert_eq!(gate.node, "n2");
+        assert_eq!(gate.effects, ["network"]);
+    }
+
+    #[test]
+    fn an_answer_carries_a_decision_or_a_string_and_nothing_else() {
+        let decision: AnswerRequest =
+            serde_json::from_str(r#"{"node":"n2","allowed":true}"#).expect("a decision");
+        assert_eq!(decision.allowed, Some(true));
+        assert!(decision.answer.is_none());
+
+        let answered: AnswerRequest =
+            serde_json::from_str(r#"{"node":"n7","answer":"technical"}"#).expect("an answer");
+        assert_eq!(answered.answer.as_deref(), Some("technical"));
+        assert!(answered.allowed.is_none());
+
+        // `deny_unknown_fields`, asserted rather than assumed: a page cannot
+        // invent a field here any more than it can on a start request.
+        assert!(serde_json::from_str::<AnswerRequest>(r#"{"node":"n7","yes":true}"#).is_err());
     }
 
     #[test]

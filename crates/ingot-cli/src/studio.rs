@@ -45,7 +45,14 @@ use crate::launch;
 use crate::manifest::{resolve_target, MANIFEST_NAME};
 use crate::runs;
 
-const STUDIO_SCHEMA_VERSION: u32 = 1;
+/// The shape of every reply this module serves.
+///
+/// **2** because a launch's `pending` stopped being a bare approval gate and
+/// became a tagged union over what a run can wait for — an approval or a
+/// question. A consumer reading version 1 would take a question for a gate and
+/// offer somebody a yes/no where a string was wanted, so this is a break rather
+/// than an addition.
+const STUDIO_SCHEMA_VERSION: u32 = 2;
 
 /// The port `ingot studio` asks for first.
 ///
@@ -116,9 +123,11 @@ impl Answers for Routes {
             (Method::Delete, "run") => with_id(request, |path, id| self.run_delete(path, id)),
             (Method::Post, "run") => with_path(request, |path| self.start(path, body)),
             (Method::Delete, "launch") => with_path(request, |path| self.stop(request, path)),
-            (Method::Post, "approval") => {
-                with_path(request, |path| self.answer(request, path, body))
-            }
+            // `answer` rather than `approval` since schema 2: the same channel
+            // now carries a decision for a gate *or* a string for a question,
+            // and a route named for one of them invites a client to assume it
+            // is the only one.
+            (Method::Post, "answer") => with_path(request, |path| self.answer(request, path, body)),
             (Method::Post, "launches") => with_path(request, |path| {
                 self.launcher.clear(path);
                 self.run_list(path)
@@ -411,7 +420,18 @@ struct AgentView {
     outputs: Vec<Field>,
     effects: Vec<String>,
     tools: Vec<ToolView>,
+    /// Which *kind* of model requirement this is: `capabilities`, `exact` or
+    /// `unspecified`. Kept because it is what a consumer switches on — and
+    /// deliberately not rewritten into prose, because the prose belongs on the
+    /// page and the tag belongs in the reply.
     model: String,
+    /// The capabilities a `capabilities` requirement asks for, so a surface can
+    /// say what the agent needs instead of naming the variant it arrived as.
+    /// Empty for the other two kinds.
+    model_requires: Vec<String>,
+    /// The context floor, when one was stated.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model_context_min: Option<i64>,
     steps: usize,
 }
 
@@ -607,6 +627,8 @@ fn project(path: &Path) -> Result<String> {
                 })
                 .collect(),
             model: describe_model(&agent.requirements.model),
+            model_requires: model_capabilities(&agent.requirements.model),
+            model_context_min: model_context_min(&agent.requirements.model),
             steps: agent.nodes.len(),
         })
         .collect();
@@ -652,6 +674,25 @@ fn fields(map: &std::collections::BTreeMap<String, String>) -> Vec<Field> {
             ty: ty.clone(),
         })
         .collect()
+}
+
+/// The capabilities a `capabilities` requirement asks for, in the order the
+/// artifact states them. Empty for the other two kinds, which have none.
+fn model_capabilities(requirement: &ingot_ir::ModelRequirement) -> Vec<String> {
+    match requirement {
+        ingot_ir::ModelRequirement::Capabilities { capabilities, .. } => capabilities.clone(),
+        _ => Vec::new(),
+    }
+}
+
+/// The context floor a requirement states, when it states one.
+fn model_context_min(requirement: &ingot_ir::ModelRequirement) -> Option<i64> {
+    match requirement {
+        ingot_ir::ModelRequirement::Capabilities { context_tokens, .. } => {
+            context_tokens.as_ref().map(|tokens| tokens.min)
+        }
+        _ => None,
+    }
 }
 
 fn describe_model(requirement: &ingot_ir::ModelRequirement) -> String {
