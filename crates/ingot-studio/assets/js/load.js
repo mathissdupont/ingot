@@ -23,11 +23,15 @@ async function load() {
       if (state.tab === "canvas" && !state.canvas) {
         state.canvas = await api("canvas?" + q({ path: state.path }));
       }
-      if (state.tab === "runs") {
-        if (state.runId) state.run = await api("run?" + q({ path: state.path, id: state.runId }));
-        else await refreshRuns();
-        startPollingIfLive();
+      // Runs and launches are read on every tab, not only on Runs. The mark on
+      // the conversation tab is how this page says somebody is being waited for,
+      // and a mark you can only see from the tab it points at is not a mark.
+      await refreshRuns();
+      if (state.tab === "runs" && state.runId) {
+        state.run = await api("run?" + q({ path: state.path, id: state.runId }));
       }
+      if (state.tab === "conversation") await refreshChat();
+      startPollingIfLive();
     }
   } catch (error) {
     state.error = String(error.message || error);
@@ -41,20 +45,46 @@ async function refreshRuns() {
   state.launches = answer.launches;
 }
 
-// Two reasons to keep re-reading: a record with no result line, which is a run
-// that is going or was interrupted and the page cannot tell which; and a child
-// this studio started that has not exited yet.
+// The record the conversation tab is showing, fetched when the choice changes
+// and re-fetched while the run is still writing it. A finished record does not
+// change, so it is read once.
+async function refreshChat() {
+  const id = conversationId();
+  if (!id) {
+    state.chat = null;
+    state.chatFor = null;
+    return;
+  }
+  if (state.chat && state.chatFor === id && state.chat.state !== "unfinished") return;
+  state.chat = await api("run?" + q({ path: state.path, id: id }));
+  state.chatFor = id;
+}
+
+// Three reasons to keep re-reading, and one thing that deliberately is not one.
+//
+// A child this studio started that has not exited. The record being read having
+// no result line. And the *newest* record having none, which is how a run
+// started in a terminal streams onto this page at all.
+//
+// What is not a reason is an older record without a result line. That is an
+// interrupted run — the page cannot tell one from a run still going, which is
+// exactly why it must not poll for it: the polling would never stop, on every
+// tab, for a run that ended weeks ago.
 function startPollingIfLive() {
-  const live = state.runId
-    ? state.run && state.run.state === "unfinished"
-    : (state.runs || []).some((run) => run.state === "unfinished") ||
-      (state.launches || []).some((launch) => launch.state === "running");
+  const runs = state.runs || [];
+  const reading = state.tab === "conversation" ? state.chat : state.runId ? state.run : null;
+  const live = (state.launches || []).some((launch) => launch.state === "running") ||
+    (reading && reading.state === "unfinished") ||
+    (runs.length > 0 && runs[0].state === "unfinished");
   if (!live) return;
   state.poll = setTimeout(async () => {
     if (document.hidden) return startPollingIfLive();
     try {
-      if (state.runId) state.run = await api("run?" + q({ path: state.path, id: state.runId }));
-      else await refreshRuns();
+      await refreshRuns();
+      if (state.tab === "runs" && state.runId) {
+        state.run = await api("run?" + q({ path: state.path, id: state.runId }));
+      }
+      if (state.tab === "conversation") await refreshChat();
       render();
       startPollingIfLive();
     } catch (_) { /* the studio went away; stop quietly */ }

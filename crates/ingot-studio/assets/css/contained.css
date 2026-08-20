@@ -1,0 +1,57 @@
+/* The boundary switches, and the guidance that stands in for them when this
+   machine cannot raise one.
+
+   A blocked switch is drawn as a switch, not hidden: the option existing is
+   half of what somebody needs to know, and the other half is why it is not
+   available right now. */
+
+.switches { display: grid; gap: 10px; margin-top: 14px; }
+
+.switch {
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunk);
+}
+.switch label { display: flex; gap: 9px; align-items: center; cursor: pointer; }
+.switch input { accent-color: var(--accent); width: 15px; height: 15px; }
+.switch .sub { color: var(--muted); font-size: 12.5px; margin-top: 5px; }
+/* `.where` is scoped to a row elsewhere, and this is not one. What it holds is
+   the doctor's own words, kept under the plain-English reason for whoever is
+   actually debugging the daemon. */
+.switch .where {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--faint);
+  margin-top: 5px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Blocked, and saying so quietly. The cursor is the honest part: nothing here
+   responds to being clicked. */
+.switch.blocked { border-style: dashed; }
+.switch.blocked label { cursor: not-allowed; color: var(--muted); }
+
+/* A fix with its command pulled out of it. */
+.guide { margin-top: 7px; }
+.guide .fix { font-size: 12.5px; color: var(--muted); }
+.command {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 6px;
+  padding: 5px 6px 5px 10px;
+  border-radius: 6px;
+  background: var(--bg);
+  border: 1px solid var(--line-strong);
+}
+.command code { flex: 1; min-width: 0; overflow-x: auto; white-space: pre; color: var(--ink); }
+
+/* The container checks, on the boundary tab. The same shape as a readiness row
+   without pretending to be one: these four are a subject, read together. */
+.checks { margin-top: 12px; display: grid; gap: 8px; }
+.checks .line { display: flex; gap: 11px; align-items: stretch; }
+.checks .line .grow { flex: 1; min-width: 0; }
+
+.ok-note { color: var(--ok); }

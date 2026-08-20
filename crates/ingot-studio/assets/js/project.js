@@ -4,17 +4,37 @@ function renderProject(inner) {
   const project = state.projects.find((candidate) => candidate.path === state.path);
   inner.appendChild(head(project ? (project.name || state.path) : state.path, project && project.description, state.path));
 
-  const TAB_NAMES = { overview: "Overview", canvas: "Canvas", runs: "Runs", boundary: "Boundary" };
-  const tabs = el("div", { class: "tabs" }, ["overview", "canvas", "runs", "boundary"].map((name) =>
-    el("button", {
-      class: "tab",
-      "aria-current": String(state.tab === name),
-      text: TAB_NAMES[name],
-      onclick: () => show("project", { tab: name, runId: null, run: null, proposed: null }),
-    })));
+  // Read left to right it is a project's own order: what this is, what it does,
+  // what it said, what it did, and what it is allowed to touch.
+  const TAB_NAMES = {
+    overview: "Overview",
+    canvas: "Canvas",
+    conversation: "Conversation",
+    runs: "Runs",
+    boundary: "Boundary",
+  };
+  // The mark rides on the tab rather than on the panel behind it, so a run that
+  // needs somebody is visible from the other four.
+  const mark = conversationMark();
+  const tabs = el("div", { class: "tabs" },
+    ["overview", "canvas", "conversation", "runs", "boundary"].map((name) =>
+      el("button", {
+        class: "tab",
+        "aria-current": String(state.tab === name),
+        title: name === "conversation" && mark ? MARK_WORDS[mark] : null,
+        // Clicking the tab clears a pinned run: somebody arriving here wants the
+        // conversation that is happening, not the one they last opened.
+        onclick: () => show("project", { tab: name, runId: null, run: null, proposed: null, chatId: null }),
+      }, [
+        el("span", { text: TAB_NAMES[name] }),
+        name === "conversation" && mark
+          ? el("span", { class: "dot " + mark, role: "img", "aria-label": MARK_WORDS[mark] })
+          : null,
+      ])));
   inner.appendChild(tabs);
 
   if (state.tab === "runs") return renderRuns(inner);
+  if (state.tab === "conversation") return renderConversation(inner);
   if (state.tab === "canvas") return renderCanvas(inner);
   if (!state.detail) return inner.appendChild(el("div", { class: "empty", text: "Reading the project…" }));
   if (state.tab === "boundary") return renderBoundary(inner, state.detail);
@@ -116,11 +136,14 @@ function renderBoundary(inner, detail) {
   if (boundary.problems.length) {
     inner.appendChild(el("div", { class: "banner", text: boundary.problems.join("\n") }));
   }
+  // The agent's own boundary first, and always — not only when there is no plan
+  // to show. Somebody reading a tool-server plan is the person most likely to
+  // assume it covers the agent too.
+  inner.appendChild(containedGuidance(detail));
+
   if (!boundary.plans.length) {
-    inner.appendChild(card("Boundaries", el("div", { class: "body" }, [
-      el("p", { class: "muted", text: "There are two boundaries, and this page shows one of them." }),
-      el("p", { class: "muted", text: "A run with --sandbox puts each tool server in a box built from the agent's own policy. This project declares no tool server, so there is none to plan — that is what this page has nothing to show." }),
-      el("p", { class: "muted", text: "A run with --contained puts the agent itself in a box instead, and it applies whether or not there are tool servers. It needs a container runtime and a version-matched image built by `ingot image build`." }),
+    inner.appendChild(card("Tool server boundaries", el("div", { class: "body" }, [
+      el("p", { class: "muted", text: "A run with --sandbox puts each declared tool server in a box built from the policy of the agent that calls it. This project declares no tool server, so there is nothing here to plan." }),
     ])));
     return;
   }

@@ -12,7 +12,18 @@ function renderLaunches(inner) {
       launch.state === "failed"
         ? el("div", { class: "fix", text: "exit " + launch.exitCode + " — the log below is what it said" })
         : null,
-      waitingBlock(launch),
+      // The panel that answers a question lives on the conversation tab, where
+      // the question has the rest of the exchange around it. What belongs here
+      // is that the process is stopped, and the way to it.
+      launch.pending
+        ? el("div", { class: "add", style: "margin-top:6px" }, [
+            el("button", {
+              class: "action",
+              text: launch.pending.waitingFor === "question" ? "Answer its question" : "Decide on this",
+              onclick: () => show("project", { tab: "conversation", chatId: null, runId: null, run: null }),
+            }),
+          ])
+        : null,
       launch.log && launch.state !== "running" ? el("pre", { class: "block", style: "margin-top:8px", text: launch.log.trimEnd() }) : null,
       launch.output ? el("pre", { class: "block", style: "margin-top:8px", text: launch.output.trimEnd() }) : null,
       launch.truncated ? el("div", { class: "fix", text: "output was longer than the studio keeps" }) : null,
@@ -81,6 +92,12 @@ function renderRun(inner) {
 
   inner.appendChild(el("div", { class: "add", style: "margin-bottom:16px" }, [
     el("button", { class: "action", text: "← All runs", onclick: () => show("project", { tab: "runs", runId: null, run: null }) }),
+    // The same run, read as what was said rather than as what was emitted.
+    el("button", {
+      class: "action",
+      text: "Read as a conversation",
+      onclick: () => show("project", { tab: "conversation", chatId: run.id, runId: null, run: null }),
+    }),
     el("button", {
       class: "action quiet",
       text: "Delete this record",

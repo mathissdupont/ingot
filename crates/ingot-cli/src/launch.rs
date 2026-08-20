@@ -96,6 +96,16 @@ pub struct StartRequest {
     /// Declared input name to value.
     #[serde(default)]
     pub inputs: std::collections::BTreeMap<String, String>,
+    /// Put the agent itself behind the container boundary — `--contained`.
+    #[serde(default)]
+    pub contained: bool,
+    /// Put each declared tool server behind its own boundary — `--sandbox`.
+    ///
+    /// A separate arrangement rather than a stronger version of the one above:
+    /// this one boxes the servers, that one boxes the agent, and either can be
+    /// asked for without the other.
+    #[serde(default)]
+    pub sandbox: bool,
 }
 
 fn default_provider() -> String {
@@ -208,6 +218,14 @@ pub struct LaunchView {
     /// What this run is stopped for, when it is stopped for a person.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pending: Option<Waiting>,
+    /// The run record this process is writing, when it has opened one.
+    ///
+    /// Filled in by the studio rather than here, because this end knows a
+    /// process and the child names its own record. See
+    /// [`crate::runs::of_process`], which does the join and explains why it is
+    /// safe to.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub record: Option<String>,
 }
 
 struct Launch {
@@ -267,55 +285,8 @@ pub struct Launcher {
 impl Launcher {
     /// Spawn `ingot run` for this project and remember the process.
     pub fn start(&self, project: &Path, request: &StartRequest) -> Result<u32> {
-        if !OFFERED_PROVIDERS.contains(&request.provider.as_str()) {
-            bail!(
-                "`{}` is not a provider the studio offers ({})",
-                request.provider,
-                OFFERED_PROVIDERS.join(", ")
-            );
-        }
-
         let mut command = Command::new(own_binary()?);
-        command
-            .arg("run")
-            .arg(project)
-            .arg("--provider")
-            .arg(&request.provider)
-            .arg("--color")
-            .arg("never");
-
-        if let Some(agent) = &request.agent {
-            if agent.starts_with('-') {
-                bail!("`{agent}` is not an agent name");
-            }
-            command.arg("--agent").arg(agent);
-        }
-
-        if let Some(cassette) = &request.cassette {
-            let path = cassette_inside(project, cassette)?;
-            command.arg("--cassette").arg(path);
-        } else if request.provider == "replay" {
-            bail!("replaying needs a cassette; name one relative to the project");
-        }
-
-        for (name, value) in &request.inputs {
-            // `--input name=value` is one argument, so a value may hold
-            // anything. A name may not, or the split would land elsewhere than
-            // where the page meant it to.
-            if name.is_empty() || name.contains('=') || name.starts_with('-') {
-                bail!("`{name}` is not an input name");
-            }
-            command.arg("--input").arg(format!("{name}={value}"));
-        }
-
-        // The gate leaves on the event stream and the answer comes back on
-        // standard input, so both are asked for together: `--approvals stdin`
-        // without `--events json` is refused by the child, and rightly.
-        command
-            .arg("--events")
-            .arg("json")
-            .arg("--approvals")
-            .arg("stdin");
+        command.args(arguments(project, request)?);
 
         let mut child = command
             .stdin(Stdio::piped())
@@ -404,6 +375,7 @@ impl Launcher {
                     log: log.text.clone(),
                     truncated: output.truncated || log.truncated,
                     pending: launch.pending.lock().expect("a poisoned lock").clone(),
+                    record: None,
                 }
             })
             .collect()
@@ -532,6 +504,81 @@ impl Launcher {
 /// Not `"ingot"` from the path: a person testing a build from a checkout would
 /// otherwise start whichever one is installed, which is the version of this
 /// mistake that is hardest to notice.
+/// The whole command line, built and checked in one place.
+///
+/// Separate from spawning so it can be asserted. Every flag here is either a
+/// guarantee this studio depends on or a choice somebody made on the page, and a
+/// forgotten one is not a cosmetic bug: `--contained` missing is a run that was
+/// asked to be in a box and is not, and `--events json` missing is a page that
+/// can no longer see what the run is waiting for.
+fn arguments(project: &Path, request: &StartRequest) -> Result<Vec<std::ffi::OsString>> {
+    if !OFFERED_PROVIDERS.contains(&request.provider.as_str()) {
+        bail!(
+            "`{}` is not a provider the studio offers ({})",
+            request.provider,
+            OFFERED_PROVIDERS.join(", ")
+        );
+    }
+
+    let mut argv: Vec<std::ffi::OsString> = vec![
+        "run".into(),
+        project.as_os_str().to_os_string(),
+        "--provider".into(),
+        request.provider.as_str().into(),
+        "--color".into(),
+        "never".into(),
+    ];
+
+    if let Some(agent) = &request.agent {
+        if agent.starts_with('-') {
+            bail!("`{agent}` is not an agent name");
+        }
+        argv.push("--agent".into());
+        argv.push(agent.as_str().into());
+    }
+
+    if let Some(cassette) = &request.cassette {
+        let path = cassette_inside(project, cassette)?;
+        argv.push("--cassette".into());
+        argv.push(path.into_os_string());
+    } else if request.provider == "replay" {
+        bail!("replaying needs a cassette; name one relative to the project");
+    }
+
+    for (name, value) in &request.inputs {
+        // `--input name=value` is one argument, so a value may hold anything. A
+        // name may not, or the split would land elsewhere than where the page
+        // meant it to.
+        if name.is_empty() || name.contains('=') || name.starts_with('-') {
+            bail!("`{name}` is not an input name");
+        }
+        argv.push("--input".into());
+        argv.push(format!("{name}={value}").into());
+    }
+
+    // Both boundaries are forwarded and neither is judged here. Whether this
+    // machine can raise one is settled by the run — from the artifact first and
+    // the environment second — and a second opinion at this end is how a check
+    // comes to disagree with itself. What the studio owes a person is guidance
+    // *before* they ask for a boundary, and that belongs on the page, in front
+    // of the button.
+    if request.contained {
+        argv.push("--contained".into());
+    }
+    if request.sandbox {
+        argv.push("--sandbox".into());
+    }
+
+    // The gate leaves on the event stream and the answer comes back on standard
+    // input, so both are asked for together: `--approvals stdin` without
+    // `--events json` is refused by the child, and rightly.
+    argv.push("--events".into());
+    argv.push("json".into());
+    argv.push("--approvals".into());
+    argv.push("stdin".into());
+    Ok(argv)
+}
+
 fn own_binary() -> Result<PathBuf> {
     std::env::current_exe().context("finding this ingot binary")
 }
@@ -698,7 +745,62 @@ mod tests {
             provider: provider.to_string(),
             cassette: None,
             inputs: Default::default(),
+            contained: false,
+            sandbox: false,
         }
+    }
+
+    fn argv_of(request: &StartRequest) -> Vec<String> {
+        arguments(Path::new("."), request)
+            .expect("a valid request")
+            .into_iter()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    #[test]
+    fn a_run_started_here_always_reports_events_and_always_answers_on_stdin() {
+        // Not decoration. Without `--events json` the page cannot see what a run
+        // is waiting for, and without `--approvals stdin` there is nothing for it
+        // to answer through — the run would deny the effect and carry on.
+        let argv = argv_of(&request("auto"));
+        assert!(
+            argv.windows(2).any(|pair| pair == ["--events", "json"]),
+            "{argv:?}"
+        );
+        assert!(
+            argv.windows(2).any(|pair| pair == ["--approvals", "stdin"]),
+            "{argv:?}"
+        );
+    }
+
+    #[test]
+    fn a_boundary_is_passed_on_only_when_it_was_asked_for() {
+        // A flag that goes missing here is a run somebody believes is in a box
+        // and is not, which is the one failure this project cannot report as a
+        // cosmetic bug.
+        let plain = argv_of(&request("auto"));
+        assert!(
+            !plain.iter().any(|argument| argument == "--contained"),
+            "{plain:?}"
+        );
+        assert!(
+            !plain.iter().any(|argument| argument == "--sandbox"),
+            "{plain:?}"
+        );
+
+        let mut both = request("auto");
+        both.contained = true;
+        both.sandbox = true;
+        let argv = argv_of(&both);
+        assert!(
+            argv.iter().any(|argument| argument == "--contained"),
+            "{argv:?}"
+        );
+        assert!(
+            argv.iter().any(|argument| argument == "--sandbox"),
+            "{argv:?}"
+        );
     }
 
     #[test]

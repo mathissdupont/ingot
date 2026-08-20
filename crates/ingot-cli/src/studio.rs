@@ -52,6 +52,11 @@ use crate::runs;
 /// question. A consumer reading version 1 would take a question for a gate and
 /// offer somebody a yes/no where a string was wanted, so this is a break rather
 /// than an addition.
+///
+/// Additions since do not move it, and there have been three: a launch carries
+/// the `record` it is writing, and a start request accepts `contained` and
+/// `sandbox`. A version 2 consumer that knows none of them is unaffected — it
+/// ignores a field it does not need and omits two that default to off.
 const STUDIO_SCHEMA_VERSION: u32 = 2;
 
 /// The port `ingot studio` asks for first.
@@ -153,10 +158,18 @@ impl Routes {
     /// started — including the ones that failed before a record existed.
     fn run_list(&self, path: &Path) -> Result<String> {
         let target = resolve_target(Some(path))?;
+        let records = runs::list(&target.out_dir);
+        let mut launches = self.launcher.of(&resolve(path));
+        // Tell the page which record each launch is writing, so the
+        // conversation it shows and the process it can answer are one run rather
+        // than two things a reader has to line up by their start times.
+        for launch in &mut launches {
+            launch.record = runs::of_process(&records, launch.pid, launch.started_unix);
+        }
         Ok(serde_json::to_string(&json!({
             "schemaVersion": STUDIO_SCHEMA_VERSION,
-            "runs": runs::list(&target.out_dir),
-            "launches": self.launcher.of(&resolve(path)),
+            "runs": records,
+            "launches": launches,
         }))?)
     }
 

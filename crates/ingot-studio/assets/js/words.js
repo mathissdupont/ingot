@@ -69,3 +69,16 @@ const ORDINALS = ["first", "second", "third", "fourth", "fifth", "sixth", "seven
 function ordinalWords(index) {
   return ORDINALS[index] || "number " + (index + 1);
 }
+
+// A `verify` node has three outcomes rather than two, and the third is the one
+// worth spelling out: nothing checked it. `notPerformed` on screen reads as a
+// pass to anybody who does not know the enum.
+const VERIFY_WORDS = {
+  passed: "it held",
+  failed: "it did not hold",
+  notPerformed: "nothing here could check it",
+};
+
+function verifyWords(outcome) {
+  return VERIFY_WORDS[outcome] || outcome;
+}

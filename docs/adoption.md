@@ -455,15 +455,41 @@ The shape this wants is Track 8's transcript with a door of its own: a fifth tab
 holding the run as a conversation — the `ask`s, the tool calls, the spend, and the
 question answered in place — rather than a tail of captured stderr.
 
-Two things to decide when it is built, because a tab that is usually empty is
-worse than no tab:
+**Built 2026-08-20.** A fifth tab, between Canvas and Runs, holding one run as
+the exchange it was. The two open questions were answered as sketched:
 
-- **What it shows when nothing is running.** The last run's transcript is the
-  honest answer; an empty tab that only fills up sometimes trains people not to
-  look at it.
-- **How it says a run is waiting**, given that the reason to look is usually that
-  something needs you. A marker on the tab itself, so it is visible from the
-  other three.
+- **When nothing is running it shows the last run.** The tab picks the run
+  somebody came for — one waiting to be answered, then one still going, then the
+  newest record — so it is never empty while the project has history. It is
+  deliberately *not* the newest **unfinished** record: a record with no result
+  line is a run going in a terminal and a run that was killed equally, so
+  preferring one would let an interrupted run from last week outrank the one that
+  just finished.
+- **A dot on the tab says a run is waiting**, and only this studio's own children
+  count. A record with no result line could be either of those two things, and a
+  dot that stays lit next to a run that ended weeks ago is worse than no dot.
+
+Three things fell out of building it.
+
+**The launch and the record are joined, in Rust, by the process id.** A record's
+id ends with the process id that opened it, so `runs::of_process` finds the record
+a launch is writing without new bookkeeping — and refuses a record older than the
+launch, because operating systems reuse process ids and a bare suffix match would
+happily return a finished run from a previous process with the same one.
+
+**One transcript renderer serves a finished run and a live one.** A record is
+flushed a line at a time, so the same events feed both; the only thing the live
+case adds is that a question at the end is still answerable. The question panel
+moved here from the Runs tab, which now says the run is stopped and offers the way
+to it — the same question in two places reads as two questions.
+
+**What a model said is not in the transcript, and cannot be.** `modelCall` carries
+the model, the shape of its answer and the tokens, and deliberately not the text:
+an event stream that carried prompts would write every prompt and every reply to
+disk. So a model's turns are the quiet machinery between the human ones, which is
+also an honest picture of where a person's attention is worth spending. An event
+kind the page has never seen is shown as itself rather than described wrongly or
+dropped.
 
 ## Track 12 — Guidance for a contained run
 
@@ -483,6 +509,52 @@ first two mean containment is shown but cannot be used.
 4. **The only guidance for a missing runtime is "install Docker or Podman".** On
    Windows it does not add that Linux containers are the ones that work
    ([GAP-020](gaps.md#gap-020)).
+
+**Built 2026-08-20, three of the four.**
+
+`StartRequest` gained `contained` and `sandbox`, and the start panel offers them
+as two switches. They are separate arrangements rather than degrees of one, so
+they are two switches and not a dial: one boxes the agent, the other boxes each
+declared tool server. The sandbox switch appears only when the project declares a
+server, because a switch for something a project does not have is a puzzle rather
+than an option.
+
+**Neither flag is judged at the studio's end.** Whether this machine can raise a
+boundary is settled by the run — from the artifact first and the environment
+second — and a second opinion here is exactly how `network` came to be refused on
+the grounds that no arrangement existed, two releases after one did. What the
+studio owes a person is guidance *before* they ask, so a switch that cannot work
+is drawn disabled with the reason and the command that fixes it, taken from the
+readiness report rather than worked out again.
+
+The command-line building moved into `arguments()`, apart from spawning, so it can
+be asserted. Two tests pin it: a run started here always carries `--events json`
+and `--approvals stdin` (without them the page cannot see what a run waits for or
+answer it), and a boundary flag is passed on **only** when it was asked for. A
+`--contained` that goes missing is a run somebody believes is in a box and is not.
+
+`container.runtime`'s fix is now case-specific. It used to say "install and start
+Docker or Podman with Linux containers" whether or not either was installed —
+telling somebody to install what they have installed is how a report loses their
+trust. The runtime layer already separates "no such command" from "the daemon did
+not answer", so the advice does too, and on Windows both branches name Linux
+containers as the requirement rather than a detail.
+
+The Boundary tab leads with the agent's own boundary **always**, not only when
+there is no tool-server plan to show. Somebody reading a plan is the person most
+likely to assume it covers the agent as well.
+
+**The fourth is deliberately not built: the studio does not build the image.**
+`ingot image build` is a long compile with output worth watching, and running it
+from a page needs a second job system — streamed output, cancellation, a record of
+what happened. Until that exists the page gives the exact command with a button
+that copies it, which is most of the distance and none of the risk of a build
+somebody cannot see or stop.
+
+**Untested here: a contained run that succeeds.** This machine has Docker
+installed with its engine stopped and no `ingot/run:0.9.0` image, so what was
+exercised is the guidance and the refusal path. The happy path needs a runtime
+running and one `ingot image build`.
 
 ## A language change is queued, and deliberately not first
 
@@ -529,8 +601,9 @@ buttons and the guarantee.
 | 10 | Studio first-run path | 2–3 days | 9 |
 | 11 | Studio: the whole run as a transcript | 3–4 days | 2 |
 | 12 | Studio: authoring by conversation, repair loop visible | 4–7 days | 9, 11 |
-| 12b | The words on the screen (Track 10) | 2–3 days | — |
-| 12c | The conversation tab (Track 11) | 3–4 days | 2 |
+| 12b | ~~The words on the screen (Track 10)~~ — **done 2026-08-20** | — | — |
+| 12c | ~~The conversation tab (Track 11)~~ — **done 2026-08-20** | — | — |
+| 12d | ~~Contained runs offered and guided (Track 12)~~ — **done 2026-08-20**, less the image build | — | — |
 | 13 | Landing page and hero | 3–5 days | Track 6 |
 | 14 | Playground integration | 3–7 days | 1 |
 | 15 | `ingot report` and artifact badges | 3–5 days | — |
