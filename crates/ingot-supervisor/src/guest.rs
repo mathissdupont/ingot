@@ -252,6 +252,11 @@ impl Guest {
                     steps: report.steps,
                     usage: report.usage,
                     outputs: report.outputs.clone(),
+                    // The charging happened here, so the ledger is here. The
+                    // host has no prices of its own to redo the arithmetic
+                    // with, and a cost it was never told is a cost it cannot
+                    // report.
+                    spend: report.spend.clone(),
                 },
             )
             .map_err(GuestError::from)

@@ -8,6 +8,39 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
 
 ## [Unreleased]
 
+### A contained run charges the `cost` budget it states
+
+**CLI and the supervisor protocol, which moves to 2. No language, IR or cassette
+change.** [GAP-048](docs/gaps.md#gap-048) closes.
+
+`budget { cost <= 5 usd }` bounded a host run and did not bound `--contained`.
+The prices live in the manifest, the manifest did not cross the boundary, and a
+run given no prices correctly enforces nothing — so the ceiling was real outside
+the box and decorative inside it. Worse than the arithmetic: a contained run
+reported no cost **at all**, so the line a host run prints when it could not
+charge a budget was missing too. Nothing checked it and nothing said so.
+
+The price table now crosses in with the artifact, and the run's ledger crosses
+back out when it finishes. A price is public data an operator wrote in the
+manifest, not a credential, and a boundary is there to bound effects rather than
+arithmetic. The charging stays inside, where the interpreter is — a budget has to
+stop the run that is spending it — and the host reports what came back instead of
+recomputing a second answer.
+
+**Rebuild the image.** The protocol version moved to 2 deliberately, although
+both fields are additive: an image built from earlier source would ignore the
+prices and report no spend, which is the same silence with none of the noise. A
+version mismatch refuses, names both numbers and says to rebuild.
+
+Token and step budgets were never affected — they need no prices and were always
+enforced in both arrangements.
+
+### Also
+
+- The gap register had [GAP-047](docs/gaps.md#gap-047), an open gap, filed at the
+  end of the **Closed** section. Moved to Refused, where its class says it
+  belongs.
+
 ## [0.9.0] — 2026-08-19
 
 The release where a program can say what to do when something fails.

@@ -1799,7 +1799,12 @@ fn google(selection: &ProviderSelection) -> Result<Box<dyn ModelProvider + Send>
 /// looks enforced. [Runtime 0.1 §8](../../../specs/runtime/v0.1.md) says a
 /// backend that cannot price a request must not pretend to, and not mentioning
 /// it is a way of pretending.
-fn report_cost(report: &RunReport) {
+///
+/// Called from **both** arrangements, and that is the point: for a while it was
+/// called from the host path only, so a contained run stated a ceiling, charged
+/// nothing against it, and said nothing about either
+/// ([GAP-048](../../../docs/gaps.md#gap-048)).
+pub(crate) fn report_cost(report: &RunReport) {
     let spend = &report.spend;
     if let Some(rendered) = spend.rendered() {
         eprintln!("cost      {rendered}");

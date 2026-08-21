@@ -19,6 +19,7 @@ use std::collections::BTreeMap;
 
 use ingot_ir::AgentIr;
 use ingot_mcp::McpConfig;
+use ingot_runtime::price::{Pricing, Spend};
 use ingot_runtime::provider::{
     CompletionRequest, CompletionResponse, ModelSelection, ProviderError, Usage,
 };
@@ -27,12 +28,18 @@ use ingot_runtime::{ApprovalRequest, Artifact, ConsultRequest};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// The only protocol version there is.
+/// The protocol this build speaks.
 ///
 /// Checked rather than negotiated: in normal use the host and the guest are the
 /// same binary, and a mismatch means the image was built from a different source
 /// than the host — exactly the situation where guessing is worst.
-pub const PROTOCOL_VERSION: u32 = 1;
+///
+/// **2** carries the price table in and the ledger back out. Additive on the
+/// wire, and bumped anyway: an older guest would ignore the prices and report no
+/// spend, so the host would charge nothing and say nothing — which is exactly the
+/// silence [GAP-048](../../../docs/gaps.md#gap-048) was. A refusal naming both
+/// numbers is the one outcome that cannot be mistaken for an enforced budget.
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// Method names. Constants because both halves must agree on the spelling and a
 /// typo in one of them would be a runtime mystery.
@@ -142,6 +149,21 @@ pub struct RunConfig {
     /// What the host's provider calls itself, so the `runStarted` event names
     /// the service that will actually answer rather than naming the channel.
     pub provider: String,
+    /// What a model call costs, so a `cost` budget is charged inside the box as
+    /// it would be outside it.
+    ///
+    /// This crosses because the boundary exists to bound **effects**, not
+    /// arithmetic: a price table is public data an operator wrote in the
+    /// manifest, not a credential, and the alternative is an artifact whose
+    /// ceiling means one thing on a host and nothing under `--contained`
+    /// ([GAP-048](../../../docs/gaps.md#gap-048)).
+    ///
+    /// Sent only when some agent that crossed states a `cost` budget, so a
+    /// program that bounds nothing puts nothing extra in the box. The guest is
+    /// the one that charges: it holds the ledger because it holds the
+    /// interpreter, and a budget must stop the run that is spending.
+    #[serde(default, skip_serializing_if = "Pricing::is_empty")]
+    pub pricing: Pricing,
 }
 
 /// The `model` call.
@@ -302,6 +324,14 @@ pub struct Finished {
     pub usage: Usage,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub outputs: BTreeMap<String, Artifact>,
+    /// What the run charged, and what it could not price.
+    ///
+    /// The ledger is kept where the charging happens, which is inside, so it has
+    /// to come back out: a cost the host was never told is a cost it cannot
+    /// report, and a `cost` budget that is never mentioned looks enforced
+    /// ([Runtime 0.2 §3.3](../../../specs/runtime/v0.2.md)).
+    #[serde(default)]
+    pub spend: Spend,
 }
 
 /// The `failed` notification.
@@ -655,6 +685,92 @@ mod tests {
         let line: GuestLine =
             serde_json::from_str(r#"{"seq":1,"call":"frobnicate","params":{"a":1}}"#).unwrap();
         assert_eq!(line.call.as_deref(), Some("frobnicate"));
+    }
+
+    #[test]
+    fn a_price_table_crosses_intact_and_an_empty_one_is_not_sent() {
+        // The whole point of GAP-048's fix: what the operator configured has to
+        // arrive as the operator wrote it, or the budget inside the box is
+        // charged against something else.
+        let pricing = Pricing::new(vec![ingot_runtime::price::ModelPrice {
+            model: "claude-opus-5".into(),
+            input: "3".into(),
+            output: "15".into(),
+            cache_read: Some("0.3".into()),
+            currency: "usd".into(),
+        }]);
+        let config = RunConfig {
+            protocol: PROTOCOL_VERSION,
+            agent: "framing".into(),
+            agents: Vec::new(),
+            inputs: BTreeMap::new(),
+            max_steps: 20,
+            mcp: McpConfig::default(),
+            provider: "anthropic".into(),
+            pricing: pricing.clone(),
+        };
+
+        let text = serde_json::to_string(&config).unwrap();
+        let parsed: RunConfig = serde_json::from_str(&text).unwrap();
+        assert_eq!(parsed.pricing, pricing);
+
+        // A program that bounds no cost puts nothing extra in the box, and an
+        // older host that sends no table at all is read as no prices rather
+        // than as a parse failure.
+        let bare = RunConfig {
+            pricing: Pricing::default(),
+            ..config
+        };
+        let text = serde_json::to_string(&bare).unwrap();
+        assert!(!text.contains("pricing"), "{text}");
+        let parsed: RunConfig = serde_json::from_str(&text).unwrap();
+        assert!(parsed.pricing.is_empty());
+    }
+
+    #[test]
+    fn a_ledger_comes_back_out_with_what_it_could_not_price() {
+        // Both halves matter. The total is what the run says it cost; the
+        // unpriced entries are why the host prints that the budget was not
+        // enforced, and losing them would turn "not charged" into silence.
+        let mut spend = Spend::default();
+        spend.add(
+            "claude-opus-5",
+            ingot_runtime::price::Charge::Priced {
+                micros: 4_590,
+                currency: "usd".into(),
+            },
+        );
+        spend.add("gpt-test", ingot_runtime::price::Charge::Unpriced);
+
+        let finished = Finished {
+            agent: "framing".into(),
+            steps: 2,
+            usage: Usage::default(),
+            outputs: BTreeMap::new(),
+            spend,
+        };
+        let text = serde_json::to_string(&finished).unwrap();
+        let parsed: Finished = serde_json::from_str(&text).unwrap();
+
+        assert_eq!(parsed.spend.rendered().as_deref(), Some("0.00459 USD"));
+        assert!(!parsed.spend.is_complete());
+        assert_eq!(
+            parsed
+                .spend
+                .unpriced()
+                .map(|(model, _)| model)
+                .collect::<Vec<_>>(),
+            vec!["gpt-test"]
+        );
+    }
+
+    #[test]
+    fn a_guest_that_reports_no_ledger_is_read_as_having_spent_nothing() {
+        // Not as a parse failure: the notification is the last thing a run says,
+        // and refusing it would turn a finished run into a broken channel.
+        let finished: Finished = serde_json::from_str(r#"{"agent":"a","steps":1}"#).unwrap();
+        assert!(finished.spend.rendered().is_none());
+        assert!(finished.spend.is_complete());
     }
 
     #[test]
