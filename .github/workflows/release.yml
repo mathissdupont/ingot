@@ -137,13 +137,24 @@ jobs:
             dist/*.sha256
           if-no-files-found: error
 
-  publish:
-    name: Publish the release
+  # Signing is its own job, and it runs on a dispatch as well as on a tag. The
+  # whole point of `workflow_dispatch` here is that the machinery can be
+  # exercised before a tag exists — and signing is the part most worth exercising,
+  # because it depends on an identity token, a certificate authority and a
+  # transparency log that are all outside this repository.
+  sign:
+    name: Sign the checksums
     needs: [check-version, build]
-    if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # The whole of keyless signing is this line. The job asks GitHub for a
+      # short-lived OIDC token; Fulcio exchanges it for a certificate that names
+      # *this workflow file at this ref*; the signature is that certificate plus
+      # an entry in a public transparency log. There is no private key here, so
+      # there is none to leak, rotate, or keep off a laptop.
+      id-token: write
     steps:
-      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: dist
@@ -154,6 +165,64 @@ jobs:
           cd dist
           cat *.sha256 > SHA256SUMS
           rm -f *.sha256
+          ls -la
+
+      # Pinned rather than floating. The bundle format is what a documented
+      # verification command depends on, and "whatever cosign released this
+      # morning" is not something to make that promise out of.
+      - uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: v2.4.1
+
+      # One signature, over the file that holds every archive's hash. Signing
+      # each archive separately would produce five signatures that say the same
+      # thing, and a verification story with a step per platform.
+      - name: Sign SHA256SUMS
+        run: cosign sign-blob --yes --bundle dist/SHA256SUMS.sigstore.json dist/SHA256SUMS
+
+      # Verified here, immediately, with the exact identity this job runs under.
+      # A signature nobody has checked is a file, and finding out that it does not
+      # verify should not be the job of the first person who tries.
+      - name: Verify what was just signed
+        env:
+          # The exact identity, not a pattern: this job knows which workflow file
+          # at which ref it is, so it can assert that the certificate says the
+          # same. A pattern here would pass for a signature made by a workflow
+          # this is not.
+          IDENTITY: https://github.com/${{ github.workflow_ref }}
+          ISSUER: https://token.actions.githubusercontent.com
+        run: cosign verify-blob --bundle dist/SHA256SUMS.sigstore.json --certificate-identity "$IDENTITY" --certificate-oidc-issuer "$ISSUER" dist/SHA256SUMS
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: signed-checksums
+          path: |
+            dist/SHA256SUMS
+            dist/SHA256SUMS.sigstore.json
+          if-no-files-found: error
+
+  publish:
+    name: Publish the release
+    needs: [check-version, build, sign]
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      # `SHA256SUMS` is **not** rebuilt here. It arrives from the job that signed
+      # it, byte for byte, because a signature over a file assembled twice is a
+      # signature over whichever copy happened to be signed. The per-target
+      # `.sha256` files are what that one file replaces.
+      - name: Keep the signed checksums, drop the per-archive ones
+        run: |
+          cd dist
+          rm -f *.sha256
+          test -s SHA256SUMS
+          test -s SHA256SUMS.sigstore.json
           ls -la
 
       # Pre-1.0, so every release is marked as such: the language, the IR and
@@ -171,6 +240,14 @@ jobs:
           \`\`\`
           sha256sum -c SHA256SUMS --ignore-missing
           \`\`\`
+
+          That proves the download was not corrupted. It cannot prove who built it, because \`SHA256SUMS\` comes from the same host as the archive. This does, and it needs no key of ours to be trusted — the certificate names the workflow that ran:
+
+          \`\`\`
+          cosign verify-blob --bundle SHA256SUMS.sigstore.json --certificate-identity 'https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@refs/tags/${GITHUB_REF_NAME}' --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' SHA256SUMS
+          \`\`\`
+
+          The signature is public: keyless signing writes the certificate and the file's digest into a public transparency log, which is what makes it checkable by somebody who has never met us.
 
           Each archive carries \`ingot\`, \`ingot-mcp-fs\` and \`ingot-lsp\`. Pre-1.0: the language, the Agent IR and the artifact format may change between releases." \
             --prerelease \

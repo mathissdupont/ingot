@@ -352,6 +352,35 @@ directory. No root, nothing written elsewhere, and no `PATH` changed without
 being asked. A download that does not match its checksum is not installed, and
 there is no flag to skip that.
 
+### Who built it, not just whether it arrived intact
+
+A checksum proves a download was not corrupted. It cannot prove who produced it,
+because `SHA256SUMS` is served by the same host as the archive — whatever could
+replace one could replace both. So every release after 0.9.0 also carries
+`SHA256SUMS.sigstore.json`, a signature made by the release workflow itself:
+
+```bash
+cosign verify-blob \
+  --bundle SHA256SUMS.sigstore.json \
+  --certificate-identity-regexp '^https://github\.com/mathissdupont/ingot/\.github/workflows/release\.yml@refs/tags/v[0-9].*$' \
+  --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+  SHA256SUMS
+```
+
+**There is no Ingot key to trust here, and that is the point.** Signing is
+keyless: GitHub attests that a particular workflow file at a particular tag ran,
+Sigstore issues a short-lived certificate saying so, and both facts land in a
+public transparency log. What you verify is *which workflow built this*, not
+whether somebody still has custody of a private key. The trade is that the log is
+public: the certificate names this repository, that workflow and that tag.
+
+The install scripts check it when `cosign` is on the machine and say so when it
+is not. `INGOT_REQUIRE_SIGNATURE=1` (`-RequireSignature` on Windows) turns a
+signature that could not be checked into a refusal; a signature that *fails* to
+verify is always a refusal, with no flag. 0.9.0 and everything before it carries no
+signature at all, which is why the strict behaviour is opt-in rather than the
+default.
+
 Piping a script into a shell is a thing worth being suspicious of, so:
 [`scripts/install.sh`](scripts/install.sh) and
 [`scripts/install.ps1`](scripts/install.ps1) are what run, and reading them first

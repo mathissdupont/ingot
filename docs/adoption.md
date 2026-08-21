@@ -388,6 +388,34 @@ the README as well:*
   independently of the host serving it, and not otherwise. This is the same
   missing piece as [GAP-029](gaps.md#gap-029) — no signature scheme and no trust
   root — so the two should be answered once, together.
+
+  **Done 2026-08-21, and the order slipped.** The README began promoting
+  `curl … | sh` on 2026-08-20, a day before the signature existed, which is the
+  wrong way round and worth recording rather than quietly fixing. The signature is
+  keyless: one `cosign sign-blob` over `SHA256SUMS`, published beside it as
+  `SHA256SUMS.sigstore.json`, with the certificate naming this workflow file at
+  this tag. There is no key, so there is no custody story to get wrong.
+
+  Three decisions inside it. **One signature over the checksum file** rather than
+  one per archive, because that file is the list of their hashes and five
+  signatures would say the same thing five times. **Signing is its own job and
+  runs on `workflow_dispatch` too**, so the part that depends on an identity
+  token, a certificate authority and a transparency log outside this repository
+  can be exercised without cutting a release — and it verifies its own signature
+  before uploading it, because a signature nobody checked is a file. **The
+  installers verify when `cosign` is present and say so when it is not**; a
+  missing signature is a refusal only under `INGOT_REQUIRE_SIGNATURE=1`, because
+  0.9.0 and earlier legitimately have none, while a signature that *fails* is
+  always a refusal with no flag.
+
+  **And running it found the bug that no test would have.** `cosign`'s
+  `--certificate-identity-regexp` has to match the **whole** certificate subject.
+  The first version of the pattern was anchored only at the front, which matches
+  nothing — so both installers would have refused every signed release, starting
+  the day signing started, for everybody at once. Found by dispatching the
+  workflow, downloading what it signed, and running the installer's own command
+  against it with a real `cosign`. There is now a test asserting the pattern is
+  anchored at both ends, which is the shape of the lesson rather than the lesson.
 - **The package managers people actually have**: a winget manifest, a Homebrew
   tap, and `cargo-binstall` — which needs no new artifact at all, only that the
   release archives keep their current naming.
@@ -645,7 +673,7 @@ buttons and the guarantee.
 | 2b | ~~Studio: modular assets, and the look~~ — **done 2026-08-20** | — | — |
 | 3 | ~~`linux-aarch64` in the release matrix~~ — **done 2026-08-20** | — | — |
 | 4 | Publish the editor extension to both registries | 1 day | — |
-| 5 | Signing the release archives, answering GAP-029 with it | 2–3 days | — |
+| 5 | ~~Signing the release archives~~ — **done 2026-08-21**; GAP-029's trust root answered with it, the image half still open | — | — |
 | 6 | ~~The install script, Unix and PowerShell~~ — **done 2026-08-20** | — | — |
 | 7 | winget manifest and Homebrew tap (`cargo-binstall` **done**) | 2 days | 5 |
 | 8 | The refusals page generator | 2–3 days | — |

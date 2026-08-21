@@ -20,6 +20,10 @@
 # Environment:
 #   INGOT_VERSION   install this version rather than the newest (e.g. 0.9.0)
 #   INGOT_BIN_DIR   install here rather than into the default
+#   INGOT_REQUIRE_SIGNATURE=1
+#                   refuse to install unless the signature over SHA256SUMS was
+#                   actually verified — which needs `cosign` on this machine and
+#                   a release that carries one
 #
 # Exit codes: 0 installed, 1 this machine is not one we ship for, 2 the install
 # itself failed.
@@ -102,6 +106,37 @@ checksum_of() {
   fi
 }
 
+# --- provenance ------------------------------------------------------------
+#
+# The checksum proves the download was not corrupted. It cannot prove who built
+# it: `SHA256SUMS` is served by the same host as the archive, so whatever could
+# replace one could replace both. A signature answers that, and it is one
+# signature over `SHA256SUMS` rather than one per archive — that file is the list
+# of their hashes, so covering it covers all of them.
+#
+# The certificate is not ours to be trusted. Keyless signing means GitHub
+# attested that a particular workflow file at a particular tag ran, Sigstore
+# issued a short-lived certificate saying so, and both facts are in a public log.
+# What is checked below is therefore *which workflow produced this*, not *whether
+# somebody still holds our key*.
+#
+# Checked when `cosign` is installed, and said plainly when it is not. Absence is
+# not a refusal by default, because releases published before signing existed
+# carry no signature at all and refusing those would mean this script cannot
+# install them. `INGOT_REQUIRE_SIGNATURE=1` turns absence into a refusal, which
+# is the honest way round: the strict behaviour is available and named rather
+# than implied.
+# Anchored at **both** ends, and that is not tidiness: cosign's
+# `--certificate-identity-regexp` has to match the whole subject, so a pattern
+# anchored only at the front matches nothing and refuses every signature. Found
+# by running it against a real one.
+SIGNATURE_IDENTITY="^https://github\.com/$REPO/\.github/workflows/release\.yml@refs/tags/v[0-9].*\$"
+SIGNATURE_ISSUER="https://token.actions.githubusercontent.com"
+
+require_signature() {
+  [ -n "${INGOT_REQUIRE_SIGNATURE:-}" ]
+}
+
 # --- doing it --------------------------------------------------------------
 
 detect_target
@@ -144,6 +179,35 @@ if [ "$expected" != "$actual" ]; then
 nothing was installed"
 fi
 say "  verified  sha256 $actual"
+
+# Fetched with `if` rather than `||`, because a release without a bundle is an
+# ordinary case and not a failure.
+if fetch "$base/SHA256SUMS.sigstore.json" "$work/SHA256SUMS.sigstore.json" 2> /dev/null; then
+  if command -v cosign > /dev/null 2>&1; then
+    if cosign verify-blob \
+      --bundle "$work/SHA256SUMS.sigstore.json" \
+      --certificate-identity-regexp "$SIGNATURE_IDENTITY" \
+      --certificate-oidc-issuer "$SIGNATURE_ISSUER" \
+      "$work/SHA256SUMS" > "$work/cosign.log" 2>&1
+    then
+      say "  verified  signed by $REPO's release workflow"
+    else
+      # cosign's own words, because they separate the two cases that matter: a
+      # signature that does not match, and a machine that could not reach the
+      # log to find out.
+      cat "$work/cosign.log" >&2
+      oops "the signature over SHA256SUMS did not verify, so nothing was installed"
+    fi
+  elif require_signature; then
+    oops "INGOT_REQUIRE_SIGNATURE is set and \`cosign\` is not installed, so the signature could not be checked; nothing was installed"
+  else
+    say "  unchecked no \`cosign\` here, so the signature was not verified"
+  fi
+elif require_signature; then
+  oops "v$version carries no signature over SHA256SUMS and INGOT_REQUIRE_SIGNATURE is set; nothing was installed"
+else
+  say "  unsigned  this release carries no signature (only the newer ones do)"
+fi
 
 tar -xzf "$work/$archive" -C "$work" || oops "could not unpack $archive"
 
