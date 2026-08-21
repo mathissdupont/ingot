@@ -52,10 +52,11 @@ to you*.
 | [GAP-038](#gap-038) | No backend outside this repository has ever run the suite | Unproven | somebody else's backend, and what they hit |
 | [GAP-039](#gap-039) | No agent outside this repository is known to run | Unproven | a program somebody depends on, and its friction |
 | [GAP-043](#gap-043) | A run that is recording does not overlap its fan-out | Degraded | per-iteration recording buffers, merged in index order |
-| [GAP-044](#gap-044) | A program cannot say what to do when something fails | Absent | RFC-0022 built it for one attempt; a general handler closes it |
+| [GAP-044](#gap-044) | A failure can only be absorbed by a pure fallback, not handled | Absent | a general handler and an effectful fallback |
 | [GAP-045](#gap-045) | A fallback cannot be written for `markdown`, `json`, `file` or a record | Refused | a literal for those, or a narrowing rule with its own argument |
 | [GAP-046](#gap-046) | A model call that returned nothing cannot be recorded | Absent | an error on a recorded interaction, at a new cassette version |
 | [GAP-047](#gap-047) | A question's `choices` cannot be computed, so an agent cannot offer options it worked out | Refused | a way to state the answer space without listing it |
+| [GAP-048](#gap-048) | A contained run does not charge a `cost` budget, and does not say so | Unenforced | the prices crossing the boundary with the artifact |
 
 ---
 
@@ -64,14 +65,53 @@ to you*.
 These are the ones that can mislead: a place where reading the source would lead
 you to believe something the toolchain does not check.
 
-**There are none.** GAP-001 was the last, and it closed on 2026-08-10. That is
-worth saying rather than deleting the heading — the class exists, this project
-has had entries in it, and an empty section is a claim that can be falsified
-next week.
+**One, and it was empty until 2026-08-21.** GAP-001 closed on 2026-08-10 and this
+section then said *there are none* — which was worth saying rather than deleting,
+because an empty section is a claim that can be falsified next week. It was, by an
+audit of the contained run looking for exactly this shape.
 
 The **Unproven** section below was empty on the same terms until 2026-08-13, and
-is not any more. An empty class is a claim, and this one turned out to be
-false.
+is not any more either. An empty class is a claim, and both of them turned out to
+be false.
+
+### GAP-048
+
+**A contained run does not charge a `cost` budget, and does not say so.**
+
+The same artifact, with the same manifest and the same prices, refuses at the
+ceiling on a host run and runs past it inside a box.
+
+*Why.* The manifest does not cross the boundary — only the artifact, the inputs
+and the tool configuration do — so the interpreter inside is given no prices
+(`contained.rs`, `pricing: Default::default()`). Nothing there is wrong on its own:
+a call that cannot be priced is remembered rather than skipped, and
+[Runtime 0.1 §8](../specs/runtime/v0.1.md) forbids enforcing a budget against a
+partial total, so a run with no prices correctly enforces nothing.
+
+*What makes it this class rather than Degraded.* The host run **says so**:
+`the budget was not enforced; add [[model.price]] to charge it`. The function that
+prints it carries the reason in its own doc comment — *silence would be the
+failure mode: a `cost` budget that is never mentioned looks enforced* — and it is
+called from the host path only. A contained run reports no cost at all, because
+the ledger stays inside the box and the empty one that crosses back has nothing
+unpriced in it. So the artifact states a ceiling, nothing checks it, and nothing
+mentions that nothing checked it.
+
+*How it shows up.* `budget { cost <= 5 usd }` bounds an uncontained run and does
+not bound `--contained`. Token and step budgets are unaffected: they need no
+prices and are enforced in both.
+
+*What closing it needs.* The prices crossing with the artifact — a price table is
+public data rather than a credential, and the boundary exists to bound effects,
+not arithmetic — plus the guest's spend coming back on the `finished` notification
+so the run says what it cost either way. Narrower alternative: refuse a contained
+run of an artifact that declares a `cost` budget, the way persistent memory is
+already refused. The first is better; it closes the asymmetry instead of banning
+the feature.
+
+*Recorded in.* `crates/ingot-cli/src/contained.rs`,
+`crates/ingot-cli/src/run.rs` (`report_cost`),
+[RFC-0005](../rfcs/0005-the-contained-run.md).
 
 ---
 
