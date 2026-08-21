@@ -190,6 +190,9 @@ fn the_installers_do_not_reach_for_an_endpoint_that_answers_404_here() {
 /// The bundle both ends have to name identically.
 const BUNDLE: &str = "SHA256SUMS.sigstore.json";
 
+/// Named, because a lone escaped backslash in an assertion reads as a typo.
+const BACKSLASH: char = '\u{5c}';
+
 #[test]
 fn the_signature_is_published_under_the_name_the_installers_fetch() {
     let workflow = read(".github/workflows/release.yml");
@@ -264,6 +267,33 @@ fn the_installers_check_the_identity_of_the_workflow_that_signs() {
         assert!(
             script.contains("token.actions.githubusercontent.com"),
             "{name} does not pin the issuer, so another provider's token would do"
+        );
+    }
+}
+
+#[test]
+fn the_identity_pattern_matches_a_whole_subject() {
+    // Found by running cosign against a real signature, which is the only way it
+    // could have been found. `--certificate-identity-regexp` has to match the
+    // **entire** certificate subject: a pattern anchored only at the front
+    // matches nothing, so the first version of this refused every signature it
+    // was shown. The symptom would have been an installer that worked until
+    // signing started and then stopped, for everybody, at once.
+    for (name, script) in [
+        ("install.sh", read("scripts/install.sh")),
+        ("install.ps1", read("scripts/install.ps1")),
+    ] {
+        let pattern = script
+            .lines()
+            .find(|line| line.contains("refs/tags/v") && line.contains("workflows/release"))
+            .unwrap_or_else(|| panic!("{name} has no identity pattern"));
+        // With each shell's own escaping removed, so `\$` and `$` are the same
+        // end-anchor to this test.
+        let bare = pattern.replace(BACKSLASH, "");
+        assert!(
+            bare.contains(".*$"),
+            "{name}'s identity pattern is not anchored at the end, so cosign matches              nothing against it:
+  {pattern}"
         );
     }
 }

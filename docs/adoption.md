@@ -407,6 +407,15 @@ the README as well:*
   missing signature is a refusal only under `INGOT_REQUIRE_SIGNATURE=1`, because
   0.9.0 and earlier legitimately have none, while a signature that *fails* is
   always a refusal with no flag.
+
+  **And running it found the bug that no test would have.** `cosign`'s
+  `--certificate-identity-regexp` has to match the **whole** certificate subject.
+  The first version of the pattern was anchored only at the front, which matches
+  nothing — so both installers would have refused every signed release, starting
+  the day signing started, for everybody at once. Found by dispatching the
+  workflow, downloading what it signed, and running the installer's own command
+  against it with a real `cosign`. There is now a test asserting the pattern is
+  anchored at both ends, which is the shape of the lesson rather than the lesson.
 - **The package managers people actually have**: a winget manifest, a Homebrew
   tap, and `cargo-binstall` — which needs no new artifact at all, only that the
   release archives keep their current naming.

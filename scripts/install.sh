@@ -126,7 +126,11 @@ checksum_of() {
 # install them. `INGOT_REQUIRE_SIGNATURE=1` turns absence into a refusal, which
 # is the honest way round: the strict behaviour is available and named rather
 # than implied.
-SIGNATURE_IDENTITY="^https://github\.com/$REPO/\.github/workflows/release\.yml@refs/tags/v"
+# Anchored at **both** ends, and that is not tidiness: cosign's
+# `--certificate-identity-regexp` has to match the whole subject, so a pattern
+# anchored only at the front matches nothing and refuses every signature. Found
+# by running it against a real one.
+SIGNATURE_IDENTITY="^https://github\.com/$REPO/\.github/workflows/release\.yml@refs/tags/v[0-9].*\$"
 SIGNATURE_ISSUER="https://token.actions.githubusercontent.com"
 
 require_signature() {

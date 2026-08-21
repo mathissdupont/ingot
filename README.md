@@ -362,7 +362,7 @@ replace one could replace both. So every release after 0.9.0 also carries
 ```bash
 cosign verify-blob \
   --bundle SHA256SUMS.sigstore.json \
-  --certificate-identity-regexp '^https://github\.com/mathissdupont/ingot/\.github/workflows/release\.yml@refs/tags/v' \
+  --certificate-identity-regexp '^https://github\.com/mathissdupont/ingot/\.github/workflows/release\.yml@refs/tags/v[0-9].*$' \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
   SHA256SUMS
 ```

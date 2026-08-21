@@ -173,7 +173,10 @@ try {
         }
         Write-Host "  unchecked no cosign here, so the signature was not verified"
     } else {
-        $identity = "^https://github\.com/$([regex]::Escape($repo))/\.github/workflows/release\.yml@refs/tags/v"
+        # Anchored at both ends: cosign's --certificate-identity-regexp has to
+        # match the whole subject, so a pattern anchored only at the front
+        # matches nothing and refuses every signature.
+        $identity = "^https://github\.com/$([regex]::Escape($repo))/\.github/workflows/release\.yml@refs/tags/v[0-9].*$"
         $issuer = 'https://token.actions.githubusercontent.com'
         # Native command, so its exit code is what decides — and its own output
         # is what gets shown, because cosign separates the two cases that matter:
