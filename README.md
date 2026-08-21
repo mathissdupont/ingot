@@ -116,13 +116,17 @@ the rest of the run.
 ## Start in thirty seconds
 
 ```bash
-cargo install ingot-cli
-# or download a binary: https://github.com/mathissdupont/ingot/releases
+curl -fsSL https://raw.githubusercontent.com/mathissdupont/ingot/main/scripts/install.sh | sh
+# Windows: irm https://.../scripts/install.ps1 | iex   ·   full details under Install
 
 ingot init hello && cd hello
 ingot check                                                  # types, effects, policy, budgets
 ingot run --provider replay --input topic="compiler design"  # prints a real artifact
 ```
+
+Thirty seconds is the installed binary. `cargo install ingot-cli` also works and
+compiles twenty-one crates on your machine first, which is the reason the line
+above exists.
 
 A new project ships with a recorded fixture, so that last command produces an
 answer without contacting anything. Point it at a live model when you want one:
@@ -135,6 +139,14 @@ ingot run --input topic="compiler design"
 And `ingot studio` puts the whole thing on one page: create or open projects,
 inspect what compiles and what each agent may reach, start and record runs,
 answer questions, and build the boundary image without leaving the page.
+
+> [!IMPORTANT]
+> **The container boundary needs this repository, not just the binary.** Ingot
+> never downloads an image — signing it needs a trust root, and one is not
+> invented here ([GAP-029](docs/gaps.md#gap-029)). `ingot image build` therefore
+> wants an Ingot checkout at the same version, so `--contained` is available to
+> somebody who cloned this and not to somebody who only installed it. Everything
+> else on this page works either way.
 
 ## Deliberately not a general-purpose language
 

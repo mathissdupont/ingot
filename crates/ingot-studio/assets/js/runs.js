@@ -6,7 +6,11 @@ function renderLaunches(inner) {
     el("span", { class: "stripe " + LAUNCH_CHIP[launch.state] }),
     el("div", { class: "grow" }, [
       el("div", {}, [
-        el("b", { text: launch.agent ? splitName(launch.agent).short : "the agent it declares" }),
+        el("b", {
+          text: launchAgent(launch)
+            ? splitName(launchAgent(launch)).short
+            : "the agent it declares",
+        }),
         el("span", { class: "sub", text: "  process " + launch.pid + "  ·  " + launch.provider + "  ·  " + when(launch.startedUnix) }),
       ]),
       launch.state === "failed"
