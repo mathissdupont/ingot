@@ -17,6 +17,12 @@
   --line-strong: #dbd2c5;
   --accent: #9e4429;
   --accent-soft: #f9ece6;
+  /* A fill needs its own value, because the contrast it has to win is against
+     the label on top of it rather than against the page behind it. Solid
+     `--accent` under white text clears 4.5:1 here and does not in the dark
+     palette, so the dark one goes deeper rather than the label going grey. */
+  --accent-fill: #9e4429;
+  --accent-on: #ffffff;
   --ok: #2c7a52;
   --ok-soft: #e8f3ec;
   --warn: #b07a12;
@@ -45,6 +51,10 @@
        walks straight back into the colour this one exists to avoid. */
     --accent: #c4664c;
     --accent-soft: #2b1712;
+    /* Deeper than `--accent`, not brighter: white on #c4664c is 3.9:1, which a
+       14px label does not get to use. #a8492f is 5.7:1 and the same brick. */
+    --accent-fill: #a8492f;
+    --accent-on: #ffffff;
     --ok: #5fc48d;
     --ok-soft: #16251c;
     --warn: #e5b658;

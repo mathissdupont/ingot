@@ -127,12 +127,19 @@ function nextJob(readiness) {
   }
 
   const subject = STEPS.find((step) => (blocking.id || "").indexOf(step.key + ".") === 0);
+  // A summary is usually a short sentence and sometimes carries a whole nested
+  // error inside it — `container.runtime` quotes the runtime's own connect
+  // failure, URL-encoded pipe name and all. Two hundred characters set as a
+  // headline is not a headline, it is a wall, and it made a working project look
+  // broken. Long ones are set as prose instead: nothing is hidden and nothing is
+  // cut, the type just stops shouting.
+  const long = String(blocking.summary || "").length > 96;
   return el("div", { class: "next" }, [
     el("div", { class: "grow" }, [
       el("div", { class: "eyebrow", text: "Do this next" }),
-      el("h3", { text: blocking.summary }),
+      el(long ? "p" : "h3", { class: long ? "said" : null, text: blocking.summary }),
       blocking.fix ? el("p", { text: blocking.fix }) : null,
-      el("div", { class: "where", text: blocking.location }),
+      el("div", { class: "where", text: whereWords(blocking.location, state.path) }),
       subject ? el("div", { class: "unlock", text: subject.opens }) : null,
     ]),
   ]);

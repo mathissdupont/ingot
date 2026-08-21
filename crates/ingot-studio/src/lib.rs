@@ -538,6 +538,80 @@ mod tests {
     }
 
     #[test]
+    fn every_colour_the_page_uses_exists_in_both_palettes() {
+        // The failure this catches is invisible in whichever theme you happen to
+        // be looking at. A token added to `:root` and forgotten in the dark
+        // block does not break: it *inherits the light value*, so a fill sized
+        // for white text on a light ground goes on being used against a dark
+        // one, and the contrast quietly stops holding. A misspelled `var(--x)`
+        // is worse and just as quiet — it resolves to nothing at all.
+        //
+        // The rule needs no list to maintain, because the value says which kind
+        // of token it is: a hex colour is palette-dependent by construction, and
+        // `--radius` and `--mono` are not.
+        let css = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("assets")
+            .join("css");
+        let tokens = std::fs::read_to_string(css.join("tokens.css")).expect("tokens.css");
+
+        let dark_at = tokens
+            .find("prefers-color-scheme: dark")
+            .expect("a dark palette");
+        let declared = |text: &str| -> Vec<(String, String)> {
+            text.lines()
+                .filter_map(|line| line.trim().strip_prefix("--"))
+                .filter_map(|line| line.split_once(':'))
+                .map(|(name, value)| {
+                    (
+                        name.trim().to_string(),
+                        value.trim().trim_end_matches(';').to_string(),
+                    )
+                })
+                .collect()
+        };
+        let light = declared(&tokens[..dark_at]);
+        let dark = declared(&tokens[dark_at..]);
+        assert!(light.len() > 12, "only {} light tokens found", light.len());
+
+        for (name, value) in &light {
+            if !value.starts_with('#') {
+                continue;
+            }
+            assert!(
+                dark.iter().any(|(other, _)| other == name),
+                "`--{name}` is a colour with no dark value, so the dark page uses the light one"
+            );
+        }
+
+        // And every name the page reaches for is a name something defines. The
+        // sprite palettes live in `sprite.css` rather than in `:root`, so the
+        // search is over every stylesheet.
+        let mut defined: Vec<String> = Vec::new();
+        let mut used: Vec<String> = Vec::new();
+        for entry in std::fs::read_dir(&css).expect("reading css") {
+            let text = std::fs::read_to_string(entry.expect("an entry").path()).expect("a file");
+            for (name, _) in declared(&text) {
+                defined.push(name);
+            }
+            let mut rest = text.as_str();
+            while let Some(at) = rest.find("var(--") {
+                rest = &rest[at + "var(--".len()..];
+                let end = rest
+                    .find(|c: char| !c.is_ascii_alphanumeric() && c != '-')
+                    .unwrap_or(rest.len());
+                used.push(rest[..end].to_string());
+            }
+        }
+        assert!(used.len() > 40, "only {} uses found", used.len());
+        for name in &used {
+            assert!(
+                defined.contains(name),
+                "`var(--{name})` resolves to nothing: no stylesheet defines it"
+            );
+        }
+    }
+
+    #[test]
     fn the_page_never_turns_a_report_into_markup() {
         // Everything the page shows is somebody's path, diagnostic or model
         // output. It builds nodes and sets `textContent`; the moment one of

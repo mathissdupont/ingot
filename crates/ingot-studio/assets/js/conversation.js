@@ -56,13 +56,18 @@ function renderConversation(inner) {
 
   const id = conversationId();
   if (!id) {
-    inner.appendChild(card("Conversation", el("div", { class: "body" }, [
-      el("p", { class: "muted", text: "Nothing has run here yet, so there is nothing anybody said." }),
-      el("p", { class: "muted", text: "This is where a run's exchange goes: what it worked out, what it used, and every question it put to you — answered here, in place." }),
-      el("div", { class: "add", style: "margin-top:12px" }, [
-        el("button", { class: "action", text: "Start a run", onclick: () => show("project", { tab: "runs" }) }),
-      ]),
-    ])));
+    // The agent nobody has run yet, waiting, at the size of the empty tab it is
+    // standing in. It says what will appear here, because a tab that is blank
+    // the first time somebody opens it teaches them not to open it again.
+    const project = state.projects.find((candidate) => candidate.path === state.path);
+    inner.appendChild(hollow(
+      (project && project.name) || state.path,
+      "idle",
+      "Nothing has run here yet",
+      [
+        "This is where a run's exchange goes: what it worked out, what it used, and every question it put to you — answered here, in place.",
+      ],
+      el("button", { class: "action primary", text: "Start a run", onclick: () => show("project", { tab: "runs" }) })));
     return;
   }
   if (!state.chat || state.chatFor !== id) {
