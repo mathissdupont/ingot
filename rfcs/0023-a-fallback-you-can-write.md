@@ -1,6 +1,6 @@
 # RFC-0023: A fallback you can write, and one that can act
 
-- Status: **Draft**
+- Status: Draft
 - Created: 2026-08-21
 - Affects: language, IR, runtime spec, compiler, `ingot-runtime`,
   `ingot-backend-python`, cassette
