@@ -82,7 +82,10 @@ function startPanel() {
   // moment after a run went well.
   const recordBox = el("input", {
     class: "text",
-    placeholder: "tests/cassettes/example.json",
+    // Deliberately not `example.json`: that is the fixture a new project ships
+    // with, `--record` overwrites what it is pointed at, and a suggestion that
+    // replaces a passing test is a bad suggestion.
+    placeholder: "tests/cassettes/this-run.json",
     spellcheck: "false",
     oninput: (event) => { chosen.record = event.target.value; },
   });

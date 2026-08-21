@@ -1,5 +1,21 @@
 const LAUNCH_CHIP = { running: "warn", exited: "pass", failed: "fail" };
 
+// Which agent a launch is running.
+//
+// A launch knows only what it was told to start, and it is allowed to be told
+// nothing: a project declaring one agent runs that one without naming it. The
+// record it is writing knows the answer, because the run resolved it — so that is
+// asked first, and the phrase is what is left when there is no record yet.
+//
+// This mattered more than it looks. The question panel greeted somebody as *your
+// agent* while the heading two inches above it said `Framing`, which reads as the
+// page not knowing what it is showing.
+function launchAgent(launch) {
+  if (launch.agent) return launch.agent;
+  const record = (state.runs || []).find((run) => run.id === launch.record);
+  return (record && record.agent) || null;
+}
+
 // The one thing the run is waiting for, whichever kind it is.
 //
 // A gate and a question are answered through the same channel and are not the
@@ -99,7 +115,7 @@ function questionBlock(launch, question) {
   // same short name in different packages are different characters; what is
   // written next to it is the short name, because that is what somebody called
   // this agent.
-  const who = launch.agent || "your agent";
+  const who = launchAgent(launch) || "your agent";
   const name = splitName(who).short;
   const node = el("div", { class: "asked" }, [
     el("div", { class: "stand" }, [
