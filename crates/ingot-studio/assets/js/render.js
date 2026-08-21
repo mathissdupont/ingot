@@ -36,17 +36,47 @@ function renderRail() {
   }
 }
 
-function head(title, subtitle, path) {
+// `face` is the name the header's sprite is drawn from, when the thing named
+// has one. A machine does not, so the argument is optional rather than a sprite
+// being invented for every page.
+function head(title, subtitle, path, face) {
   return el("header", { class: "page-head" }, [
-    el("h1", { text: title }),
-    subtitle ? el("p", { text: subtitle }) : null,
-    path ? el("p", { class: "path", text: path }) : null,
+    face ? sprite(face, "card", "idle") : null,
+    el("div", { class: "said" }, [
+      el("h1", { text: title }),
+      subtitle ? el("p", { text: subtitle }) : null,
+      path ? el("p", { class: "path", title: path, text: whereWords(path) }) : null,
+    ]),
   ]);
 }
 
-function card(title, body, aside) {
+/// Nothing here yet: what this place is for, and the one thing that fills it.
+///
+/// Takes the action rather than assuming one. A tab with nothing to do is
+/// allowed to say so and stop there, and an invented button would be worse than
+/// the emptiness it was hiding.
+function hollow(face, mood, title, lines, action) {
+  return el("div", { class: "hollow" }, [
+    face ? sprite(face, "tall", mood || "idle") : null,
+    el("h3", { text: title }),
+    ...[].concat(lines || []).map((line) => el("p", { text: line })),
+    action ? el("div", { class: "add" }, [action]) : null,
+  ]);
+}
+
+// `title` is a label, so the strip uppercases it. `named` is somebody's
+// identifier and is exempt: `FramingReport` set as `FRAMINGREPORT` loses the
+// case that made it readable, which is a caption destroying the thing it
+// captions.
+function card(title, body, aside, named) {
   return el("div", { class: "card" }, [
-    el("h3", {}, [el("span", { text: title }), aside || null]),
+    el("h3", {}, [
+      el("span", {}, [
+        named ? el("span", { class: "named", text: named }) : null,
+        el("span", { text: title }),
+      ]),
+      aside || null,
+    ]),
     body,
   ]);
 }

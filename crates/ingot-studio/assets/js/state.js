@@ -9,6 +9,11 @@ const state = {
   proposed: null,       // an edit the person has been shown and not yet applied
   runId: null,
   detail: null,
+  // Which readiness subjects are expanded, by subject key. Absent means the
+  // default — open when something in it needs attention — so a click sticks
+  // across the two-second poll without also freezing every group somebody did
+  // not touch at whatever it happened to be.
+  groups: {},
   runs: null,
   launches: null,
   run: null,

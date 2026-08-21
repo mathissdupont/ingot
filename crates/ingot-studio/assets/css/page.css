@@ -3,10 +3,22 @@
 #page { flex: 1; min-width: 0; padding: 26px 32px 64px; }
 #page > .inner { max-width: 1040px; margin: 0 auto; }
 
-header.page-head { margin-bottom: 22px; }
+header.page-head { margin-bottom: 22px; display: flex; gap: 14px; align-items: flex-start; }
+header.page-head .said { flex: 1; min-width: 0; }
 header.page-head h1 { margin: 0; font-size: 22px; letter-spacing: -0.015em; text-wrap: balance; }
 header.page-head p { margin: 4px 0 0; color: var(--muted); }
-header.page-head .path { font-family: var(--mono); font-size: 12px; color: var(--faint); word-break: break-all; }
+/* The face is the same one the rail draws for this project, at the size a
+   heading can carry. It is identification, not decoration: two projects with
+   similar names are told apart by shape here before the name is read. */
+header.page-head .sprite.card { height: 42px; flex: 0 0 auto; margin-top: 1px; }
+header.page-head .path {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
 .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin: 18px 0 20px; }
 .tab {
@@ -23,8 +35,12 @@ header.page-head .path { font-family: var(--mono); font-size: 12px; color: var(-
   margin-bottom: 16px;
   overflow: hidden;
 }
+/* The strip is filled rather than merely ruled. Card, header and page were
+   three shades of the same charcoal within eight points of each other, so a
+   card had no edge to it at a glance and the page read as one flat sheet. */
 .card > h3 {
   margin: 0;
+  background: var(--surface-sunk);
   padding: 12px 16px;
   font-size: 12px;
   letter-spacing: 0.05em;
@@ -36,6 +52,7 @@ header.page-head .path { font-family: var(--mono); font-size: 12px; color: var(-
   align-items: center;
   gap: 10px;
 }
+.card > h3 .named { text-transform: none; font-family: var(--mono); color: var(--ink); }
 .card > .body { padding: 14px 16px; }
 .card > .body.flush { padding: 0; }
 
@@ -53,6 +70,27 @@ header.page-head .path { font-family: var(--mono); font-size: 12px; color: var(-
 .row .fix { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
 .row.click { cursor: pointer; }
 .row.click:hover { background: var(--surface-sunk); }
+
+/* A group's line is a button, because it opens something and a person may be
+   on a keyboard. Everything here is the reset that makes a button wear `.row`. */
+button.row.group {
+  width: 100%;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  background: none;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  align-items: center;
+}
+button.row.group:last-child { border-bottom: 0; }
+.row.group .chev { color: var(--faint); flex: 0 0 12px; transition: transform 120ms ease; }
+.row.group .chev.open { transform: rotate(90deg); }
+.row.group:hover .chev { color: var(--accent); }
+
+/* A check under its subject: indented by the width of the chevron it sits
+   beneath, so the two levels line up rather than merely differing. */
+.row.nested { padding-left: 40px; background: var(--surface-sunk); }
 
 .chip {
   display: inline-block;
@@ -95,6 +133,20 @@ button.action:hover { border-color: var(--accent); color: var(--accent); }
 button.action.quiet { border-color: transparent; color: var(--muted); padding: 4px 8px; font-size: 12px; }
 button.action.quiet:hover { border-color: var(--line-strong); color: var(--fail); }
 
+/* The accent's other job. Until now it marked the current tab and the selected
+   project and nothing else, so `Start run` — the one button the whole page
+   exists to get somebody to — looked exactly like `Stop` beside it. At most one
+   of these per view; a second one is two primary actions, which is none. */
+button.action.primary {
+  background: var(--accent-fill);
+  border-color: var(--accent-fill);
+  color: var(--accent-on);
+  font-weight: 600;
+  padding: 7px 16px;
+}
+button.action.primary:hover { filter: brightness(1.08); color: var(--accent-on); }
+button.action.primary:disabled { filter: none; }
+
 input.text, select.text {
   font: inherit;
   font-family: var(--mono);
@@ -117,3 +169,23 @@ button.action:disabled { opacity: 0.5; cursor: progress; }
    alignment would hang the sprite off the first line of text. */
 .row.agent { align-items: flex-start; }
 .row.agent .sprite { margin-top: 2px; flex: 0 0 auto; }
+
+/* Nothing here yet, said at the size of the space it is standing in.
+   A one-line `.empty` inside a card left three quarters of the viewport black
+   and still did not say what would eventually appear — so an empty tab taught
+   people not to open it, which is the one thing an empty tab must not do. */
+.hollow {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 4px;
+  padding: 54px 24px 60px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.hollow .sprite.tall { margin-bottom: 8px; }
+.hollow h3 { margin: 0; font-size: 17px; font-weight: 650; letter-spacing: -0.01em; }
+.hollow p { margin: 2px 0 0; color: var(--muted); max-width: 46ch; }
+.hollow .add { margin-top: 14px; }

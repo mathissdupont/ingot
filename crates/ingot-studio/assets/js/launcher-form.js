@@ -62,7 +62,14 @@ function startPanel() {
   }
 
   const agentPicker = el("select", { class: "text", onchange: (event) => { chosen.agent = event.target.value; drawInputs(); } },
-    agents.map((agent) => el("option", { value: agent.name, text: agent.name })));
+    // The label is the short name and the value is the qualified one: what the
+    // run is told must stay exactly what the artifact declares, and what a
+    // person reads should be what they called it.
+    agents.map((agent) => el("option", {
+      value: agent.name,
+      title: agent.name,
+      text: splitName(agent.name).short,
+    })));
   const providerPicker = el("select", { class: "text", onchange: (event) => { chosen.provider = event.target.value; cassetteRow.style.display = chosen.provider === "replay" ? "flex" : "none"; } },
     ["auto", "anthropic", "google", "openai", "replay"].map((name) => el("option", { value: name, text: name })));
   const cassetteBox = el("input", {
@@ -145,7 +152,10 @@ function startPanel() {
     }
   }
 
-  const button = el("button", { class: "action", text: "Start run" });
+  // The one thing this whole panel is for, so it is the one filled button on
+  // the page. `Stop` beside a running launch stays outlined: stopping a run is
+  // not what somebody came here to do.
+  const button = el("button", { class: "action primary", text: "Start run" });
   button.addEventListener("click", async () => {
     button.disabled = true;
     try {

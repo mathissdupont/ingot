@@ -8,6 +8,41 @@ entry states which of them it affects. See [GOVERNANCE.md](GOVERNANCE.md).
 
 ## [Unreleased]
 
+### The studio reads like one page rather than a wall
+
+**Studio only. No schema, API or command change.**
+
+The Overview listed every readiness check in one flat run, which on a healthy
+project is a dozen near-identical green rows with the two worth reading somewhere
+in the middle. The checks are now grouped by the same subject the track above
+them is grouped by, and a subject where everything passes collapses to one line.
+Anything that is not a pass opens by itself, and a check belonging to no known
+subject gets its own group rather than being dropped.
+
+- **The accent has a second job: the primary action.** It marked the current tab
+  and the selected project and nothing else, so `Start run` looked exactly like
+  `Stop`. A filled button needs a different value than a text colour, because the
+  contrast it has to win is against its own label — hence `--accent-fill`, deeper
+  in the dark palette rather than brighter, and a test that fails when a colour
+  is defined in one palette and forgotten in the other.
+- **A note stopped shouting.** The permanent sentence about where a run's history
+  lives was set in the accent on accent-soft, which made it louder than anything
+  a person could act on.
+- **An empty tab says what fills it**, with the agent standing in it, instead of
+  one grey line in a card above three quarters of a blank viewport.
+- **Machine strings are shown the way they are read**: `environment:ANTHROPIC_API_KEY`
+  as two facts, a path inside the project as its tail rather than as 120
+  characters of prefix repeated six times, a posix-rooted path that stopped
+  mixing separators, `demo.framing.FramingReport` as `FramingReport` in the agent
+  picker while the value crossing the wire stays qualified, and `FramingReport`
+  no longer uppercased into `FRAMINGREPORT` by a caption style.
+- **A summary too long to be a heading is set as prose.** `container.runtime`
+  quotes the runtime's own connect failure, and two hundred characters at 18px
+  bold made a working project look broken.
+- **The agent comes before the checks on Overview.** The tab's first question is
+  what this project is; readiness is whether it can run, and the track already
+  answers that in one line.
+
 ### A contained run charges the `cost` budget it states
 
 **CLI and the supervisor protocol, which moves to 2. No language, IR or cassette

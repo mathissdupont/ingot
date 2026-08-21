@@ -150,8 +150,10 @@ function renderCanvas(inner) {
       ])), "")));
   }
 
-  inner.appendChild(card(drawn.agent + " — flow",
-    el("div", { style: "padding:12px 16px" }, drawn.blocks.map((block) => renderBlock(source, block)))));
+  inner.appendChild(card("  —  flow",
+    el("div", { style: "padding:12px 16px" }, drawn.blocks.map((block) => renderBlock(source, block))),
+    null,
+    splitName(drawn.agent).short));
 
   if (drawn.edges.length) {
     // `b0 → b1   framing` was accurate and told nobody anything. The block ids

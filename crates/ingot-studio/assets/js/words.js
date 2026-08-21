@@ -82,3 +82,31 @@ const VERIFY_WORDS = {
 function verifyWords(outcome) {
   return VERIFY_WORDS[outcome] || outcome;
 }
+
+// Where a check looked, said the way a person reads a place.
+//
+// Three things go wrong in the replies and none is the reply's fault.
+// `environment:ANTHROPIC_API_KEY` is one token to a schema and two facts to a
+// reader. A location built by joining a display root to a native relative path
+// comes out as `/workspace/report\\main.ing`, which is a path on neither
+// system, so one that started out posix-style is finished that way — while a
+// genuine Windows path is left exactly as it is, because that one is the string
+// somebody would paste into a shell. And six checks in the same project all
+// point at the same directory, so the part a person is reading is the tail: with
+// `root` given, a location inside it is shown relative to it, which turns six
+// identical hundred-character lines into `ingot.toml` six times.
+function whereWords(location, root) {
+  const text = String(location || "");
+  const variable = /^environment:(.+)$/.exec(text);
+  if (variable) return "environment  ·  " + variable[1];
+
+  const slashed = text.charAt(0) === "/" ? text.split("\\").join("/") : text;
+  if (!root) return slashed;
+  const base = String(root);
+  if (slashed.length > base.length + 1 && slashed.indexOf(base) === 0) {
+    const rest = slashed.slice(base.length);
+    const cut = rest.charAt(0);
+    if (cut === "/" || cut === "\\") return rest.slice(1);
+  }
+  return slashed;
+}

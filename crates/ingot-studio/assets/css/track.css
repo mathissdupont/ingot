@@ -75,6 +75,9 @@
 .next.settled .eyebrow { color: var(--ok); }
 .next h3 { margin: 5px 0 0; font-size: 18px; font-weight: 650; letter-spacing: -0.01em; }
 .next p { margin: 5px 0 0; color: var(--muted); font-size: 13.5px; }
+/* A summary too long to be a heading. Still the first thing read — full ink,
+   semibold — and no longer the size of a banner. */
+.next p.said { color: var(--ink); font-size: 14px; font-weight: 600; }
 /* `.where` is otherwise scoped to a row, and this is not one. */
 .next .where {
   margin-top: 7px;

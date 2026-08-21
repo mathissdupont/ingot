@@ -30,7 +30,16 @@ ul.bullets li { font-family: var(--mono); font-size: 12.5px; }
   margin-bottom: 16px;
   font-size: 13px;
 }
-.banner.note { border-left-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+/* A note is not an alarm. This one is a permanent sentence explaining where a
+   run's history lives, and in the accent on accent-soft it was the loudest
+   thing on the page — louder than the button the page exists to get somebody to
+   press. The accent is for things you act on; an explanation gets the quiet
+   surface and the muted ink it deserves. */
+.banner.note {
+  border-left-color: var(--line-strong);
+  background: var(--surface-sunk);
+  color: var(--muted);
+}
 
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
