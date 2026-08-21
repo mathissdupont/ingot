@@ -661,6 +661,7 @@ mod tests {
             max_steps: 100,
             mcp: Default::default(),
             provider: "fixed".to_string(),
+            pricing: Default::default(),
         }
     }
 

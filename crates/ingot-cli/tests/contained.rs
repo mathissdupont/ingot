@@ -254,6 +254,138 @@ fn tools_run_inside_and_their_results_reach_the_flow() {
     );
 }
 
+// --- what a run costs -------------------------------------------------------
+
+/// A project with one model call and a `cost` ceiling, priced or not.
+///
+/// The stub answers with 120 input and 40 output tokens, which at $3 and $15 the
+/// million is 0.00096 USD — so `0.0005 usd` is a ceiling one call passes and
+/// `1 usd` is one it does not reach.
+fn priced_project(dir: &Path, ceiling: &str, prices: bool) {
+    let source = format!(
+        r#"language 0.1
+agent Priced(topic: string) -> note<markdown> {{
+  model requires {{ structured_output }}
+  budget {{ steps <= 2 tokens <= 1000 cost <= {ceiling} }}
+  policy {{ network deny }}
+  flow {{
+    emit note = ask<markdown>("One line about ${{topic}}.")
+  }}
+}}
+"#
+    );
+    let manifest = if prices {
+        r#"
+[[model.price]]
+model = "claude-opus-5"
+input = "3"
+output = "15"
+currency = "usd"
+"#
+    } else {
+        ""
+    };
+    project(dir, &source, manifest);
+}
+
+/// Run `priced_project` once, with or without the supervisor channel.
+fn priced_run(path: &str, supervised: bool) -> std::process::Output {
+    let stub = stub_provider(vec![text_reply("# Note")]);
+    let mut args = vec![
+        "run",
+        path,
+        "--provider",
+        "anthropic",
+        "--input",
+        "topic=compilers",
+    ];
+    if supervised {
+        args.push("--supervised");
+    }
+    run_env(
+        &args,
+        &[
+            ("ANTHROPIC_API_KEY", "stub-key"),
+            ("INGOT_ANTHROPIC_BASE_URL", &stub.url),
+        ],
+    )
+}
+
+/// The `error:` line, which is the one sentence an operator reads.
+fn refusal(output: &std::process::Output) -> String {
+    stderr(output)
+        .lines()
+        .find(|line| line.starts_with("error:"))
+        .unwrap_or("<no refusal>")
+        .to_string()
+}
+
+#[test]
+fn a_cost_ceiling_stops_a_supervised_run_where_it_stops_a_host_one() {
+    // GAP-048 was this comparison coming out different: the same artifact, the
+    // same manifest and the same prices refused out here and ran on in there,
+    // because the prices did not cross. What is asserted is the agreement —
+    // either half passing alone would say nothing.
+    let dir = TempDir::new("cost-ceiling");
+    priced_project(dir.path(), "0.0005 usd", true);
+    let path = dir.path().display().to_string();
+
+    let host = priced_run(&path, false);
+    let supervised = priced_run(&path, true);
+
+    assert_eq!(code(&host), EXIT_DIAGNOSTICS, "{}", stderr(&host));
+    assert_eq!(
+        code(&supervised),
+        EXIT_DIAGNOSTICS,
+        "{}",
+        stderr(&supervised)
+    );
+    assert!(
+        refusal(&host).contains("`cost` budget of 0.0005 USD"),
+        "{}",
+        stderr(&host)
+    );
+    assert_eq!(
+        refusal(&host),
+        refusal(&supervised),
+        "the boundary must not change what a ceiling means"
+    );
+}
+
+#[test]
+fn a_supervised_run_reports_what_it_spent() {
+    // The ledger is kept where the charging happens, which is inside. This only
+    // holds if it came back out.
+    let dir = TempDir::new("cost-reported");
+    priced_project(dir.path(), "1 usd", true);
+    let path = dir.path().display().to_string();
+
+    let output = priced_run(&path, true);
+    assert_eq!(code(&output), EXIT_OK, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("cost      0.00096 USD"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn a_supervised_run_says_when_a_ceiling_was_not_charged() {
+    // The half of GAP-048 that was not arithmetic. A `cost` budget nothing
+    // charged has to be named as such or it reads as enforced, and inside a box
+    // it was not mentioned at all. The model is named too, so configuring it is
+    // a copy and a paste.
+    let dir = TempDir::new("cost-unpriced");
+    priced_project(dir.path(), "1 usd", false);
+    let path = dir.path().display().to_string();
+
+    let output = priced_run(&path, true);
+    assert_eq!(code(&output), EXIT_OK, "{}", stderr(&output));
+    let log = stderr(&output);
+    assert!(log.contains("not charged for `claude-opus-5`"), "{log}");
+    assert!(log.contains("the budget was not enforced"), "{log}");
+}
+
 // --- refusals ---------------------------------------------------------------
 
 #[test]

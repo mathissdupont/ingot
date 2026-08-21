@@ -56,7 +56,6 @@ to you*.
 | [GAP-045](#gap-045) | A fallback cannot be written for `markdown`, `json`, `file` or a record | Refused | a literal for those, or a narrowing rule with its own argument |
 | [GAP-046](#gap-046) | A model call that returned nothing cannot be recorded | Absent | an error on a recorded interaction, at a new cassette version |
 | [GAP-047](#gap-047) | A question's `choices` cannot be computed, so an agent cannot offer options it worked out | Refused | a way to state the answer space without listing it |
-| [GAP-048](#gap-048) | A contained run does not charge a `cost` budget, and does not say so | Unenforced | the prices crossing the boundary with the artifact |
 
 ---
 
@@ -65,53 +64,15 @@ to you*.
 These are the ones that can mislead: a place where reading the source would lead
 you to believe something the toolchain does not check.
 
-**One, and it was empty until 2026-08-21.** GAP-001 closed on 2026-08-10 and this
-section then said *there are none* — which was worth saying rather than deleting,
-because an empty section is a claim that can be falsified next week. It was, by an
-audit of the contained run looking for exactly this shape.
+**There are none, again — and that has now been wrong once.** GAP-001 closed on
+2026-08-10 and this section said *there are none* until 2026-08-21, when an audit
+of the contained run falsified it. [GAP-048](#gap-048) sat here for the few hours
+between being written down and being fixed, which is the argument for saying it
+out loud rather than deleting the heading: an empty class is a claim, and a claim
+can be checked.
 
 The **Unproven** section below was empty on the same terms until 2026-08-13, and
-is not any more either. An empty class is a claim, and both of them turned out to
-be false.
-
-### GAP-048
-
-**A contained run does not charge a `cost` budget, and does not say so.**
-
-The same artifact, with the same manifest and the same prices, refuses at the
-ceiling on a host run and runs past it inside a box.
-
-*Why.* The manifest does not cross the boundary — only the artifact, the inputs
-and the tool configuration do — so the interpreter inside is given no prices
-(`contained.rs`, `pricing: Default::default()`). Nothing there is wrong on its own:
-a call that cannot be priced is remembered rather than skipped, and
-[Runtime 0.1 §8](../specs/runtime/v0.1.md) forbids enforcing a budget against a
-partial total, so a run with no prices correctly enforces nothing.
-
-*What makes it this class rather than Degraded.* The host run **says so**:
-`the budget was not enforced; add [[model.price]] to charge it`. The function that
-prints it carries the reason in its own doc comment — *silence would be the
-failure mode: a `cost` budget that is never mentioned looks enforced* — and it is
-called from the host path only. A contained run reports no cost at all, because
-the ledger stays inside the box and the empty one that crosses back has nothing
-unpriced in it. So the artifact states a ceiling, nothing checks it, and nothing
-mentions that nothing checked it.
-
-*How it shows up.* `budget { cost <= 5 usd }` bounds an uncontained run and does
-not bound `--contained`. Token and step budgets are unaffected: they need no
-prices and are enforced in both.
-
-*What closing it needs.* The prices crossing with the artifact — a price table is
-public data rather than a credential, and the boundary exists to bound effects,
-not arithmetic — plus the guest's spend coming back on the `finished` notification
-so the run says what it cost either way. Narrower alternative: refuse a contained
-run of an artifact that declares a `cost` budget, the way persistent memory is
-already refused. The first is better; it closes the asymmetry instead of banning
-the feature.
-
-*Recorded in.* `crates/ingot-cli/src/contained.rs`,
-`crates/ingot-cli/src/run.rs` (`report_cost`),
-[RFC-0005](../rfcs/0005-the-contained-run.md).
+is not any more either.
 
 ---
 
@@ -361,6 +322,85 @@ stops being one.
 
 *Recorded in.* [Language 0.4 §1.5 and §2](../specs/language/v0.4.md),
 `crates/ingot-lang-types/src/lib.rs`, `crates/ingot-semantic/src/check.rs`.
+
+### GAP-047
+
+**A question's `choices` cannot be computed, so an agent cannot offer the person
+options it worked out for itself.**
+
+`consult`'s question text may be any string expression, including one a model
+wrote — this compiles today:
+
+```text
+question = ask<string>("What is the one thing you must ask before proceeding?")
+answer = consult(question)
+```
+
+`choices` may not. It is a list of string literals (`ING3015`).
+
+*The stated reason does not survive the question being computable, and that is
+worth saying plainly.* [Language 0.3 §1.2](../specs/language/v0.3.md) gives two
+justifications. The first — that a reviewer can see everything a recording could
+contain before anybody is asked — **does not hold**: the question itself is
+already arbitrary model-authored text that no reviewer sees in advance, so the
+interaction is not reviewable and the answer menu being literal does not make it
+so. The second does hold, and it is the real one: `choices` is not data, it is a
+**constraint on what may come back**, and the runtime enforces it. Ingot states
+constraints in the artifact for the same reason it states `budget` and `policy`
+there — a constraint that can be computed at run time is a hope rather than a
+promise.
+
+So the rule is defensible on the second ground alone. What it is not is
+sufficient.
+
+*How it shows up, and why "write the choices in advance" is not an answer.* The
+shape it refuses is the ordinary one for an agent that does some work and then
+needs a decision: *"these three call sites could carry the change — which?"* The
+options **are** the agent's findings. Nobody can write them in the source,
+because knowing them in advance would mean not needing the agent. An author
+cannot enumerate the questions a coding agent will reach, let alone their menus.
+
+What is left today is a free-text `consult` whose *question* carries the options,
+since the question may be computed:
+
+```text
+question = ask<string>("Name the three candidate call sites as a question.")
+choice = consult(question)
+```
+
+That works, and it gives up exactly what `choices` buys: the studio renders a
+text box instead of buttons, and the runtime no longer guarantees the answer is
+one of the offered ones — so the agent gets whatever was typed and has to
+interpret it, which is the interpretation step `choices` existed to remove.
+
+*Why it is Refused rather than Absent.* The compiler names it, at compile time,
+with the form it wanted — so nobody discovers this during a run.
+
+*What closing it needs.* Not permitting a value where a literal is required:
+that trades the enforced constraint for nothing. The shape worth an RFC states
+the **bound** in the source while the **members** are computed, so the artifact
+still promises something a reviewer can read:
+
+```text
+choice = consult("Which call site?", among: candidates, at_most: 5)
+```
+
+A reviewer then knows the answer is one of at most five strings this run
+produced — weaker than a literal list, and strictly stronger than free text. Three
+questions such an RFC has to answer, and they are the work: what a run does when
+the computed set arrives **empty** (today an empty literal list is refused at
+compile time, and at run time there is nothing to pick from); what the cassette
+digest covers, given the set is part of what determined the answer; and whether
+`at_most` charges against `budget`.
+
+*Found by.* The author, on 2026-08-20, asking how a coding agent would work —
+and then pointing out that the justification above is inconsistent with a
+computable question. Both halves of this entry are his.
+
+*Recorded in.* [Language 0.3 §1.2](../specs/language/v0.3.md),
+[RFC-0020](../rfcs/0020-a-person-in-the-loop.md).
+
+---
 
 ## Degraded
 
@@ -861,6 +901,70 @@ that closes this is somebody depending on one.
 When a gap closes it moves here with the release that closed it, and its section
 stays where a link can find it. Identifiers are never reused: a link to GAP-007
 must keep meaning what it meant.
+
+### GAP-048
+
+**A contained run does not charge a `cost` budget, and does not say so.**
+*Closed 2026-08-21.*
+
+The same artifact, with the same manifest and the same prices, refused at the
+ceiling on a host run and ran past it inside a box — and reported no cost at all,
+so nothing said that nothing had checked it. Recorded in the morning and closed
+the same day, which is the shortest this register has held anything.
+
+*What closed it.* The price table crosses **in** with the artifact, and the
+ledger crosses **back out** on the `finished` notification. The reason it can is
+that a price is public data an operator wrote in the manifest rather than a
+credential, and the boundary exists to bound effects, not arithmetic — so there
+was never anything protected by withholding it. The charging stays inside, where
+the interpreter is: a budget has to stop the run that is spending it, and
+recomputing the total out here would be a second answer to a question that
+already has one.
+
+The prices are sent only when some agent that crossed states a `cost` budget. The
+condition is the interpreter's own — nothing is charged where `budget.cost` is
+absent — and it is asked over exactly the agents that were sent, so it cannot be
+right outside and wrong inside.
+
+*Why the protocol version moved to 2.* Both fields are additive on the wire, and
+additive was the trap: an image built before this change would ignore the prices
+and report no spend, so the host would charge nothing and mention nothing — this
+entry's exact silence, resurrected by a stale image. A refusal naming both
+numbers is the one outcome that cannot be mistaken for an enforced budget. Not a
+hypothetical: the container tests refused with *rebuild it rather than running two
+versions against each other* until the image was rebuilt, which is how the
+reasoning was checked rather than assumed.
+
+*How it was checked.* One project, one price table, run three ways. Host and
+`--supervised` produce the same refusal for a ceiling of `0.001 usd` — "the
+`cost` budget of 0.001 USD was exhausted at node `n0`", that sentence from both —
+and the same `cost 0.00459 USD` under a ceiling neither reaches. With the prices
+removed, both print "not charged for `claude-opus-5`: no price is configured" and
+"the budget was not enforced". Then the same two runs across a real boundary, in
+the container: refused at the tight ceiling, and `cost 0.00459 USD` at the loose
+one, with the amount landing in the run record the studio reads, where a
+contained run used to leave `null`.
+
+A test holds the two arrangements to **the same sentence** rather than each to a
+message of its own, because agreement is the property that was missing and either
+half passing alone says nothing.
+
+*What it did not close.* [GAP-031](#gap-031). A contained run still does not
+stream and keeps the 16k output ceiling; the same handshake could carry whether
+the host's provider streams, and deliberately does not, because the ceiling
+belongs to the leg that talks to the vendor and saying so properly means giving
+the provider trait a second question. That is GAP-031's work, not a line in this
+one.
+
+*Found by.* An audit of the contained run on 2026-08-21, looking for the pattern
+*the boundary changes what the program can do* — the third instance that week,
+after a supervisor with no `consult` arm and an `ingot test` that denied every
+question. All three were a claim in a spec or an RFC with nothing behind it.
+
+*Recorded in.* `crates/ingot-cli/src/contained.rs`,
+`crates/ingot-supervisor/src/protocol.rs`,
+[Runtime 0.2 §3.3](../specs/runtime/v0.2.md),
+[RFC-0005](../rfcs/0005-the-contained-run.md).
 
 ### GAP-010
 
@@ -1881,82 +1985,3 @@ way to count.
 [GAP-007]: #gap-007
 [GAP-013]: #gap-013
 [GAP-018]: #gap-018
-
----
-
-### GAP-047
-
-**A question's `choices` cannot be computed, so an agent cannot offer the person
-options it worked out for itself.**
-
-`consult`'s question text may be any string expression, including one a model
-wrote — this compiles today:
-
-```text
-question = ask<string>("What is the one thing you must ask before proceeding?")
-answer = consult(question)
-```
-
-`choices` may not. It is a list of string literals (`ING3015`).
-
-*The stated reason does not survive the question being computable, and that is
-worth saying plainly.* [Language 0.3 §1.2](../specs/language/v0.3.md) gives two
-justifications. The first — that a reviewer can see everything a recording could
-contain before anybody is asked — **does not hold**: the question itself is
-already arbitrary model-authored text that no reviewer sees in advance, so the
-interaction is not reviewable and the answer menu being literal does not make it
-so. The second does hold, and it is the real one: `choices` is not data, it is a
-**constraint on what may come back**, and the runtime enforces it. Ingot states
-constraints in the artifact for the same reason it states `budget` and `policy`
-there — a constraint that can be computed at run time is a hope rather than a
-promise.
-
-So the rule is defensible on the second ground alone. What it is not is
-sufficient.
-
-*How it shows up, and why "write the choices in advance" is not an answer.* The
-shape it refuses is the ordinary one for an agent that does some work and then
-needs a decision: *"these three call sites could carry the change — which?"* The
-options **are** the agent's findings. Nobody can write them in the source,
-because knowing them in advance would mean not needing the agent. An author
-cannot enumerate the questions a coding agent will reach, let alone their menus.
-
-What is left today is a free-text `consult` whose *question* carries the options,
-since the question may be computed:
-
-```text
-question = ask<string>("Name the three candidate call sites as a question.")
-choice = consult(question)
-```
-
-That works, and it gives up exactly what `choices` buys: the studio renders a
-text box instead of buttons, and the runtime no longer guarantees the answer is
-one of the offered ones — so the agent gets whatever was typed and has to
-interpret it, which is the interpretation step `choices` existed to remove.
-
-*Why it is Refused rather than Absent.* The compiler names it, at compile time,
-with the form it wanted — so nobody discovers this during a run.
-
-*What closing it needs.* Not permitting a value where a literal is required:
-that trades the enforced constraint for nothing. The shape worth an RFC states
-the **bound** in the source while the **members** are computed, so the artifact
-still promises something a reviewer can read:
-
-```text
-choice = consult("Which call site?", among: candidates, at_most: 5)
-```
-
-A reviewer then knows the answer is one of at most five strings this run
-produced — weaker than a literal list, and strictly stronger than free text. Three
-questions such an RFC has to answer, and they are the work: what a run does when
-the computed set arrives **empty** (today an empty literal list is refused at
-compile time, and at run time there is nothing to pick from); what the cassette
-digest covers, given the set is part of what determined the answer; and whether
-`at_most` charges against `budget`.
-
-*Found by.* The author, on 2026-08-20, asking how a coding agent would work —
-and then pointing out that the justification above is inconsistent with a
-computable question. Both halves of this entry are his.
-
-*Recorded in.* [Language 0.3 §1.2](../specs/language/v0.3.md),
-[RFC-0020](../rfcs/0020-a-person-in-the-loop.md).

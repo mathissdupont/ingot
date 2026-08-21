@@ -15,8 +15,8 @@ use ingot_compiler::Compilation;
 use ingot_ir::{AgentIr, NodeKind};
 use ingot_mcp::{McpConfig, McpToolHost};
 use ingot_runtime::{
-    run as run_agent, AgentRegistry, DenyAllTools, HumanChannel, ModelProvider, RunOptions,
-    RunReport, ToolHost,
+    run as run_agent, AgentRegistry, DenyAllTools, HumanChannel, ModelConfig, ModelProvider,
+    RunOptions, RunReport, ToolHost,
 };
 use ingot_sandbox::{Network, SandboxPlan, RUN_SUBJECT};
 use ingot_supervisor::host::{supervise, Deadlines, Outcome, Supervisor};
@@ -56,15 +56,15 @@ pub fn prepare(
     mode: Containment,
     entry: &AgentIr,
 ) -> Result<Command> {
-    // A persistent store is a file outside the box, and nothing crosses the
-    // boundary but the artifact, the inputs and the tool configuration. Running
-    // anyway would silently start from the declared values and throw away
-    // everything written, which is `--no-memory` without anyone asking for it.
+    // A persistent store is a file outside the box, and nothing that crosses the
+    // boundary is a file this side may write. Running anyway would silently start
+    // from the declared values and throw away everything written, which is
+    // `--no-memory` without anyone asking for it.
     if !entry.persistent.is_empty() && config.memory_mode != crate::memory::MemoryMode::Disabled {
         anyhow::bail!(
             "`{}` declares persistent memory, which a contained run cannot reach\n  \
-             the store is a file outside the boundary, and only the artifact, the inputs \
-             and the tool configuration cross it\n  \
+             the store is a file outside the boundary, and what crosses it is the artifact, \
+             the inputs, the tool configuration and the prices\n  \
              help: `--no-memory` runs from the declared values and discards what is written",
             entry.agent
         );
@@ -114,6 +114,7 @@ pub fn execute(
         max_steps: config.max_steps,
         mcp: config.mcp.clone(),
         provider: provider.name().to_string(),
+        pricing: pricing_for(&compilation.agents, &config.models),
     };
 
     let mut printer = crate::run::printer_for(config, compilation, true);
@@ -144,18 +145,19 @@ pub fn execute(
                 stopped: None,
                 usage: finished.usage,
                 steps: finished.steps,
-                // The guest charged its own budget inside the box; what crossed
-                // back is the outcome, not the ledger. Reporting a spend the
-                // host did not compute would be inventing one.
-                spend: Default::default(),
+                // The guest charged the budget, because the guest holds the
+                // interpreter; the ledger crosses back so the run says what it
+                // cost either way round. Nothing is recomputed out here — there
+                // is nothing to recompute it from, and a second arithmetic would
+                // be a second answer.
+                spend: finished.spend,
             };
             printer.finish_record(crate::runs::Outcome::Finished {
                 steps: report.steps,
                 usage: report.usage,
-                // No cost for the same reason there is no spend: the ledger
-                // stayed inside the box.
-                cost: None,
+                cost: report.spend.rendered(),
             });
+            crate::run::report_cost(&report);
             crate::run::write_outputs(&report, config)?;
             Ok(super::EXIT_OK)
         }
@@ -185,6 +187,26 @@ fn deadlines(config: &RunConfig) -> Deadlines {
     match config.timeout_seconds {
         Some(seconds) => Deadlines::explicit(seconds),
         None => Deadlines::derived(config.mcp.timeout_seconds),
+    }
+}
+
+/// The prices the run inside is charged against.
+///
+/// Handed over only when some agent that crossed states a `cost` budget. The
+/// condition is the interpreter's own — [`ingot_runtime`] charges nothing where
+/// `budget.cost` is absent — and it is asked over exactly the agents that were
+/// sent, so it cannot be right out here and wrong in there. A program that
+/// bounds no cost therefore puts nothing extra in the box, and one that bounds a
+/// cost gets whatever the manifest configured, **including nothing**: a run given
+/// no prices charges none, records every model it could not price, and says so.
+/// That last part is the half of [GAP-048] that was not about arithmetic at all.
+///
+/// [GAP-048]: ../../../docs/gaps.md#gap-048
+fn pricing_for(agents: &[AgentIr], models: &ModelConfig) -> ingot_runtime::price::Pricing {
+    if agents.iter().any(|agent| agent.budget.cost.is_some()) {
+        models.pricing()
+    } else {
+        Default::default()
     }
 }
 
@@ -452,17 +474,19 @@ pub fn exec() -> Result<u8> {
             // out there where the operator is.
             approval: HumanChannel::Ask(Box::new(guest.approvals())),
             max_steps: config.max_steps,
-            // The store is a file outside the box, and nothing crosses the
-            // boundary but the artifact, the inputs and the tool
-            // configuration. `prepare` refuses before it gets here.
+            // The store is a file outside the box, and what crosses the
+            // boundary is the artifact, the inputs, the tool configuration and
+            // the prices — never a file this side may write. `prepare` refuses
+            // before it gets here.
             memory: std::collections::BTreeMap::new(),
             stop_at: None,
             resume: None,
-            // No prices inside. The manifest does not cross the boundary — only
-            // the artifact, the inputs and the tool configuration do — so a
-            // contained run reports its cost budget as uncharged rather than
-            // charging it against prices it was not given.
-            pricing: Default::default(),
+            // The prices the host was configured with. They cross because the
+            // boundary bounds effects rather than arithmetic, and a `cost`
+            // ceiling that holds outside and not inside is the asymmetry
+            // GAP-048 recorded. Empty is still a correct answer: a run with no
+            // prices charges nothing and says so, in here as out there.
+            pricing: config.pricing.clone(),
             // No factory, so a fan-out inside the box has a ceiling of one. The
             // provider here *is* the supervisor channel -- request and reply over
             // one pair of pipes -- so there is nothing a second instance could
@@ -650,6 +674,40 @@ mod tests {
             vec!["A".to_string(), "Z".to_string()],
             "sorted and deduplicated, so the invocation is the same every run"
         );
+    }
+
+    #[test]
+    fn the_prices_cross_only_when_an_agent_states_a_cost_ceiling() {
+        let priced = ModelConfig {
+            prices: vec![ingot_runtime::price::ModelPrice {
+                model: "claude-opus-5".into(),
+                input: "3".into(),
+                output: "15".into(),
+                cache_read: None,
+                currency: "usd".into(),
+            }],
+            ..Default::default()
+        };
+
+        // Nobody bounded a cost, so nothing needs pricing and nothing goes in.
+        let unbounded = vec![agent("p.A", &[], &[]), agent("p.B", &[], &[])];
+        assert!(pricing_for(&unbounded, &priced).is_empty());
+
+        // One agent does — and it need not be the entry, because any of them
+        // may be the one that runs or the one that is called.
+        let mut bounded = unbounded.clone();
+        bounded[1].budget.cost = Some(ingot_ir::Cost {
+            amount: "5".into(),
+            currency: "usd".into(),
+        });
+        assert_eq!(
+            pricing_for(&bounded, &priced).models().collect::<Vec<_>>(),
+            vec!["claude-opus-5"]
+        );
+
+        // A ceiling with no prices behind it still crosses as nothing, and the
+        // run inside says so rather than charging against an empty table.
+        assert!(pricing_for(&bounded, &ModelConfig::default()).is_empty());
     }
 
     #[test]
