@@ -19,6 +19,12 @@ Install this version rather than the newest, e.g. 0.9.0.
 .PARAMETER BinDir
 Install here rather than into %LOCALAPPDATA%\Ingot\bin.
 
+.PARAMETER RequireSignature
+Refuse to install unless the signature over SHA256SUMS was actually verified.
+That needs `cosign` on this machine and a release that carries one; without the
+switch, an unverifiable signature is reported rather than fatal, because releases
+published before signing existed carry none.
+
 .PARAMETER AddToPath
 Append the install directory to your user PATH. Off by default: changing PATH
 outlives this script, so it is something to ask for rather than something to
@@ -38,6 +44,7 @@ notepad install.ps1
 param(
     [string] $Version,
     [string] $BinDir,
+    [switch] $RequireSignature,
     [switch] $AddToPath
 )
 
@@ -135,6 +142,50 @@ try {
         Fail "$archive does not match its checksum`n  expected $expected`n  got      $actual`nnothing was installed"
     }
     Write-Host "  verified  sha256 $actual"
+
+    # The checksum proves the download was not corrupted. It cannot prove who
+    # built it: SHA256SUMS comes from the same host as the archive, so whatever
+    # could replace one could replace both. The signature answers that, and it
+    # is one signature over SHA256SUMS rather than one per archive, because that
+    # file is the list of their hashes.
+    #
+    # There is no key of ours to trust. Keyless signing means GitHub attested
+    # that a particular workflow file at a particular tag ran, Sigstore issued a
+    # short-lived certificate saying so, and both facts are in a public log.
+    $bundle = Join-Path $work 'SHA256SUMS.sigstore.json'
+    $signed = $true
+    try {
+        Invoke-WebRequest -Uri "$base/SHA256SUMS.sigstore.json" -OutFile $bundle -UseBasicParsing
+    } catch {
+        # A release without a bundle is an ordinary case, not a failure.
+        $signed = $false
+    }
+
+    $cosign = Get-Command cosign -ErrorAction SilentlyContinue
+    if (-not $signed) {
+        if ($RequireSignature) {
+            Fail "v$Version carries no signature over SHA256SUMS and -RequireSignature was passed; nothing was installed"
+        }
+        Write-Host "  unsigned  this release carries no signature (only the newer ones do)"
+    } elseif (-not $cosign) {
+        if ($RequireSignature) {
+            Fail "-RequireSignature was passed and cosign is not installed, so the signature could not be checked; nothing was installed"
+        }
+        Write-Host "  unchecked no cosign here, so the signature was not verified"
+    } else {
+        $identity = "^https://github\.com/$([regex]::Escape($repo))/\.github/workflows/release\.yml@refs/tags/v"
+        $issuer = 'https://token.actions.githubusercontent.com'
+        # Native command, so its exit code is what decides — and its own output
+        # is what gets shown, because cosign separates the two cases that matter:
+        # a signature that does not match, and a machine that could not reach the
+        # log to find out.
+        $output = & $cosign.Source verify-blob --bundle $bundle --certificate-identity-regexp $identity --certificate-oidc-issuer $issuer $sums 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host ($output -join "`n")
+            Fail "the signature over SHA256SUMS did not verify, so nothing was installed"
+        }
+        Write-Host "  verified  signed by $repo's release workflow"
+    }
 
     Expand-Archive -Path $zip -DestinationPath $work -Force
 

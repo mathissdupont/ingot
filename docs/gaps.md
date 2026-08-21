@@ -126,9 +126,19 @@ while checking that a file signed itself. Shipping digest pinning, which is a
 complete property on its own, and naming what is missing is better than shipping
 something that resembles both.
 
-*What closing it needs.* A signature over the manifest digest, a documented trust
-root, and a refusal path for an unsigned or unverifiable image. All three, before
-a pull may become automatic.
+*The trust root is no longer missing, and that changes what is left.* Release
+archives are signed as of the release after 0.9.0 — keyless, through GitHub's
+identity token and Sigstore, with the certificate naming the workflow file and
+the tag, and the whole thing checkable by somebody who has never met the project
+(see the Install section of the README). So the answer to *where does trust start*
+now exists and is written down; key custody is answered by there being no key.
+What has **not** moved is the image: nothing signs it, `ingot image build` still
+needs a source checkout, and a pull is still not something this project will do
+for you.
+
+*What closing it needs.* A signature over the manifest digest **using the root
+the archives already use**, a refusal path for an unsigned or unverifiable image,
+and somewhere to pull from. All three, before a pull may become automatic.
 
 *Recorded in.* [RFC-0012](../rfcs/0012-the-ingot-package.md),
 [Ingot Package 0.1 §9](../specs/image/v0.1.md),
